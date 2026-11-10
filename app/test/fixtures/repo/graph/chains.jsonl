@@ -1,0 +1,2 @@
+{"id":"arg_fx_1","premises":["n_fx_a"],"conclusion":"n_fx_b","createdAt":"2026-11-01T00:00:00.000Z","provenance":[{"chatId":"demo/0002-il-secondo-passo","messageId":"m1"}]}
+{"id":"arg_fx_2","premises":["n_fx_b","n_fx_c"],"conclusion":"n_fx_d","createdAt":"2026-11-01T00:00:00.000Z","provenance":[{"chatId":"demo/0002-il-secondo-passo","messageId":"m1"}]}

@@ -1,0 +1,4 @@
+{"id":"n_fx_a","name":"Primo passo","statement":"Ogni percorso comincia da un primo passo concreto.","aliases":[],"createdAt":"2026-11-01T00:00:00.000Z","provenance":[{"chatId":"demo/0002-il-secondo-passo","messageId":"m1"}]}
+{"id":"n_fx_b","name":"Secondo passo","statement":"Il secondo passo si appoggia sul primo.","aliases":[],"createdAt":"2026-11-01T00:00:00.000Z","provenance":[{"chatId":"demo/0002-il-secondo-passo","messageId":"m1"}]}
+{"id":"n_fx_c","name":"Direzione","statement":"Un passo ha senso solo se va in una direzione scelta.","aliases":[],"createdAt":"2026-11-01T00:00:00.000Z","provenance":[{"chatId":"demo/0002-il-secondo-passo","messageId":"m1"}]}
+{"id":"n_fx_d","name":"Progresso","statement":"Passi nella stessa direzione sommati diventano progresso.","aliases":[],"createdAt":"2026-11-01T00:00:00.000Z","provenance":[{"chatId":"demo/0002-il-secondo-passo","messageId":"m1"}]}

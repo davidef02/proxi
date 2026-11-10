@@ -1,0 +1,23 @@
+# Default rules. Allowlists: synthetic test keys, and git-ignored folders that are never
+# published (`gitleaks dir` does not read .gitignore).
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Synthetic Anthropic-style keys in tests and UI placeholders"
+regexTarget = "line"
+regexes = [
+  '''sk-ant-(?:test-123456789|api03-(?:1234567890|real-secret-key-12345|super-secret-key-xyz|another-secret-token-987|spawn-secret-123)|1234|\.\.\.)''',
+]
+
+[[allowlists]]
+description = "Git-ignored folders: dependencies, build output, runtime state, internal docs"
+paths = [
+  '''(^|[\\/])node_modules[\\/]''',
+  '''(^|[\\/])\.git[\\/]''',
+  '''(^|[\\/])app[\\/]web[\\/]dist[\\/]''',
+  '''(^|[\\/])\.learner[\\/]''',
+  '''(^|[\\/])test-results[\\/]''',
+  '''(^|[\\/])playwright-report[\\/]''',
+  '''(^|[\\/])docs[\\/](issues|plan|research)[\\/]''',
+]

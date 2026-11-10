@@ -1,0 +1,21 @@
+/* Map-only styles. Tailwind 4 borders default to currentColor: give the map the shadcn-like default. */
+.lh-map,
+.lh-map *,
+.lh-map ::before,
+.lh-map ::after,
+.map-root,
+.map-root * {
+  border-color: var(--border);
+}
+body > div[role="dialog"] *,
+body > div.fixed * {
+  border-color: var(--border);
+}
+@keyframes chrome-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.graph-chrome-fade-in { animation: chrome-fade-in 200ms ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .graph-chrome-fade-in { animation: none; }
+}

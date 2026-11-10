@@ -1,0 +1,12 @@
+{
+  "chapters": [
+    {
+      "title": "Demo",
+      "slug": "demo",
+      "lessons": [
+        { "title": "Il primo passo", "slug": "il-primo-passo", "plannedNodes": 2 },
+        { "title": "Il secondo passo", "slug": "il-secondo-passo", "plannedNodes": 3 }
+      ]
+    }
+  ]
+}

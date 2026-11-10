@@ -1,0 +1,10 @@
+export type Mode = "dark" | "light";
+export type ModePref = Mode | "system";
+export const PALETTES = ["neutral", "ocean", "grove", "ember", "iris"] as const;
+export type Palette = (typeof PALETTES)[number];
+export const PALETTE_LABEL: Record<Palette, string> = { neutral: "Neutro", ocean: "Oceano", grove: "Bosco", ember: "Brace", iris: "Iris" };
+export const MODE_KEY = "ia.mode", PALETTE_KEY = "ia.palette", LEGACY_KEY = "ia.theme";
+export const readModePref = (raw: string | null): ModePref => (raw === "dark" || raw === "light" || raw === "system" ? raw : "system");
+export const readPalette = (raw: string | null): Palette => ((PALETTES as readonly string[]).includes(raw ?? "") ? (raw as Palette) : "neutral");
+export type ChromePair = { color: string; symbolColor: string };
+export type ChromePayload = { modePref: ModePref; dark: ChromePair; light: ChromePair };

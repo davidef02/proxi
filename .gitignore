@@ -1,0 +1,42 @@
+# OS junk
+.DS_Store
+
+# Dependencies
+node_modules/
+
+# Environment
+.env
+.env.*
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Runtime state
+.memory/
+*.log
+
+# Scratch payloads for lesson append
+.tmp/
+
+# Learner app runtime state (sessions, prompts, mcp config)
+.learner/
+
+# Learner data lives in the data folder (npm run data -- where), never in this repo
+/courses/
+/graph/
+/decks/
+/curriculum.json
+/index.html
+app/web/dist/
+test-results/
+playwright-report/
+
+# exercise workspace runtime state (last test run)
+.app-lastrun.json
+
+# Internal plans, research and per-issue workflow files stay local, never published
+/docs/issues/
+/docs/plan/
+/docs/research/

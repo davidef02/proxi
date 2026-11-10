@@ -1,0 +1,88 @@
+/* Session page: prose + braille spinner. Plain CSS on the tokens of styles.css (A6). */
+.prose-lh { font-family: var(--font-prose); font-size: 16px; line-height: 1.7; color: var(--foreground); }
+.prose-lh.sm { font-size: 15px; line-height: 1.6; }
+.prose-lh :is(p, ul, ol, h1, h2, h3, h4):first-child { margin-top: 0; }
+.prose-lh :is(p, ul, ol):last-child { margin-bottom: 0; }
+.prose-lh span[style*="--sdm-c"] { background-color: transparent !important; }
+.prose-lh p { margin: 0.7em 0; }
+.prose-lh strong { font-weight: 600; color: var(--heading); }
+.prose-lh a { color: var(--info); text-decoration: underline; text-underline-offset: 2px; }
+.prose-lh ul, .prose-lh ol { margin: 0.6em 0; padding-left: 1.4em; }
+.prose-lh ul { list-style: disc; }
+.prose-lh ol { list-style: decimal; }
+.prose-lh li { margin: 0.2em 0; }
+.prose-lh h1, .prose-lh h2, .prose-lh h3, .prose-lh h4 { font-family: var(--font-prose); font-weight: 600; color: var(--heading); margin: 1.3em 0 0.4em; line-height: 1.3; }
+.prose-lh h1 { font-size: 1.35em; } .prose-lh h2 { font-size: 1.2em; } .prose-lh h3, .prose-lh h4 { font-size: 1.05em; }
+.prose-lh blockquote { margin: 0.8em 0; padding-left: 1em; border-left: 2px solid var(--border); color: var(--muted-foreground); }
+.prose-lh hr { border: 0; border-top: 1px solid var(--hairline); margin: 1.2em 0; }
+.prose-lh :not(pre) > code { font-family: var(--font-mono); font-size: 0.85em; background: var(--accent); border-radius: 4px; padding: 0.1em 0.35em; }
+.prose-lh table { border-collapse: collapse; font-size: 0.92em; }
+.prose-lh th, .prose-lh td { border: 1px solid var(--hairline); padding: 0.3em 0.7em; text-align: left; }
+.prose-lh .katex-display { overflow-x: auto; overflow-y: hidden; padding: 0.2em 0; }
+
+@keyframes braille-frame { 0%, 9.99% { opacity: 1; } 10%, 100% { opacity: 0; } }
+.braille-frame { opacity: 0; animation: braille-frame 800ms steps(1, end) infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .braille-frame { animation: none; }
+  .braille-frame[data-frame="0"] { opacity: 1; }
+}
+
+/* Callouts: authored `<div class="callout">` in nodes and `> [!NOTE]` in markdown: a tinted panel with a coloured rule. */
+.prose-lh .callout { --c: var(--info); margin: 1em 0; padding: 0.55em 0.9em; border-left: 3px solid var(--c); border-radius: 0 8px 8px 0; background: color-mix(in srgb, var(--c) 9%, transparent); }
+.prose-lh .callout[data-kind="tip"] { --c: var(--good); }
+.prose-lh .callout[data-kind="warning"] { --c: var(--warn); }
+.prose-lh .callout[data-kind="important"] { --c: var(--bad); }
+.prose-lh .callout > p:first-child { margin-top: 0; }
+.prose-lh .callout-title { font-family: var(--font-ui); font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--c); margin: 0 0 0.2em; }
+/* Boxless tables like LearnHarness: horizontal hairlines only. */
+.prose-lh table { width: 100%; }
+.prose-lh th, .prose-lh td { border: 0; border-bottom: 1px solid var(--hairline); padding: 0.4em 0.8em 0.4em 0; }
+.prose-lh th { color: var(--muted-foreground); font-weight: 600; font-size: 0.85em; }
+.prose-lh pre { overflow-x: auto; }
+.node-rich pre { background: color-mix(in srgb, var(--accent) 70%, var(--card)); border-radius: 6px; padding: 0.7em 0.9em; font-family: var(--font-mono); font-size: 0.85em; overflow-x: auto; }
+.node-rich pre code { background: none; padding: 0; }
+.node-rich table { display: block; overflow-x: auto; }
+
+/* ───────── lesson nodes (NodeView): a card per node, each step of the loop in its own colour ───────── */
+.node-card { --tier: var(--derive); position: relative; background: var(--card); border: 1px solid var(--hairline); border-radius: 12px; padding: 1.25rem 1.4rem 1.2rem; box-shadow: var(--shadow); }
+.node-card::before { content: ""; position: absolute; inset: -1px -1px auto -1px; height: 3px; border-radius: 12px 12px 0 0; background: var(--tier); opacity: 0.85; }
+.node-card.node-tier-truth { --tier: var(--truth); }
+.node-tier { color: var(--tier); border: 1px solid color-mix(in srgb, var(--tier) 45%, transparent); background: color-mix(in srgb, var(--tier) 12%, transparent); border-radius: 999px; padding: 0.05rem 0.55rem; letter-spacing: 0.05em; font-weight: 600; }
+.node-step { --step: var(--motivate); margin: 0.9rem 0; padding: 0.7rem 0.95rem 0.75rem; border-left: 3px solid var(--step); border-radius: 0 8px 8px 0; background: color-mix(in srgb, var(--step) 9%, transparent); }
+.node-step-connect { --step: var(--connect); margin-top: 1.1rem; }
+.node-step-label { display: flex; align-items: center; gap: 0.35rem; margin: 0 0 0.3rem; font-family: var(--font-ui); font-size: 10.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--step); }
+.node-body { font-size: 16.5px; }
+/* Key terms read like a highlighter pass, not just bold. Wrapped lines get rounded corners and padding. */
+.node-rich strong,
+.node-rich mark {
+  color: var(--heading);
+  background-color: var(--mark);
+  padding: 0.1em 0.25em;
+  border-radius: 0.25em;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+.node-rich strong:has(> code) {
+  background: transparent;
+  padding: 0;
+}
+.node-rich :is(strong, mark) > code {
+  color: var(--heading);
+  background-color: color-mix(in srgb, var(--mark) 75%, var(--accent));
+  border: 1px solid color-mix(in srgb, var(--brand, var(--warn)) 40%, var(--hairline));
+  padding: 0.12em 0.35em;
+  border-radius: 4px;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+.node-rich :is(strong, mark)::selection,
+.node-rich :is(strong, mark) *::selection {
+  background-color: color-mix(in srgb, var(--brand, var(--warn)) 60%, var(--selection));
+  color: var(--heading);
+}
+.node-rich em { color: var(--heading); }
+.node-rich :not(pre) > code { color: var(--heading); border: 1px solid var(--hairline); }
+.node-rich blockquote { border-left-color: var(--tier, var(--border)); color: var(--foreground); font-style: italic; }
+.node-math { background: color-mix(in srgb, var(--tier) 6%, transparent); border: 1px solid var(--hairline); border-radius: 8px; padding: 0.4em 0.8em; }
+.node-quiz { border-top: 3px solid var(--quiz); }
+.node-quiz > summary { color: var(--quiz); }

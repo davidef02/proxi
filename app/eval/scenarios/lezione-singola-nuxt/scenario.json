@@ -1,0 +1,10 @@
+{
+  "course": "lezioni-singole",
+  "kind": "teach",
+  "target": { "mode": "free" },
+  "ankiOptIn": false,
+  "message": "Spiegami in una lezione breve come funziona useState in Nuxt. Conosco già Vue.",
+  "knownIds": ["n_vue_ref", "n_vue_computed", "n_vue_component", "n_vue_props", "n_vue_reactivity"],
+  "maxTurns": 6,
+  "autoReply": "Ok, continua."
+}

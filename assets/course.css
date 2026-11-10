@@ -1,0 +1,270 @@
+/* course.css — foglio di stile condiviso da tutte le lezioni e i reference.
+   Ogni lezione lo linka: le lezioni devono sembrare un corso, non file scollegati. */
+
+:root {
+  --ink: #12100c;
+  --ink-soft: #5b5449;
+  --paper: #fffef9;
+  --rule: #d9d2c4;
+  --accent: #9a3412;
+  --accent-soft: #fdf0e8;
+  --ok: #1d6b45;
+  --ok-soft: #eaf5ee;
+  --ko: #9b1c1c;
+  --ko-soft: #fdecec;
+  --code-bg: #f4f0e6;
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  --mono: "Cascadia Code", "JetBrains Mono", Consolas, "Courier New", monospace;
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0 auto;
+  padding: 4rem 1.5rem 6rem;
+  max-width: 40rem;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--serif);
+  font-size: 1.0625rem;
+  line-height: 1.65;
+  font-kerning: normal;
+  text-rendering: optimizeLegibility;
+}
+
+/* ---------- intestazione ---------- */
+
+.kicker {
+  margin: 0 0 .35rem;
+  font-family: var(--mono);
+  font-size: .72rem;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+h1 {
+  margin: 0 0 .4rem;
+  font-size: 2.1rem;
+  line-height: 1.15;
+  font-weight: 400;
+  letter-spacing: -.01em;
+}
+
+.standfirst {
+  margin: 0 0 2.5rem;
+  color: var(--ink-soft);
+  font-size: 1.15rem;
+  font-style: italic;
+  line-height: 1.5;
+}
+
+h2 {
+  margin: 3rem 0 .8rem;
+  padding-bottom: .3rem;
+  border-bottom: 1px solid var(--rule);
+  font-size: 1.3rem;
+  font-weight: 400;
+}
+
+h3 {
+  margin: 2rem 0 .5rem;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+p { margin: 0 0 1.1rem; }
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+}
+a:hover { border-bottom-color: var(--accent); }
+
+strong { font-weight: 600; }
+
+ul, ol { margin: 0 0 1.1rem; padding-left: 1.3rem; }
+li { margin-bottom: .4rem; }
+
+/* ---------- codice ---------- */
+
+code {
+  padding: .1em .32em;
+  border-radius: 3px;
+  background: var(--code-bg);
+  font-family: var(--mono);
+  font-size: .85em;
+}
+
+pre {
+  margin: 0 0 1.3rem;
+  padding: .9rem 1.1rem;
+  overflow-x: auto;
+  border-left: 3px solid var(--accent);
+  border-radius: 0 4px 4px 0;
+  background: var(--code-bg);
+  font-size: .84rem;
+  line-height: 1.55;
+}
+pre code { padding: 0; background: none; font-size: 1em; }
+pre .cmt { color: var(--ink-soft); font-style: italic; }
+
+/* ---------- blocchi editoriali ---------- */
+
+.why {
+  margin: 0 0 2rem;
+  padding: 1rem 1.2rem;
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--ink-soft);
+  background: #fdfbf4;
+}
+.why p:last-child { margin-bottom: 0; }
+
+.quote {
+  margin: 0 0 1.2rem;
+  padding-left: 1rem;
+  border-left: 2px solid var(--rule);
+  color: var(--ink-soft);
+  font-style: italic;
+}
+.quote cite { display: block; margin-top: .3rem; font-size: .82rem; font-style: normal; }
+
+.warn {
+  margin: 0 0 1.2rem;
+  padding: .8rem 1rem;
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  font-size: .95rem;
+}
+.warn p:last-child { margin-bottom: 0; }
+
+/* Come .warn ma per una correzione già applicata: "non è più così". */
+.ok {
+  margin: 0 0 1.2rem;
+  padding: .8rem 1rem;
+  border-left: 3px solid var(--ok);
+  background: var(--ok-soft);
+  font-size: .95rem;
+}
+.ok p:last-child { margin-bottom: 0; }
+
+table {
+  width: 100%;
+  margin: 0 0 1.3rem;
+  border-collapse: collapse;
+  font-size: .93rem;
+}
+th, td { padding: .45rem .6rem; border-bottom: 1px solid var(--rule); text-align: left; vertical-align: top; }
+th { font-weight: 600; font-size: .8rem; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-soft); }
+td code { white-space: nowrap; }
+
+/* ---------- passi pratici ---------- */
+
+.step { margin: 0 0 1.8rem; }
+.step > h3 { display: flex; align-items: baseline; gap: .55rem; margin-top: 0; }
+.step > h3::before {
+  content: counter(step);
+  counter-increment: step;
+  flex: 0 0 1.55rem;
+  height: 1.55rem;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-family: var(--mono);
+  font-size: .8rem;
+  line-height: 1.55rem;
+  text-align: center;
+}
+.steps { counter-reset: step; }
+
+/* ---------- quiz (widget: assets/quiz.js) ---------- */
+
+.quiz { margin: 1.5rem 0 2rem; }
+
+.quiz-question {
+  margin: 0 0 1.4rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: #fdfbf4;
+}
+.quiz-question > p { margin: 0 0 .8rem; font-weight: 600; }
+
+.quiz-options { display: grid; gap: .4rem; }
+
+.quiz-option {
+  padding: .5rem .7rem;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: .82rem;
+  text-align: left;
+  cursor: pointer;
+  transition: background .12s, border-color .12s;
+}
+.quiz-option:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); }
+.quiz-option:disabled { cursor: default; }
+.quiz-option.is-correct { border-color: var(--ok); background: var(--ok-soft); color: var(--ok); }
+.quiz-option.is-wrong { border-color: var(--ko); background: var(--ko-soft); color: var(--ko); opacity: .75; }
+.quiz-option.is-picked { font-weight: 700; }
+
+.quiz-feedback {
+  display: none;
+  margin-top: .8rem;
+  padding-left: .8rem;
+  border-left: 3px solid var(--rule);
+  font-size: .95rem;
+}
+.quiz-feedback.is-visible { display: block; }
+.quiz-feedback.ok { border-left-color: var(--ok); }
+.quiz-feedback.ko { border-left-color: var(--ko); }
+
+.quiz-score {
+  margin-top: 1rem;
+  font-family: var(--mono);
+  font-size: .82rem;
+  color: var(--ink-soft);
+}
+
+/* ---------- piede ---------- */
+
+.ask {
+  margin: 3rem 0 0;
+  padding: 1rem 1.2rem;
+  border: 1px dashed var(--rule);
+  border-radius: 4px;
+  background: #fdfbf4;
+  font-size: .95rem;
+}
+.ask p:last-child { margin-bottom: 0; }
+
+.nav {
+  margin-top: 2.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--rule);
+  font-family: var(--mono);
+  font-size: .8rem;
+  color: var(--ink-soft);
+}
+.nav a { margin-right: 1.2rem; }
+
+.sources { font-size: .88rem; }
+.sources li { margin-bottom: .55rem; }
+
+/* ---------- stampa ---------- */
+
+@media print {
+  :root { --paper: #fff; }
+  body { padding: 0; max-width: none; font-size: 11pt; }
+  .quiz-option { border-color: #bbb; }
+  .quiz-feedback { display: block; }
+  .ask, .nav { break-inside: avoid; }
+  pre, .quiz-question, .step { break-inside: avoid; }
+  a { color: inherit; border-bottom: none; }
+  a[href^="http"]::after { content: " (" attr(href) ")"; font-family: var(--mono); font-size: .75em; color: #555; }
+}

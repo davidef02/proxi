@@ -1,0 +1,174 @@
+/* teach-sgr-mock — shared lesson stylesheet
+   Tufte-ispirato: leggibile, calmo, ottimo in stampa. Riusato da ogni lezione. */
+
+:root {
+  --ink: #1a1a1a;
+  --paper: #fdfcf8;
+  --muted: #6b6b6b;
+  --rule: #e0ddd4;
+  --accent: #9a3412;      /* terracotta */
+  --accent-soft: #fdf0e9;
+  --code-bg: #f4f2ec;
+  --ok: #2f6b3a;
+  --warn: #8a5a00;
+  --maxw: 44rem;
+}
+
+* { box-sizing: border-box; }
+
+html { font-size: 18px; }
+
+body {
+  margin: 0 auto;
+  max-width: var(--maxw);
+  padding: 3rem 1.5rem 6rem;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+.eyebrow {
+  font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.72rem;
+  color: var(--accent);
+  font-weight: 600;
+  margin: 0 0 0.4rem;
+}
+
+h1 { font-size: 2rem; line-height: 1.15; margin: 0 0 0.6rem; }
+h2 {
+  font-size: 1.35rem;
+  margin: 2.6rem 0 0.8rem;
+  padding-bottom: 0.3rem;
+  border-bottom: 1px solid var(--rule);
+}
+h3 { font-size: 1.1rem; margin: 1.8rem 0 0.5rem; }
+
+p { margin: 0.8rem 0; }
+
+a { color: var(--accent); text-decoration: none; border-bottom: 1px solid rgba(154,52,18,0.35); }
+a:hover { border-bottom-color: var(--accent); }
+
+code {
+  font-family: "SF Mono", "JetBrains Mono", Consolas, monospace;
+  font-size: 0.85em;
+  background: var(--code-bg);
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+}
+
+pre {
+  background: var(--code-bg);
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+  padding: 1rem 1.1rem;
+  overflow-x: auto;
+  font-size: 0.82rem;
+  line-height: 1.55;
+}
+pre code { background: none; padding: 0; font-size: inherit; }
+
+.lead { font-size: 1.15rem; color: #333; }
+
+.callout {
+  background: var(--accent-soft);
+  border: 1px solid #f0d9cc;
+  border-radius: 6px;
+  padding: 0.9rem 1.1rem;
+  margin: 1.4rem 0;
+  font-size: 0.95rem;
+}
+.callout--tip { background: #eef6ef; border-color: #cfe6d3; }
+.callout--warn { background: #fdf6e3; border-color: #ecdcae; }
+.callout .label {
+  display: block;
+  font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.68rem;
+  font-weight: 700;
+  margin-bottom: 0.3rem;
+  color: var(--accent);
+}
+.callout--tip .label { color: var(--ok); }
+.callout--warn .label { color: var(--warn); }
+
+figure { margin: 1.8rem 0; text-align: center; }
+figure svg { max-width: 100%; height: auto; }
+figcaption { font-size: 0.82rem; color: var(--muted); margin-top: 0.5rem; font-style: italic; }
+
+.terms { list-style: none; padding: 0; }
+.terms li { margin: 0.6rem 0; padding-left: 1.2rem; position: relative; }
+.terms li::before { content: "›"; position: absolute; left: 0; color: var(--accent); }
+.terms b { font-variant: small-caps; letter-spacing: 0.03em; }
+
+/* ---- interactive quiz component ---- */
+.quiz {
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  padding: 1.2rem 1.3rem;
+  margin: 1.6rem 0;
+  background: #fff;
+}
+.quiz h3 { margin-top: 0; }
+.quiz .q { font-weight: 600; margin-bottom: 0.7rem; }
+.quiz button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 0.95rem;
+  margin: 0.4rem 0;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  background: var(--paper);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.quiz button:hover { border-color: var(--accent); }
+.quiz button.correct { background: #eef6ef; border-color: var(--ok); }
+.quiz button.wrong { background: #fdecea; border-color: var(--accent); }
+.quiz .feedback {
+  margin-top: 0.7rem;
+  font-size: 0.9rem;
+  min-height: 1.2rem;
+  color: var(--muted);
+}
+
+.nav {
+  margin-top: 4rem;
+  padding-top: 1.2rem;
+  border-top: 1px solid var(--rule);
+  font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+  font-size: 0.85rem;
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.ask {
+  margin-top: 2.5rem;
+  font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+  font-size: 0.9rem;
+  background: #f0eee7;
+  border-radius: 6px;
+  padding: 0.9rem 1.1rem;
+  color: #444;
+}
+.ask b { color: var(--accent); }
+
+.primary-source {
+  font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+  font-size: 0.9rem;
+  border-left: 3px solid var(--accent);
+  padding: 0.4rem 0 0.4rem 1rem;
+  margin: 1.6rem 0;
+  color: #444;
+}

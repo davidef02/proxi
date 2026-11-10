@@ -1,0 +1,405 @@
+@import "tailwindcss";
+/* Streamdown + plugins ship Tailwind classes in their dist: let Tailwind scan them. */
+@source "../../../node_modules/streamdown/dist/*.js";
+@source "../../../node_modules/@streamdown/code/dist/*.js";
+@source "../../../node_modules/@streamdown/math/dist/*.js";
+@source "../../../node_modules/@streamdown/mermaid/dist/*.js";
+
+/* ───────── design tokens ─────────
+   UI chrome = JetBrains Mono, prose = Source Sans 3 (bundled via @fontsource, no network).
+   Two independent axes on <html> (theme.ts): data-theme = resolved mode (dark|light: Tailwind dark: variant,
+   CodeMirror, canvas maths) and data-palette = colour palette (neutral|ocean|grove|ember|iris).
+   Selectors (no :root on palette blocks, so they also apply to any element carrying both attributes):
+     :root, [data-theme="dark"]            Neutro dark (default; also holds --radius)
+     [data-theme="light"]                  Neutro light
+     [data-palette="P"][data-theme="M"]    palette P in mode M
+   Every block is a COMPLETE token set: keep the property sets identical (app/test/theme-tokens.test.ts checks it).
+   Lesson tokens (--motivate, --connect, --truth, --derive, --quiz, --mark) give each step of a node its own colour. */
+:root, [data-theme="dark"] {
+  color-scheme: dark;
+  --radius: 8px;
+  --background: #131416;
+  --foreground: #e7e5e1;
+  --heading: #f7f6f3;
+  --card: #1b1c1f;
+  --card-foreground: #e7e5e1;
+  --muted: #1b1c1f;
+  --muted-foreground: #96938d;
+  --accent: #26272b;
+  --border: #68696f;
+  --hairline: #27282c;
+  --input: #68696f;
+  --primary: #ece9e4;
+  --primary-foreground: #131416;
+  --good: #82bf86;
+  --warn: #e0b765;
+  --bad: #e5806f;
+  --info: #84aee3;
+  --brand: #e0b765;
+  --motivate: #e9a948;
+  --connect: #5cc79a;
+  --truth: #4fc4c4;
+  --derive: #9c95f0;
+  --quiz: #b493ee;
+  --mark: rgb(224 183 101 / 0.22);
+  --selection: rgb(132 174 227 / 0.35);
+  --syn-keyword: #c9a0dc;
+  --syn-attr: #d9a679;
+  --shadow: 0 8px 30px rgb(0 0 0 / 0.35);
+}
+[data-theme="light"] {
+  color-scheme: light;
+  --background: #f6f4ef;
+  --foreground: #23211d;
+  --heading: #12110f;
+  --card: #fffefb;
+  --card-foreground: #23211d;
+  --muted: #efece5;
+  --muted-foreground: #6c675e;
+  --accent: #e9e5dc;
+  --border: #8e887d;
+  --hairline: #e4dfd5;
+  --input: #8e887d;
+  --primary: #23211d;
+  --primary-foreground: #fffefb;
+  --good: #2a6f37;
+  --warn: #845600;
+  --bad: #b03526;
+  --info: #22609f;
+  --brand: #8f5d00;
+  --motivate: #975c00;
+  --connect: #11704b;
+  --truth: #0b6a70;
+  --derive: #5146c9;
+  --quiz: #7647c7;
+  --mark: rgb(240 190 70 / 0.35);
+  --selection: rgb(34 96 159 / 0.22);
+  --syn-keyword: #8a3fb0;
+  --syn-attr: #92491a;
+  --shadow: 0 8px 30px rgb(60 50 30 / 0.12);
+}
+[data-palette="ocean"][data-theme="dark"] {
+  color-scheme: dark;
+  --background: #0f1620;
+  --foreground: #e3e9f0;
+  --heading: #f5f8fb;
+  --card: #16202c;
+  --card-foreground: #e3e9f0;
+  --muted: #16202c;
+  --muted-foreground: #8fa1b5;
+  --accent: #1f2b3a;
+  --border: #5b7189;
+  --hairline: #1e2a38;
+  --input: #5b7189;
+  --primary: #7fb2ec;
+  --primary-foreground: #0f1620;
+  --good: #82bf86;
+  --warn: #e0b765;
+  --bad: #e5806f;
+  --info: #84aee3;
+  --brand: #e0b765;
+  --motivate: #e9a948;
+  --connect: #5cc79a;
+  --truth: #4fc4c4;
+  --derive: #9c95f0;
+  --quiz: #b493ee;
+  --mark: rgb(224 183 101 / 0.22);
+  --selection: rgb(132 174 227 / 0.35);
+  --syn-keyword: #c9a0dc;
+  --syn-attr: #d9a679;
+  --shadow: 0 8px 30px rgb(0 0 0 / 0.35);
+}
+[data-palette="ocean"][data-theme="light"] {
+  color-scheme: light;
+  --background: #f2f5f9;
+  --foreground: #1a2330;
+  --heading: #0d141d;
+  --card: #ffffff;
+  --card-foreground: #1a2330;
+  --muted: #e8eef5;
+  --muted-foreground: #4f5e70;
+  --accent: #dde6f0;
+  --border: #7b8b9e;
+  --hairline: #dde4ec;
+  --input: #7b8b9e;
+  --primary: #1f5fa8;
+  --primary-foreground: #ffffff;
+  --good: #2a6f37;
+  --warn: #845600;
+  --bad: #b03526;
+  --info: #22609f;
+  --brand: #8f5d00;
+  --motivate: #975c00;
+  --connect: #11704b;
+  --truth: #0b6a70;
+  --derive: #5146c9;
+  --quiz: #7647c7;
+  --mark: rgb(240 190 70 / 0.35);
+  --selection: rgb(34 96 159 / 0.22);
+  --syn-keyword: #8a3fb0;
+  --syn-attr: #92491a;
+  --shadow: 0 8px 30px rgb(60 50 30 / 0.12);
+}
+[data-palette="grove"][data-theme="dark"] {
+  color-scheme: dark;
+  --background: #111712;
+  --foreground: #e2e9e2;
+  --heading: #f4f8f4;
+  --card: #182019;
+  --card-foreground: #e2e9e2;
+  --muted: #182019;
+  --muted-foreground: #8fa391;
+  --accent: #222c23;
+  --border: #5e735f;
+  --hairline: #1f2820;
+  --input: #5e735f;
+  --primary: #86c99a;
+  --primary-foreground: #111712;
+  --good: #82bf86;
+  --warn: #e0b765;
+  --bad: #e5806f;
+  --info: #84aee3;
+  --brand: #e0b765;
+  --motivate: #e9a948;
+  --connect: #5cc79a;
+  --truth: #4fc4c4;
+  --derive: #9c95f0;
+  --quiz: #b493ee;
+  --mark: rgb(224 183 101 / 0.22);
+  --selection: rgb(132 174 227 / 0.35);
+  --syn-keyword: #c9a0dc;
+  --syn-attr: #d9a679;
+  --shadow: 0 8px 30px rgb(0 0 0 / 0.35);
+}
+[data-palette="grove"][data-theme="light"] {
+  color-scheme: light;
+  --background: #f3f6f1;
+  --foreground: #1c241d;
+  --heading: #0f1510;
+  --card: #fdfefc;
+  --card-foreground: #1c241d;
+  --muted: #e8eee5;
+  --muted-foreground: #526055;
+  --accent: #dfe7db;
+  --border: #7f8d7d;
+  --hairline: #dfe6dc;
+  --input: #7f8d7d;
+  --primary: #2d6e45;
+  --primary-foreground: #ffffff;
+  --good: #2a6f37;
+  --warn: #845600;
+  --bad: #b03526;
+  --info: #22609f;
+  --brand: #8f5d00;
+  --motivate: #975c00;
+  --connect: #11704b;
+  --truth: #0b6a70;
+  --derive: #5146c9;
+  --quiz: #7647c7;
+  --mark: rgb(240 190 70 / 0.35);
+  --selection: rgb(34 96 159 / 0.22);
+  --syn-keyword: #8a3fb0;
+  --syn-attr: #92491a;
+  --shadow: 0 8px 30px rgb(60 50 30 / 0.12);
+}
+[data-palette="ember"][data-theme="dark"] {
+  color-scheme: dark;
+  --background: #1a1412;
+  --foreground: #efe5df;
+  --heading: #fbf5f1;
+  --card: #221b18;
+  --card-foreground: #efe5df;
+  --muted: #221b18;
+  --muted-foreground: #a8968c;
+  --accent: #2e2420;
+  --border: #7a6860;
+  --hairline: #2a211e;
+  --input: #7a6860;
+  --primary: #eb9b6b;
+  --primary-foreground: #1a1412;
+  --good: #82bf86;
+  --warn: #e0b765;
+  --bad: #e5806f;
+  --info: #84aee3;
+  --brand: #e0b765;
+  --motivate: #e9a948;
+  --connect: #5cc79a;
+  --truth: #4fc4c4;
+  --derive: #9c95f0;
+  --quiz: #b493ee;
+  --mark: rgb(224 183 101 / 0.22);
+  --selection: rgb(132 174 227 / 0.35);
+  --syn-keyword: #c9a0dc;
+  --syn-attr: #d9a679;
+  --shadow: 0 8px 30px rgb(0 0 0 / 0.35);
+}
+[data-palette="ember"][data-theme="light"] {
+  color-scheme: light;
+  --background: #faf4ef;
+  --foreground: #2a1f1a;
+  --heading: #1a120e;
+  --card: #fffcf9;
+  --card-foreground: #2a1f1a;
+  --muted: #f2e9e2;
+  --muted-foreground: #68584e;
+  --accent: #ecdfd5;
+  --border: #9b8a7f;
+  --hairline: #eadfd6;
+  --input: #9b8a7f;
+  --primary: #a3461b;
+  --primary-foreground: #ffffff;
+  --good: #2a6f37;
+  --warn: #845600;
+  --bad: #b03526;
+  --info: #22609f;
+  --brand: #8f5d00;
+  --motivate: #975c00;
+  --connect: #11704b;
+  --truth: #0b6a70;
+  --derive: #5146c9;
+  --quiz: #7647c7;
+  --mark: rgb(240 190 70 / 0.35);
+  --selection: rgb(34 96 159 / 0.22);
+  --syn-keyword: #8a3fb0;
+  --syn-attr: #92491a;
+  --shadow: 0 8px 30px rgb(60 50 30 / 0.12);
+}
+[data-palette="iris"][data-theme="dark"] {
+  color-scheme: dark;
+  --background: #15131c;
+  --foreground: #e8e4f0;
+  --heading: #f6f4fb;
+  --card: #1d1a26;
+  --card-foreground: #e8e4f0;
+  --muted: #1d1a26;
+  --muted-foreground: #a097b5;
+  --accent: #282433;
+  --border: #6b6483;
+  --hairline: #252130;
+  --input: #6b6483;
+  --primary: #b3a2f0;
+  --primary-foreground: #15131c;
+  --good: #82bf86;
+  --warn: #e0b765;
+  --bad: #e5806f;
+  --info: #84aee3;
+  --brand: #e0b765;
+  --motivate: #e9a948;
+  --connect: #5cc79a;
+  --truth: #4fc4c4;
+  --derive: #9c95f0;
+  --quiz: #b493ee;
+  --mark: rgb(224 183 101 / 0.22);
+  --selection: rgb(132 174 227 / 0.35);
+  --syn-keyword: #c9a0dc;
+  --syn-attr: #d9a679;
+  --shadow: 0 8px 30px rgb(0 0 0 / 0.35);
+}
+[data-palette="iris"][data-theme="light"] {
+  color-scheme: light;
+  --background: #f6f4fa;
+  --foreground: #221d2e;
+  --heading: #14101d;
+  --card: #fefdff;
+  --card-foreground: #221d2e;
+  --muted: #ece8f4;
+  --muted-foreground: #5c546d;
+  --accent: #e3ddef;
+  --border: #9189a5;
+  --hairline: #e4def0;
+  --input: #9189a5;
+  --primary: #5b45b5;
+  --primary-foreground: #ffffff;
+  --good: #2a6f37;
+  --warn: #845600;
+  --bad: #b03526;
+  --info: #22609f;
+  --brand: #8f5d00;
+  --motivate: #975c00;
+  --connect: #11704b;
+  --truth: #0b6a70;
+  --derive: #5146c9;
+  --quiz: #7647c7;
+  --mark: rgb(240 190 70 / 0.35);
+  --selection: rgb(34 96 159 / 0.22);
+  --syn-keyword: #8a3fb0;
+  --syn-attr: #92491a;
+  --shadow: 0 8px 30px rgb(60 50 30 / 0.12);
+}
+/* Tailwind's dark: variant (Streamdown's code highlighting uses it) follows the app theme, not the OS. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+/* Expose tokens as Tailwind colors (bg-background, text-muted-foreground, border-border, ...). */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-border: var(--border);
+  --color-hairline: var(--hairline);
+  --color-input: var(--input);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-good: var(--good);
+  --color-warn: var(--warn);
+  --color-bad: var(--bad);
+  --color-info: var(--info);
+  --color-heading: var(--heading);
+  --color-brand: var(--brand);
+  --color-motivate: var(--motivate);
+  --color-connect: var(--connect);
+  --color-truth: var(--truth);
+  --color-derive: var(--derive);
+  --color-quiz: var(--quiz);
+  --radius-lg: var(--radius);
+  --font-ui: "JetBrains Mono", ui-monospace, Consolas, monospace;
+  --font-prose: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+  --font-sans: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
+  --font-serif: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
+}
+@layer base {
+  html, body, #root { height: 100%; overflow: hidden; }
+  html { background: var(--background); color: var(--foreground); }
+  body { font-family: var(--font-ui); font-size: 13px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+  button, input, select, textarea { font-family: inherit; }
+  button:not(:disabled), select, summary { cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+  dialog { color: inherit; }
+  /* Electron: the top bar drags the window; whatever is interactive inside it must not. */
+  .topbar { -webkit-app-region: drag; }
+  .topbar :is(button, a, input, select, textarea, [role="tab"]) { -webkit-app-region: no-drag; }
+  /* The scrim starts below the 36px top bar (h-9, Shell.tsx): the bar keeps its true colour, which the native window
+     controls (title bar overlay, desktop app) also use, so they match it while a dialog is open. */
+  dialog::backdrop { top: 36px; background: rgb(0 0 0 / 0.5); }
+  ::selection { background: var(--selection); }
+  * { scrollbar-color: var(--border) transparent; }
+}
+
+/* Fallback styling for standalone Sintesi / Reference sheets rendered inside Rich / DocBody */
+.node-rich .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.25rem; margin-bottom: 1.25rem; }
+.node-rich .card h2 { font-size: 1.1rem; margin-top: 0; color: var(--foreground); border-bottom: 1px solid var(--hairline); padding-bottom: 0.5rem; font-weight: 600; }
+.node-rich .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+.node-rich .node-card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; margin-bottom: 1rem; }
+.node-rich .node-card.tier-unconditional-truth, .node-rich .node-card.tier-axiom { border-left: 4px solid var(--truth); }
+.node-rich .node-card.tier-derivation { border-left: 4px solid var(--derive); }
+.node-rich .node-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.5rem; }
+.node-rich .node-card-title-group { display: flex; flex-direction: column; gap: 0.2rem; }
+.node-rich .node-card-num { font-family: var(--font-mono); font-size: 0.7rem; color: var(--muted-foreground); text-transform: uppercase; letter-spacing: 0.05em; }
+.node-rich .node-card-title { font-size: 1rem; margin: 0; font-weight: 600; color: var(--foreground); }
+.node-rich .badge { font-size: 0.7rem; font-weight: 600; padding: 0.15rem 0.5rem; border-radius: 4px; white-space: nowrap; }
+.node-rich .badge-truth { background: color-mix(in srgb, var(--truth) 15%, transparent); color: var(--truth); border: 1px solid color-mix(in srgb, var(--truth) 30%, transparent); }
+.node-rich .badge-deriv { background: color-mix(in srgb, var(--derive) 15%, transparent); color: var(--derive); border: 1px solid color-mix(in srgb, var(--derive) 30%, transparent); }
+.node-rich .node-card-claim { font-size: 0.95rem; line-height: 1.5; color: var(--foreground); margin-bottom: 0.75rem; }
+.node-rich .formula-card { background: var(--background); border: 1px solid var(--hairline); border-radius: 4px; padding: 0.75rem; margin-bottom: 0.75rem; text-align: center; }
+.node-rich .code-card { background: var(--background); border: 1px solid var(--hairline); border-radius: 4px; padding: 0.75rem 1rem; margin-top: 0.5rem; overflow-x: auto; }
+.node-rich .code-card pre { margin: 0; font-family: var(--font-mono); font-size: 0.8rem; }
+.node-rich .code-caption { display: block; color: var(--muted-foreground); font-size: 0.75rem; margin-top: 0.25rem; }
+.node-rich .diagram-container { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.25rem; margin-bottom: 1.25rem; }
+.node-rich .diagram-container h2 { font-size: 1.1rem; margin-top: 0; color: var(--foreground); border-bottom: 1px solid var(--hairline); padding-bottom: 0.5rem; font-weight: 600; }
+.node-rich .misconceptions-card { border-left: 4px solid var(--warn); background: color-mix(in srgb, var(--warn) 10%, transparent); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; margin-bottom: 1.25rem; }
+.node-rich .misconceptions-card h2 { color: var(--warn); font-size: 1rem; margin-top: 0; margin-bottom: 0.5rem; font-weight: 600; border: none; }
+.node-rich .misconceptions-list { margin: 0.5rem 0 0 1.25rem; padding: 0; font-size: 0.85rem; color: var(--foreground); }
+.node-rich .misconceptions-list li { margin-bottom: 0.35rem; }

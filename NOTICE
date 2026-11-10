@@ -1,0 +1,15 @@
+Proxi
+Copyright (C) 2026 Davide Fantauzzi
+
+Proxi is a modified fork of LearnHarness by Amos Blomqvist
+(https://github.com/amosblomqvist/learnharness), licensed under the
+GNU Affero General Public License, version 3 only (AGPL-3.0-only).
+
+Modified by Davide Fantauzzi in 2026: renamed to Proxi, with a learner
+web app and desktop shell, Anki spaced repetition, a knowledge graph and
+teaching prompts built on top of the original engine.
+
+Proxi is distributed under the same licence, AGPL-3.0-only. See LICENSE.
+
+Inspired by Matt Pocock's /teach skill:
+https://github.com/mattpocock/skills/blob/main/skills/productivity/teach/SKILL.md
