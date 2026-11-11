@@ -17,18 +17,9 @@ Vision: Ottimizzare il processo di apprendimento riducendo al minimo l'attrito n
 - [x] M01 Riduzione attrito UI (2026-11-04): Mappa, top bar, pagina corso e sidebar snellite per ridurre l'attrito.
 - [x] M02 Spaced repetition e Anki (2026-11-06): Collegamento bidirezionale Anki-app: ripassi importati, concetti deboli su mappa e probe mirato.
 - [x] M03 Motore ZPD globale (2026-11-06): Conoscenza globale per significato, ancoraggio idee e confine ZPD senza sovraccarico contesto.
-- [ ] M04 Nuova identità
+- [x] M04 Nuova identità (2026-11-11): App rinominata Proxi, repo pubblico pulito, ia-teacher archiviato.
 - [ ] M05 Backend Rust
 - [ ] M06 App nativa Tauri
-
-## M04 Nuova identità
-Goal: L'app si chiama Proxi e vive in un repo pubblico pulito, con licenza corretta e un README breve e fedele al prodotto.
-Exit:
-- Dopo l'aggiornamento, corsi, impostazioni, token di sync e mazzi Anki (con storico) compaiono sotto Proxi, senza nulla di orfano.
-- "ia-teacher" non compare più nell'app, nei comandi e nella documentazione, salvo il codice di migrazione.
-- Il README è in inglese e contiene solo titolo, frase principale (scritta da lui), presentazione, How to use con le GIF di Continua, Ripasso ed Esercizi, Install, Requirements, Build e License.
-- LICENSE AGPL-3.0, NOTICE con attribuzione a learnharness, template issue/PR e SECURITY.md presenti; nessun segreto, percorso personale, piano interno o ricerca nei file tracciati.
-- `github.com/davidef02/proxi` è pubblico con un unico commit di `Davide Fantauzzi <114928369+davidef02@users.noreply.github.com>` e i milestone ricreati; `davidef02/ia-teacher` è archiviato.
 
 ## M05 Backend Rust
 Goal: Server e comandi del motore sono un unico binario Rust con la stessa API, e l'app Electron ci gira sopra invariata.
