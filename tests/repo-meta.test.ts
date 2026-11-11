@@ -60,10 +60,10 @@ describe("public repo meta", () => {
     assert.match(read(".github/ISSUE_TEMPLATE/config.yml"), /^blank_issues_enabled: false$/m);
   });
 
-  it("README has the sentence, presentation, screenshot and four sections, under 60 lines", () => {
+  it("README has the title, sentence, presentation, the three how-to GIFs and four sections, under 70 lines", () => {
     const text = read("README.md");
     const lines = text.replace(/\n$/, "").split("\n");
-    assert.ok(lines.length < 60, `README has ${lines.length} lines`);
+    assert.ok(lines.length < 70, `README has ${lines.length} lines`);
 
     let inFence = false;
     const headings: string[] = [];
@@ -74,7 +74,16 @@ describe("public repo meta", () => {
         headings.push(line);
       }
     }
-    assert.deepEqual(headings, ["## Install", "## Requirements", "## Build", "## License"]);
+    assert.deepEqual(headings, [
+      "## How to use",
+      "### 1. Continue: learn the next lesson",
+      "### 2. Review: keep what you learned",
+      "### 3. Exercises: practise what you learned",
+      "## Install",
+      "## Requirements",
+      "## Build",
+      "## License"
+    ]);
 
     const firstHeading = lines.findIndex((line) => /^#{1,6}\s/.test(line));
     const blocks = lines
@@ -83,15 +92,21 @@ describe("public repo meta", () => {
       .split(/\n\s*\n/)
       .map((block) => block.trim())
       .filter(Boolean);
-    assert.equal(blocks.length, 3, "preamble should be sentence, presentation and screenshot");
-    assert.equal(blocks[0], SENTENCE);
-    const presentation = blocks[1].split("\n");
+    assert.equal(blocks.length, 3, "preamble should be title, sentence and presentation");
+    assert.match(blocks[0], /<h1>Proxi<\/h1>/);
+    assert.ok(fs.existsSync(path.join(repoRoot, /<img src="([^"]+)"/.exec(blocks[0])![1])), "title image is missing");
+    assert.equal(blocks[1], SENTENCE);
+    const presentation = blocks[2].split("\n");
     assert.ok(presentation.length >= 1 && presentation.length <= 3, `${presentation.length} presentation lines`);
-    assert.match(blocks[1], /Anki/);
-    assert.match(blocks[2], /^!\[[^\]]*\]\(docs\/screenshot\.png\)$/);
+    assert.match(blocks[2], /Anki/);
 
-    const png = fs.readFileSync(path.join(repoRoot, "docs/screenshot.png"));
-    assert.deepEqual([...png.subarray(0, 8)], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    // one GIF per action, right under its heading
+    const images = lines.filter((line) => /^!\[[^\]]+\]\([^)]+\)$/.test(line)).map((line) => /\(([^)]+)\)$/.exec(line)![1]);
+    assert.deepEqual(images, ["docs/learn.gif", "docs/review.gif", "docs/practice.gif"]);
+    for (const image of images) {
+      const gif = fs.readFileSync(path.join(repoRoot, image));
+      assert.equal(gif.subarray(0, 6).toString("latin1"), "GIF89a", `${image} is not a GIF`);
+    }
   });
 
   it("no internal docs or visual-tools are tracked", (t) => {
