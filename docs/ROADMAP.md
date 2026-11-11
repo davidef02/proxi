@@ -26,7 +26,7 @@ Goal: L'app si chiama Proxi e vive in un repo pubblico pulito, con licenza corre
 Exit:
 - Dopo l'aggiornamento, corsi, impostazioni, token di sync e mazzi Anki (con storico) compaiono sotto Proxi, senza nulla di orfano.
 - "ia-teacher" non compare più nell'app, nei comandi e nella documentazione, salvo il codice di migrazione.
-- Il README è in inglese e contiene solo frase principale (scritta da lui), presentazione, screenshot, Install, Requirements, Build e License.
+- Il README è in inglese e contiene solo titolo, frase principale (scritta da lui), presentazione, How to use con le GIF di Continua, Ripasso ed Esercizi, Install, Requirements, Build e License.
 - LICENSE AGPL-3.0, NOTICE con attribuzione a learnharness, template issue/PR e SECURITY.md presenti; nessun segreto, percorso personale, piano interno o ricerca nei file tracciati.
 - `github.com/davidef02/proxi` è pubblico con un unico commit di `Davide Fantauzzi <114928369+davidef02@users.noreply.github.com>` e i milestone ricreati; `davidef02/ia-teacher` è archiviato.
 
