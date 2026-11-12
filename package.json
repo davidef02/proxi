@@ -26,7 +26,8 @@
     "desktop": "electron app/desktop/main.mjs",
     "desktop:install": "node app/desktop/install-shortcuts.mjs",
     "desktop:uninstall": "node app/desktop/install-shortcuts.mjs --uninstall",
-    "desktop:smoke": "node app/desktop/smoke.mjs"
+    "desktop:smoke": "node app/desktop/smoke.mjs",
+    "bench:baseline": "node app/desktop/bench-baseline.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.1",
