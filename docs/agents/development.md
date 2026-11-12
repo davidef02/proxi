@@ -1,6 +1,6 @@
 # Developing Proxi (engine and app)
 
-For agents that change the code: the engine in `extensions/`, the app in `app/`, tests, tooling.
+For agents that change the code: the engine in `extensions/`, the app in `app/`, the Rust backend in `crates/proxi/`, tests, tooling.
 Agents that teach or study never need this file.
 
 ## Principi
@@ -40,6 +40,8 @@ npm run typecheck && npm run typecheck:app
 npm test            # engine (tests/)
 npm run app:build   # before test:app and e2e: both expect app/web/dist
 npm run test:app    # app (app/test/)
+cargo build --release --locked
+cargo test --locked # Rust backend (crates/proxi)
 npm run e2e         # app, Playwright (Chromium)
 ```
 
