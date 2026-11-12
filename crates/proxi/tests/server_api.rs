@@ -488,3 +488,19 @@ async fn real_build_serves_the_built_spa() {
         assert_eq!(body.as_ref(), expected.as_slice(), "{path}");
     }
 }
+
+/// The `serve` CLI must exit 1 on a port Node's `listen` also rejects (main.ts:628,549-560).
+#[test]
+fn serve_cli_exits_1_on_an_invalid_port() {
+    let output = std::process::Command::new(common::proxi_bin())
+        .arg("serve")
+        .env("LEARNER_PORT", "70000")
+        .output()
+        .expect("run proxi serve");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("LEARNER_PORT non valido: 70000"),
+        "{stderr}"
+    );
+}

@@ -294,8 +294,22 @@ fn settings_and_limits_match_node() {
             r#"{"error":"Invalid JSON body"}"#
         );
 
+        // googleClientId is a valid 300-char string setting (settings.ts:26) and round-trips.
+        let google_client_id = "g".repeat(300);
+        let body = pair
+            .same(
+                Method::POST,
+                "/api/settings",
+                Some(&format!(
+                    r#"{{"googleClientId":"{google_client_id}"}}"#
+                )),
+            )
+            .await;
+        assert_eq!(body.status, StatusCode::OK);
+        assert_eq!(body.rust["googleClientId"], google_client_id);
+
         // A bad file is read one key at a time: only the invalid values fall back.
-        let lenient = r#"{"provider":"bogus","teacherModel":"opus","effort":{"map":"low"},"extra":1}"#;
+        let lenient = r#"{"provider":"bogus","teacherModel":"opus","effort":{"map":"low"},"googleClientId":"client-id-123","extra":1}"#;
         for repo in [&node_repo.0, &rust_repo.0] {
             fs::write(proxi::settings::settings_file(repo), lenient).expect("overwrite settings");
         }
