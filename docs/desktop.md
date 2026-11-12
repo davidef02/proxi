@@ -32,7 +32,8 @@ behind a small splash window when stale. If a rebuild fails and an older build e
 - Quitting closes the server and kills every `claude` process it started.
 - External links open in the default browser; `/files/...` (lessons, exercises) open in a new app window created by the main process with the same guards (no navigation away from the server origin, window cap, sandbox, no permissions granted).
 - Env overrides (tests): `LEARNER_REPO_ROOT`, `LEARNER_PORT`, `LEARNER_USER_DATA`, `LEARNER_CLAUDE_BIN`,
-  `LEARNER_CLAUDE_BIN_ARGS`, `LEARNER_ADD_DIRS`.
+  `LEARNER_CLAUDE_BIN_ARGS`, `LEARNER_ADD_DIRS`, `LEARNER_OPEN_HASH` (e.g. `#/c/demo`: the main window opens at that
+  route; used by `npm run bench:baseline`).
 - The title bar is hidden with a 36px native overlay for the window buttons: the web shell must leave that strip
   free and mark a drag region (`-webkit-app-region: drag`).
 
