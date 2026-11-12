@@ -66,6 +66,16 @@ test("uiIsStale: a shared file newer than the build is stale", async () => {
   });
 });
 
+test("uiIsStale: a web/index.html newer than the build is stale", async () => {
+  const { uiIsStale } = await startup();
+  await withTemp((root) => {
+    write(path.join(root, "web", "dist", "index.html"), OLD);
+    write(path.join(root, "web", "index.html"), NEW);
+    write(path.join(root, "web", "src", "a", "b.ts"), OLD);
+    assert.equal(uiIsStale(root), true);
+  });
+});
+
 test("uiIsStale: a missing shared directory is skipped", async () => {
   const { uiIsStale } = await startup();
   await withTemp((root) => {

@@ -85,6 +85,13 @@ test("parseProcessSample: an empty sample or garbage throws with the stdout exce
   assert.throws(() => parseProcessSample("<html>nope</html>"), /no processes sampled.*<html>nope/s);
 });
 
+test("parseProcessSample: a row without a valid pid or byte count throws", async () => {
+  const { parseProcessSample } = await bench();
+  assert.throws(() => parseProcessSample(JSON.stringify([{ pid: 10, name: "electron.exe" }])), /no processes sampled/);
+  assert.throws(() => parseProcessSample(JSON.stringify([{ pid: 0, name: "electron.exe", wsPrivate: 1 }])), /no processes sampled/);
+  assert.throws(() => parseProcessSample(JSON.stringify([{ pid: 10, name: "electron.exe", wsPrivate: -1 }])), /no processes sampled/);
+});
+
 test("processSampleScript: walks the process tree and reads WorkingSetPrivate", async () => {
   const { processSampleScript } = await bench();
   const script = processSampleScript(1234);
@@ -139,6 +146,16 @@ test("buildBaseline: a missing base commit stays null", async () => {
   assert.equal(baseline.base_commit, null);
 });
 
+test("buildBaseline: the method records the fixture, route and settle time", async () => {
+  const { buildBaseline } = await bench();
+  const { runs, ...rest } = validBaseline();
+  const baseline = buildBaseline({ runs, ...rest, electron: "45.0.0", warmupRuns: 1 });
+  assert.equal(baseline.method.open_hash, "#/c/demo");
+  assert.equal(baseline.method.settle_ms, 10000);
+  assert.match(baseline.method.ram_metric, /WorkingSetPrivate/);
+  assert.match(baseline.method.interactive, /next-action/);
+});
+
 test("validateBaseline: rejects a wrong run count", async () => {
   const { validateBaseline } = await bench();
   const obj = validBaseline();
@@ -174,9 +191,98 @@ test("validateBaseline: rejects a missing CPU name", async () => {
   assert.notDeepEqual(validateBaseline(obj), []);
 });
 
+test("validateBaseline: rejects a malformed date", async () => {
+  const { validateBaseline } = await bench();
+  const obj = validBaseline();
+  obj.date = "12/11/2026";
+  assert.notDeepEqual(validateBaseline(obj), []);
+});
+
+test("validateBaseline: accepts a null base commit", async () => {
+  const { validateBaseline } = await bench();
+  const obj = validBaseline();
+  (obj as { base_commit: string | null }).base_commit = null;
+  assert.deepEqual(validateBaseline(obj), []);
+});
+
+test("validateBaseline: rejects a malformed base commit", async () => {
+  const { validateBaseline } = await bench();
+  const obj = validBaseline();
+  obj.base_commit = "abc";
+  assert.notDeepEqual(validateBaseline(obj), []);
+});
+
+test("validateBaseline: rejects a non-boolean dirty flag", async () => {
+  const { validateBaseline } = await bench();
+  const obj = validBaseline();
+  (obj as { dirty?: unknown }).dirty = "no";
+  assert.notDeepEqual(validateBaseline(obj), []);
+});
+
+test("validateBaseline: rejects missing machine numbers", async () => {
+  const { validateBaseline } = await bench();
+  for (const key of ["cores", "ram_gb"] as const) {
+    const obj = validBaseline();
+    delete (obj.machine as { cores?: number; ram_gb?: number })[key];
+    assert.notDeepEqual(validateBaseline(obj), [], key);
+  }
+});
+
+test("validateBaseline: rejects missing os fields", async () => {
+  const { validateBaseline } = await bench();
+  for (const key of ["release", "version", "arch"] as const) {
+    const obj = validBaseline();
+    delete (obj.os as { release?: string; version?: string; arch?: string })[key];
+    assert.notDeepEqual(validateBaseline(obj), [], key);
+  }
+});
+
+test("validateBaseline: rejects a missing Electron version", async () => {
+  const { validateBaseline } = await bench();
+  const obj = validBaseline();
+  obj.runtime.electron = "";
+  assert.notDeepEqual(validateBaseline(obj), []);
+});
+
+test("validateBaseline: rejects a wrong settle time", async () => {
+  const { validateBaseline } = await bench();
+  const obj = validBaseline();
+  obj.method.settle_ms = 5000;
+  assert.notDeepEqual(validateBaseline(obj), []);
+});
+
+test("validateBaseline: rejects a non-positive run measurement", async () => {
+  const { validateBaseline } = await bench();
+  const zeroRam = validBaseline();
+  zeroRam.runs[2].ram_idle_mb = 0;
+  assert.notDeepEqual(validateBaseline(zeroRam), []);
+  const negativeCold = validBaseline();
+  negativeCold.runs[2].cold_start_ms = -1;
+  assert.notDeepEqual(validateBaseline(negativeCold), []);
+});
+
+test("validateBaseline: rejects a non-integer process count", async () => {
+  const { validateBaseline } = await bench();
+  const obj = validBaseline();
+  obj.runs[2].processes = 2.5;
+  assert.notDeepEqual(validateBaseline(obj), []);
+});
+
+test("validateBaseline: rejects a cold_start median that does not match the runs", async () => {
+  const { validateBaseline } = await bench();
+  const obj = validBaseline();
+  obj.cold_start_ms = 2101;
+  assert.notDeepEqual(validateBaseline(obj), []);
+});
+
 test("validateBaseline: null is not an object", async () => {
   const { validateBaseline } = await bench();
   assert.deepEqual(validateBaseline(null), ["not an object"]);
+});
+
+test("validateBaseline: an array is not an object", async () => {
+  const { validateBaseline } = await bench();
+  assert.deepEqual(validateBaseline([]), ["not an object"]);
 });
 
 test("drift: 9.9 % is ok, 10 % on either metric is not", async () => {
@@ -187,6 +293,14 @@ test("drift: 9.9 % is ok, 10 % on either metric is not", async () => {
   assert.equal(small.ok, true);
   assert.equal(drift({ ram_idle_mb: 100, cold_start_ms: 1000 }, { ram_idle_mb: 110, cold_start_ms: 1000 }).ok, false);
   assert.equal(drift({ ram_idle_mb: 100, cold_start_ms: 1000 }, { ram_idle_mb: 100, cold_start_ms: 1100 }).ok, false);
+});
+
+test("drift: a smaller next run is measured as an absolute change", async () => {
+  const { drift } = await bench();
+  const d = drift({ ram_idle_mb: 200, cold_start_ms: 1000 }, { ram_idle_mb: 190, cold_start_ms: 950 });
+  assert.ok(Math.abs(d.ram - 0.05) < 1e-9);
+  assert.ok(Math.abs(d.cold - 0.05) < 1e-9);
+  assert.equal(d.ok, true);
 });
 
 test("parseArgs: defaults, all three flags, every error case", async () => {
