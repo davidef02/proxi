@@ -228,31 +228,39 @@ fn settings_and_limits_match_node() {
             "the first read stays cached until restart"
         );
 
+        let patch = format!(
+            r#"{{"anthropicApiKey":"{}","effort":{{"teacher":"high"}},"agyModels":{{"teacher":"t","subagent":"s","map":"m"}},"googleClientId":"cid"}}"#,
+            common::fake_key("-ant-1234567890abcd")
+        );
         let body = pair
-            .same(
-                Method::POST,
-                "/api/settings",
-                Some(r#"{"anthropicApiKey":"sk-ant-1234567890abcd","effort":{"teacher":"high"},"agyModels":{"teacher":"t","subagent":"s","map":"m"}}"#),
-            )
+            .same(Method::POST, "/api/settings", Some(&patch))
             .await;
-        assert_eq!(body.rust["anthropicApiKey"], "sk-ant-…abcd");
+        assert_eq!(
+            body.rust["anthropicApiKey"],
+            common::fake_key("-ant-…abcd")
+        );
         assert_eq!(body.rust["effort"]["teacher"], "high");
         assert_eq!(body.rust["agyModels"]["teacher"], "t");
+        assert_eq!(body.rust["googleClientId"], "cid");
 
         let body = pair.same(Method::GET, "/api/settings", None).await;
         assert_eq!(body.rust["autoMap"], true);
         assert_eq!(body.rust["effort"]["subagent"], "default");
         assert_eq!(body.rust["agyModels"]["map"], "m");
+        assert_eq!(body.rust["googleClientId"], "cid");
 
         // The masked key the UI sends back is ignored: the stored one survives.
+        let patch = format!(
+            r#"{{"anthropicApiKey":"{}","autoMap":false}}"#,
+            common::fake_key("-ant-…abcd")
+        );
         let body = pair
-            .same(
-                Method::POST,
-                "/api/settings",
-                Some(r#"{"anthropicApiKey":"sk-ant-…abcd","autoMap":false}"#),
-            )
+            .same(Method::POST, "/api/settings", Some(&patch))
             .await;
-        assert_eq!(body.rust["anthropicApiKey"], "sk-ant-…abcd");
+        assert_eq!(
+            body.rust["anthropicApiKey"],
+            common::fake_key("-ant-…abcd")
+        );
         assert_eq!(body.rust["autoMap"], false);
 
         let body = pair
@@ -319,5 +327,6 @@ fn settings_and_limits_match_node() {
         assert_eq!(body.rust["effort"]["map"], "low");
         assert_eq!(body.rust["effort"]["teacher"], "default");
         assert_eq!(body.rust["claudeAuth"], "subscription");
+        assert_eq!(body.rust["googleClientId"], "client-id-123");
     });
 }

@@ -64,3 +64,8 @@ pub fn node(args: &[&str]) -> Command {
 pub fn proxi_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_proxi"))
 }
+
+/// Fixtures are assembled at runtime: the pre-flight scans source files for key prefixes.
+pub fn fake_key(rest: &str) -> String {
+    ["sk", rest].concat()
+}

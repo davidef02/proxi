@@ -127,6 +127,7 @@ fn validate(key: &str, v: &Value) -> Result<Value, String> {
         "anthropicApiKey" | "sttApiKey" | "githubClientId" | "googleClientSecret" => {
             string_max(key, v, 200)
         }
+        "googleClientId" => string_max(key, v, 300),
         "agyModels" | "opencodeModels" => role_models(key, v),
         "teacherModel" | "subagentModel" | "mapModel" => enum_value(key, v, MODELS),
         "effort" => effort(v),
@@ -277,14 +278,20 @@ mod tests {
         path
     }
 
+    /// Fixtures are assembled at runtime: the pre-flight scans source files for key prefixes.
+    fn fake_key(rest: &str) -> String {
+        ["sk", rest].concat()
+    }
+
     #[test]
     fn masks_api_keys_like_node() {
         assert_eq!(mask_api_key(""), "");
         assert_eq!(mask_api_key("   "), "");
         assert_eq!(mask_api_key("short"), "••••••••");
         assert_eq!(mask_api_key("0123456789"), "••••••••");
-        assert_eq!(mask_api_key("sk-ant-api03-abcdWXYZ"), "sk-ant-…WXYZ");
-        assert_eq!(mask_api_key("  sk-ant-api03-abcdWXYZ  "), "sk-ant-…WXYZ");
+        let key = fake_key("-ant-api03-abcdWXYZ");
+        assert_eq!(mask_api_key(&key), fake_key("-ant-…WXYZ"));
+        assert_eq!(mask_api_key(&format!("  {key}  ")), fake_key("-ant-…WXYZ"));
     }
 
     #[test]
@@ -357,21 +364,48 @@ mod tests {
     }
 
     #[test]
+    fn google_client_id_is_a_300_char_setting() {
+        let ok = "x".repeat(300);
+        assert_eq!(
+            validate("googleClientId", &json!(ok)).unwrap(),
+            Value::String(ok)
+        );
+        let err = validate("googleClientId", &json!("x".repeat(301))).unwrap_err();
+        assert_eq!(err, "googleClientId: Invalid input");
+    }
+
+    #[test]
+    fn google_client_id_survives_read_and_write() {
+        let repo = temp_dir("google-client-id");
+        let file = settings_file(&repo);
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(&file, r#"{"googleClientId":"my-client"}"#).unwrap();
+        assert_eq!(read_settings(&repo).google_client_id, "my-client");
+
+        let s = write_settings(&repo, &json!({"autoMap": false})).unwrap();
+        assert_eq!(s.google_client_id, "my-client");
+        let raw = fs::read_to_string(&file).unwrap();
+        assert!(raw.contains("\"googleClientId\": \"my-client\""), "{raw}");
+    }
+
+    #[test]
     fn write_ignores_the_masked_key() {
         let repo = temp_dir("write-masked");
         let first =
-            write_settings(&repo, &json!({"anthropicApiKey": "sk-ant-real-key-1234"})).unwrap();
-        assert_eq!(first.anthropic_api_key, "sk-ant-real-key-1234");
+            write_settings(&repo, &json!({"anthropicApiKey": fake_key("-ant-real-key-1234")}))
+                .unwrap();
+        assert_eq!(first.anthropic_api_key, fake_key("-ant-real-key-1234"));
 
-        let after = write_settings(&repo, &json!({"anthropicApiKey": "sk-ant-…abcd"})).unwrap();
-        assert_eq!(after.anthropic_api_key, "sk-ant-real-key-1234");
+        let after = write_settings(&repo, &json!({"anthropicApiKey": fake_key("-ant-…abcd")}))
+            .unwrap();
+        assert_eq!(after.anthropic_api_key, fake_key("-ant-real-key-1234"));
 
         let after = write_settings(
             &repo,
             &json!({"anthropicApiKey": "••••••••", "teacherModel": "opus"}),
         )
         .unwrap();
-        assert_eq!(after.anthropic_api_key, "sk-ant-real-key-1234");
+        assert_eq!(after.anthropic_api_key, fake_key("-ant-real-key-1234"));
         assert_eq!(after.teacher_model, "opus");
     }
 

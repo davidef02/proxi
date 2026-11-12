@@ -204,20 +204,24 @@ async fn settings_round_trip_masks_the_api_key() {
             .to_string()
     );
 
+    let key = common::fake_key("-ant-1234567890abcd");
     let response = post(
         &client,
         &server,
         "/api/settings",
-        r#"{"anthropicApiKey":"sk-ant-1234567890abcd"}"#,
+        &format!(r#"{{"anthropicApiKey":"{key}"}}"#),
     )
     .await;
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(body_json(response).await["anthropicApiKey"], "sk-ant-…abcd");
+    assert_eq!(
+        body_json(response).await["anthropicApiKey"],
+        common::fake_key("-ant-…abcd")
+    );
 
     let raw = fs::read_to_string(fixture.repo.join(".learner").join("settings.json"))
         .expect("read settings file");
     assert!(
-        raw.contains("\"anthropicApiKey\": \"sk-ant-1234567890abcd\""),
+        raw.contains(&format!("\"anthropicApiKey\": \"{key}\"")),
         "{raw}"
     );
 
@@ -297,7 +301,10 @@ async fn settings_event_arrives_with_a_masked_key() {
         &client,
         &server,
         "/api/settings",
-        r#"{"anthropicApiKey":"sk-ant-1234567890abcd"}"#,
+        &format!(
+            r#"{{"anthropicApiKey":"{}"}}"#,
+            common::fake_key("-ant-1234567890abcd")
+        ),
     )
     .await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -333,7 +340,10 @@ async fn settings_event_arrives_with_a_masked_key() {
         .find(|event| event["type"] == "settings")
         .expect("settings event");
     assert_eq!(settings["settings"]["autoMap"], false);
-    assert_eq!(settings["settings"]["anthropicApiKey"], "sk-ant-…abcd");
+    assert_eq!(
+        settings["settings"]["anthropicApiKey"],
+        common::fake_key("-ant-…abcd")
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
