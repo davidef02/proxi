@@ -15,7 +15,7 @@ enum Command {
         args: Vec<String>,
     },
     /// Run the local server
-    Serve,
+    Serve(proxi::server::ServeArgs),
 }
 
 fn main() -> std::process::ExitCode {
@@ -29,7 +29,7 @@ fn main() -> std::process::ExitCode {
         let cli = Cli::parse_from(&args);
         match cli.command {
             Command::Data { args } => proxi::data_root::run_cli(&args),
-            Command::Serve => proxi::server::serve_cli(),
+            Command::Serve(args) => proxi::server::serve_cli(args),
         }
     };
 

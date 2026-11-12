@@ -4,6 +4,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { after, before, describe, it } from "node:test";
+import { startFakeServers } from "./fake-servers.ts";
 
 let mod: typeof import("../server/main.ts") | undefined;
 try {
@@ -89,24 +90,13 @@ describe("server guards and read routes", { skip }, () => {
   });
 
   it("maps /api/anki to byCourse per course, and to no badges when AnkiConnect is down", async () => {
-    const anki = http.createServer((req, res) => {
-      let body = "";
-      req.on("data", (c) => (body += c));
-      req.on("end", () => {
-        const { action } = JSON.parse(body);
-        const stats = { new_count: 5, learn_count: 2, review_count: 4, total_in_deck: 10 };
-        const result =
-          action === "deckNamesAndIds"
-            ? { "Proxi": 1, "Proxi::Demo": 2 }
-            : { "1": { deck_id: 1, name: "Proxi", ...stats }, "2": { deck_id: 2, name: "Demo", ...stats } };
-        res.end(JSON.stringify({ result, error: null }));
-      });
-    });
-    await new Promise<void>((r) => anki.listen(0, "127.0.0.1", r));
-    const { port } = anki.address() as { port: number };
+    const fakes = await startFakeServers();
+    const stats = { new_count: 5, learn_count: 2, review_count: 4, total_in_deck: 10 };
+    fakes.anki.deckNamesAndIds = { "Proxi": 1, "Proxi::Demo": 2 };
+    fakes.anki.deckStats = { "1": { deck_id: 1, name: "Proxi", ...stats }, "2": { deck_id: 2, name: "Demo", ...stats } };
     const prev = process.env.LEARNER_ANKI_URL;
     try {
-      process.env.LEARNER_ANKI_URL = `http://127.0.0.1:${port}`;
+      process.env.LEARNER_ANKI_URL = fakes.urls.anki;
       const online = await raw(srv.port, "/api/anki");
       assert.equal(online.status, 200);
       const body = JSON.parse(online.body);
@@ -126,7 +116,7 @@ describe("server guards and read routes", { skip }, () => {
       assert.equal(offline.online, false);
       assert.equal(offline.byCourse, undefined);
     } finally {
-      anki.close();
+      await fakes.close();
       if (prev === undefined) delete process.env.LEARNER_ANKI_URL;
       else process.env.LEARNER_ANKI_URL = prev;
     }
