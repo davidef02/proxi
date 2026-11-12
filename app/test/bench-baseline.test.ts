@@ -2,7 +2,9 @@
 // shape and the repeatability check. No Electron here.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -329,6 +331,29 @@ test("validateCompareFile: rejects anything that is not a baseline", async () =>
   zero.ram_idle_mb = 0;
   assert.notDeepEqual(validateCompareFile(zero), []);
 });
+
+test(
+  "bench:baseline rejects a malformed --compare file before launching",
+  { skip: process.platform !== "win32" ? "bench:baseline runs on Windows only" : false },
+  () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "bench-compare-"));
+    try {
+      const bad = path.join(tmp, "bad.json");
+      const out = path.join(tmp, "never.json");
+      fs.writeFileSync(bad, JSON.stringify({ runs: [] }));
+      const r = spawnSync(process.execPath, [path.join(here, "../desktop/bench-baseline.mjs"), "--compare", bad, "--out", out], {
+        encoding: "utf8",
+        windowsHide: true,
+        timeout: 60000,
+      });
+      assert.equal(r.status, 1);
+      assert.match(r.stderr, /is not a baseline file/);
+      assert.equal(fs.existsSync(out), false, "a rejected compare file must not start a run");
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  },
+);
 
 test("parseArgs: defaults, all three flags, every error case", async () => {
   const { parseArgs } = await bench();
