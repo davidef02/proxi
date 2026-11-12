@@ -2,6 +2,7 @@
 // shape and the repeatability check. No Electron here.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -202,4 +203,13 @@ test("parseArgs: defaults, all three flags, every error case", async () => {
   assert.throws(() => parseArgs(["--out"]), /--out needs a path/);
   assert.throws(() => parseArgs(["--compare"]), /--compare needs a path/);
   assert.throws(() => parseArgs(["--wat"]), /unknown flag --wat/);
+});
+
+test("committed baseline file matches the schema", async () => {
+  const { validateBaseline } = await bench();
+  const raw = fs.readFileSync(path.join(here, "../../docs/benchmark-baseline.json"), "utf8");
+  const obj = JSON.parse(raw);
+  assert.deepEqual(validateBaseline(obj), []);
+  assert.equal(obj.runs.length, 5);
+  assert.ok(!/[A-Za-z]:\\\\|\/Users\/|\/home\//.test(raw), "baseline leaks an absolute path");
 });
