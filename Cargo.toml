@@ -1,0 +1,5 @@
+[workspace]
+members = ["crates/proxi"]
+resolver = "3"
+
+[profile.release]

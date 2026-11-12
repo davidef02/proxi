@@ -17,6 +17,9 @@ __pycache__/
 .memory/
 *.log
 
+# Rust build output
+/target/
+
 # Scratch payloads for lesson append
 .tmp/
 
