@@ -303,6 +303,33 @@ test("drift: a smaller next run is measured as an absolute change", async () => 
   assert.equal(d.ok, true);
 });
 
+test("validateCompareFile: accepts a baseline with any run count", async () => {
+  const { buildBaseline, validateCompareFile } = await bench();
+  assert.deepEqual(validateCompareFile(validBaseline()), []);
+  const one = buildBaseline({
+    runs: [validBaseline().runs[0]],
+    date: "2026-11-12T10:00:00.000Z",
+    commit: SHA,
+    baseCommit: BASE_SHA,
+    dirty: false,
+    machine: { cpu: "Test CPU", cores: 8, ram_gb: 16 },
+    os: { platform: "win32", release: "10.0.26100", version: "10.0.26100", arch: "x64" },
+    electron: "45.0.0",
+    warmupRuns: 1,
+  });
+  assert.deepEqual(validateCompareFile(one), []);
+});
+
+test("validateCompareFile: rejects anything that is not a baseline", async () => {
+  const { validateCompareFile } = await bench();
+  assert.deepEqual(validateCompareFile(null), ["not an object"]);
+  assert.notDeepEqual(validateCompareFile({}), []);
+  assert.notDeepEqual(validateCompareFile({ runs: [] }), []);
+  const zero = validBaseline();
+  zero.ram_idle_mb = 0;
+  assert.notDeepEqual(validateCompareFile(zero), []);
+});
+
 test("parseArgs: defaults, all three flags, every error case", async () => {
   const { parseArgs } = await bench();
   assert.deepEqual(parseArgs([]), { runs: 5, out: "docs/benchmark-baseline.json", compare: undefined });

@@ -20,6 +20,7 @@ import {
   processSampleScript,
   toMb,
   validateBaseline,
+  validateCompareFile,
 } from "./bench-lib.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -46,6 +47,8 @@ try {
     } catch (e) {
       throw new Error(`cannot read --compare ${prevPath}: ${e.message}`);
     }
+    const prevErrors = validateCompareFile(prev);
+    if (prevErrors.length > 0) throw new Error(`--compare ${prevPath} is not a baseline file: ${prevErrors.join("; ")}`);
   }
 
   const appRoot = path.join(root, "app");
@@ -65,26 +68,13 @@ try {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "proxi-bench-"));
     const repo = path.join(tmp, "repo");
     fs.cpSync(path.join(appRoot, "test", "fixtures", "repo"), repo, { recursive: true });
-    // main.mjs probes the engine through a shell without quoting the path, so a node.exe under "Program Files"
-    // never runs. Hardlink the same binary into the space-free temp dir (bare `node` as last resort).
-    let claudeBin = process.execPath;
-    if (/\s/.test(claudeBin)) {
-      const link = path.join(tmp, "node.exe");
-      try {
-        if (/\s/.test(link)) throw new Error("temp path has spaces");
-        fs.linkSync(claudeBin, link);
-        claudeBin = link;
-      } catch {
-        claudeBin = "node";
-      }
-    }
     const env = {
       ...process.env,
       LEARNER_REPO_ROOT: repo,
       LEARNER_DATA_ROOT: repo,
       LEARNER_PORT: "0",
       LEARNER_USER_DATA: path.join(tmp, "userdata"),
-      LEARNER_CLAUDE_BIN: claudeBin,
+      LEARNER_CLAUDE_BIN: process.execPath,
       LEARNER_CLAUDE_BIN_ARGS: JSON.stringify([path.join(appRoot, "test", "fake-claude.mjs")]),
       LEARNER_ANKI_URL: "http://127.0.0.1:9",
       LEARNER_OPEN_HASH: OPEN_HASH,

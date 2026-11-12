@@ -60,8 +60,13 @@ async function ensureUi() {
 }
 
 function probeEngine(bin, binArgs) {
+  // .exe files run directly: cmd.exe does not quote the path, so a node.exe under "Program Files" never runs.
+  // Only .cmd/.bat shims, and bare names cmd.exe must resolve, go through the shell (quoted).
+  const shell = process.platform === "win32" && !/\.(exe|com)$/i.test(bin);
+  const quote = (s) => `"${s}"`;
+  const args = [...binArgs, "--version"];
   return new Promise((resolve) => {
-    execFile(bin, [...binArgs, "--version"], { timeout: 15000, windowsHide: true, shell: process.platform === "win32" }, (err) => resolve(!err));
+    execFile(shell ? quote(bin) : bin, shell ? args.map(quote) : args, { timeout: 15000, windowsHide: true, shell }, (err) => resolve(!err));
   });
 }
 

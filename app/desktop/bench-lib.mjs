@@ -134,6 +134,13 @@ export function validateBaseline(obj, { runs = RUNS } = {}) {
   return errors;
 }
 
+/** Problems with a `--compare` file: it must be a baseline this command wrote, at any run count. */
+export function validateCompareFile(obj) {
+  // A real baseline has at least one run; validate against its own count so `--runs 1` files compare too.
+  const runs = Array.isArray(obj?.runs) && obj.runs.length > 0 ? obj.runs.length : RUNS;
+  return validateBaseline(obj, { runs });
+}
+
 export function drift(prev, next) {
   const ram = Math.abs(next.ram_idle_mb - prev.ram_idle_mb) / prev.ram_idle_mb;
   const cold = Math.abs(next.cold_start_ms - prev.cold_start_ms) / prev.cold_start_ms;
