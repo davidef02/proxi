@@ -8,6 +8,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { APP_ID, APP_NAME, APP_USER_MODEL_ID } from "../shared/identity.mjs";
 import { DEFAULT_CHROME, OVERLAY_HEIGHT, parseChrome, resolveChrome } from "./chrome.mjs";
+import { startUrl, uiIsStale } from "./startup.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const env = process.env;
@@ -36,26 +37,8 @@ let appOrigin; // origin of the Proxi server the windows show; unset until it is
 const MAX_WINDOWS = 8;
 const WEB_PREFS = { contextIsolation: true, nodeIntegration: false, sandbox: true };
 
-function newestMtime(dir) {
-  let t = 0;
-  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-    const p = path.join(dir, e.name);
-    t = Math.max(t, e.isDirectory() ? newestMtime(p) : fs.statSync(p).mtimeMs);
-  }
-  return t;
-}
-
-function uiIsStale() {
-  const index = path.join(appRoot, "web", "dist", "index.html");
-  if (!fs.existsSync(index)) return true;
-  const built = fs.statSync(index).mtimeMs;
-  return [path.join(appRoot, "web", "src"), path.join(appRoot, "shared"), path.join(appRoot, "web", "index.html")].some(
-    (p) => fs.existsSync(p) && (fs.statSync(p).isDirectory() ? newestMtime(p) : fs.statSync(p).mtimeMs) > built,
-  );
-}
-
 async function ensureUi() {
-  if (!uiIsStale()) return;
+  if (!uiIsStale(appRoot)) return;
   const c = currentChrome();
   const splash = new BrowserWindow({ width: 420, height: 220, frame: false, resizable: false, backgroundColor: c.color, icon: ICON, show: false });
   splash.setMenuBarVisibility(false);
@@ -77,8 +60,13 @@ async function ensureUi() {
 }
 
 function probeEngine(bin, binArgs) {
+  // .exe files run directly: cmd.exe does not quote the path, so a node.exe under "Program Files" never runs.
+  // Only .cmd/.bat shims, and bare names cmd.exe must resolve, go through the shell (quoted).
+  const shell = process.platform === "win32" && !/\.(exe|com)$/i.test(bin);
+  const quote = (s) => `"${s}"`;
+  const args = [...binArgs, "--version"];
   return new Promise((resolve) => {
-    execFile(bin, [...binArgs, "--version"], { timeout: 15000, windowsHide: true, shell: process.platform === "win32" }, (err) => resolve(!err));
+    execFile(shell ? quote(bin) : bin, shell ? args.map(quote) : args, { timeout: 15000, windowsHide: true, shell }, (err) => resolve(!err));
   });
 }
 
@@ -343,7 +331,7 @@ async function start() {
         : `The command "${bin}" did not run. Install Claude Code (https://claude.com/claude-code), run \`claude\` once in a terminal to log in, then reopen ${APP_NAME}. The app opens now, but lessons cannot start until then.`,
     });
   }
-  mainWin = openWindow(srv.url, { main: true });
+  mainWin = openWindow(startUrl(srv.url, env.LEARNER_OPEN_HASH), { main: true });
 }
 
 app.on("window-all-closed", () => { if (mainWin) app.quit(); }); // not before: the splash closing must not quit
