@@ -480,7 +480,9 @@ export type GlobalEvent =
   | { type: "sessions" }
   | { type: "sync"; status: SyncStatus }
   | { type: "limits"; limits: QuotaLimits }
-  | { type: "update"; status: UpdateStatus };
+  | { type: "update"; status: UpdateStatus }
+  /** Settings saved (POST /api/settings): the new settings, API key masked. Sent by the Rust server. */
+  | { type: "settings"; settings: SettingsResponse };
 
 /** GET/POST /api/settings: the settings plus the repository root and the data folder the server works on. */
 export type SettingsResponse = LearnerSettings & { repoRoot: string; dataRoot?: string };

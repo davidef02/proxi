@@ -9,8 +9,8 @@
 
 ## Code: branch → PR → CI → auto-merge
 
-Code is `extensions/`, `app/`, `tests/`, `skills/`, `agents/`, `docs/`, `.github/`, `assets/`,
-`viz/`, `package*.json`, `tsconfig.json` and any root agent file (`AGENTS.md`, `CLAUDE.md`, `CONTEXT.md`).
+Code is `extensions/`, `app/`, `crates/`, `tests/`, `skills/`, `agents/`, `docs/`, `.github/`, `assets/`,
+`viz/`, `package*.json`, `Cargo.toml`, `Cargo.lock`, `tsconfig.json` and any root agent file (`AGENTS.md`, `CLAUDE.md`, `CONTEXT.md`).
 
 ```bash
 git switch main && git pull --ff-only
@@ -22,8 +22,8 @@ gh pr merge --auto --squash                # GitHub merges once the `checks` job
 ```
 
 - The gate is CI (`.github/workflows/ci.yml`, job `checks`): typecheck, typecheck:app, `npm test`,
-  `app:build`, `test:app`, Playwright e2e. Locally run only the test you are iterating on; CI runs
-  the full set.
+  `app:build`, `test:app`, `cargo build --release --locked`, `cargo test --locked`, Playwright e2e.
+  Locally run only the test you are iterating on; CI runs the full set.
 - CI red: read the failing step with `gh run view <id> --log-failed`, fix it on the same branch and
   push. Auto-merge stays armed and fires on the next green run.
 - After the merge GitHub deletes the remote branch. Clean up locally:
