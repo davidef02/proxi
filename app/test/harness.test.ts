@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, describe, it } from "node:test";
-import { fakeFetch, MODE_ENV, proxiBinary, serverMode, startServer } from "./harness.ts";
+import { binaryArgs, fakeFetch, MODE_ENV, proxiBinary, serverMode, startServer } from "./harness.ts";
 
 const dirs: string[] = [];
 function tempDir(prefix: string): string {
@@ -27,6 +27,28 @@ describe("serverMode", () => {
 
   it("rejects an unknown mode", () => {
     assert.throws(() => serverMode({ [MODE_ENV]: "rust" }), /must be "node" or "binary"/);
+  });
+});
+
+describe("binaryArgs", () => {
+  it("always disables the startup update check and keeps secrets in memory", () => {
+    const args = binaryArgs("r", "d");
+    assert.ok(args.includes("--no-update-check"));
+    assert.ok(args.includes("--memory-secrets"));
+    assert.equal(args[args.indexOf("--port") + 1], "0");
+  });
+
+  it("forwards fake URLs and bins", () => {
+    assert.deepEqual(binaryArgs("r", "d", { transcription: "http://t" }, { git: "g", cargo: "c" }), [
+      "serve", "--port", "0", "--repo-root", "r", "--data-root", "d", "--memory-secrets", "--no-update-check",
+      "--transcription-url", "http://t", "--git-bin", "g", "--cargo-bin", "c",
+    ]);
+  });
+
+  it("omits bins that are not set", () => {
+    const args = binaryArgs("r", "d");
+    assert.ok(!args.includes("--git-bin"));
+    assert.ok(!args.includes("--cargo-bin"));
   });
 });
 

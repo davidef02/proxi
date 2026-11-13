@@ -302,7 +302,7 @@ export async function createServer(opts: ServerOptions): Promise<RunningServer> 
         return c.json({ error: "File audio mancante" }, 400);
       }
       const settings = readSettings(repoRoot);
-      const res = await transcribeAudio(audio, settings);
+      const res = await transcribeAudio(audio, settings, opts.fetchFn);
       return c.json(res);
     } catch (e: any) {
       return c.json({ error: e?.message || "Errore di trascrizione" }, 400);
