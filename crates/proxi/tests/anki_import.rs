@@ -8,42 +8,13 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use common::fake_anki::{card, FakeAnki, FakeCard, FakeState};
+use common::anki_seed::{
+    golden_cards, golden_fixture, lesson_doc, seed, write_lesson, OFFLINE_ERRORS,
+};
+use common::fake_anki::{card, FakeAnki, FakeState};
 use proxi::anki_client::AnkiClient;
 use proxi::anki_import::{import_reviews, ImportRegistry};
 use proxi::course_data::progress_file;
-
-const SEED_LINE: &str = "{\"at\":\"2023-11-14T00:00:00.000Z\",\"sessionId\":\"s1\",\"course\":\"demo\",\"lessonSlug\":\"t\",\"nodeRefs\":[\"demo/t#alpha\"],\"kind\":\"check\",\"correct\":true}\n";
-/// Both a refused connection and Windows' slow refusal are acceptable.
-const OFFLINE_ERRORS: [&str; 2] = ["fetch failed", "AnkiConnect request timed out"];
-
-fn lesson_doc(lesson_number: i64, title: &str, slug: &str, node_ids: &[&str]) -> Value {
-    json!({
-        "metadata": {
-            "lessonNumber": lesson_number,
-            "topic": "Demo",
-            "title": title,
-            "slug": slug,
-            "dateCreated": "",
-            "dateModified": "",
-            "version": "1",
-        },
-        "nodes": node_ids
-            .iter()
-            .map(|node_id| json!({ "nodeId": node_id, "title": node_id, "tier": "derivation", "content": "x" }))
-            .collect::<Vec<_>>(),
-    })
-}
-
-fn write_lesson(data_root: &Path, course: &str, filename: &str, doc: Value) {
-    let dir = data_root.join("courses").join(course).join("lessons");
-    fs::create_dir_all(&dir).expect("create lessons dir");
-    fs::write(
-        dir.join(filename),
-        format!(r#"<script type="application/json" id="lesson-data">{doc}</script>"#),
-    )
-    .expect("write lesson");
-}
 
 /// The data root of the old TypeScript test: one planned course with two lessons.
 fn make_test_repo(tag: &str) -> common::TempDir {
@@ -74,87 +45,6 @@ fn make_test_repo(tag: &str) -> common::TempDir {
     fs::write(data.join("courses/demo/MISSION.md"), "# Mission\n").expect("write mission");
     fs::write(data.join("courses/demo/NOTES.md"), "# Notes\n").expect("write notes");
     root
-}
-
-/// The data root of app/test/api-anki.test.ts, whose import golden this port must reproduce.
-fn seed_golden(tag: &str) -> common::TempDir {
-    let root = common::temp_dir(tag);
-    let data = &root.0;
-    fs::write(
-        data.join("curriculum.json"),
-        json!({
-            "chapters": [
-                {
-                    "title": "Demo",
-                    "slug": "demo",
-                    "lessons": [
-                        { "title": "Lesson T", "slug": "t", "plannedNodes": 2 },
-                        { "title": "Lesson U", "slug": "u", "plannedNodes": 1 },
-                    ],
-                },
-                { "title": "Vuoto", "slug": "vuoto", "lessons": [] },
-            ],
-        })
-        .to_string(),
-    )
-    .expect("write curriculum");
-    write_lesson(data, "demo", "0001-t.html", lesson_doc(1, "Lesson T", "t", &["alpha", "dup"]));
-    write_lesson(data, "demo", "0002-u.html", lesson_doc(2, "Lesson U", "u", &["dup"]));
-    write_lesson(data, "orfano", "0001-o.html", lesson_doc(1, "O", "o", &["x"]));
-    fs::write(progress_file(data, "demo"), SEED_LINE).expect("seed progress log");
-    root
-}
-
-/// The six cards of the Node golden: the two ambiguous ones are skipped, four reviews written.
-fn golden_cards() -> Vec<FakeCard> {
-    vec![
-        card(
-            1001,
-            2001,
-            "Proxi::Demo",
-            &["node::alpha"],
-            10,
-            0,
-            &[(1_700_000_002_000, 1), (1_700_000_001_000, 3)],
-        ),
-        card(
-            1002,
-            2002,
-            "Proxi::Demo",
-            &["NODE::dup", "lesson::u"],
-            -600,
-            2,
-            &[(1_700_000_003_000, 4), (1_700_000_004_000, 0)],
-        ),
-        card(
-            1003,
-            2003,
-            "Proxi::Demo",
-            &["node::dup"],
-            1,
-            0,
-            &[(1_700_000_005_000, 3)],
-        ),
-        card(1004, 2004, "Proxi::Demo", &[], 1, 0, &[(1_700_000_006_000, 3)]),
-        card(
-            1005,
-            2005,
-            "Proxi::Demo::Sub",
-            &["node::alpha", "lesson::t"],
-            1,
-            0,
-            &[(1_700_000_000_500, 2)],
-        ),
-        card(
-            1006,
-            2006,
-            "Altro::Demo",
-            &["node::alpha"],
-            1,
-            0,
-            &[(1_700_000_007_000, 3)],
-        ),
-    ]
 }
 
 fn read_lines(data_root: &Path) -> Vec<Value> {
@@ -408,7 +298,8 @@ async fn concurrent_imports_share_one_run() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn golden_matches_node_fixture() {
-    let root = seed_golden("import-golden");
+    let root = common::temp_dir("import-golden");
+    seed(&root.0);
     let mut state = FakeState::default();
     state.cards = golden_cards();
     let (_fake, anki) = start_anki(state).await;
@@ -418,7 +309,7 @@ async fn golden_matches_node_fixture() {
     assert_eq!(result.online, true);
     assert_eq!(result.imported, 4);
     assert_eq!(result.skipped, 2);
-    let fixture = common::repo_root().join("app/test/fixtures/anki/import-progress.jsonl");
+    let fixture = golden_fixture();
     assert_eq!(
         fs::read(progress_file(&root.0, "demo")).expect("read progress log"),
         fs::read(fixture).expect("read the Node golden"),

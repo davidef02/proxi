@@ -2,82 +2,13 @@
 
 mod common;
 
-use std::path::Path;
-
+use common::anki_seed::{open_state, seed};
 use common::fake_anki::{FakeAnki, FakeState};
 use common::TempDir;
 use proxi::anki_client::{AnkiClient, FETCH_FAILED, TIMED_OUT};
 use proxi::anki_status::{start_review, status_all, status_for_course, ReviewStart};
 use proxi::protocol::AnkiStatusResponse;
 use serde_json::json;
-
-const CURRICULUM: &str = r#"{"chapters":[{"title":"Demo","slug":"demo","lessons":[{"title":"Lesson T","slug":"t","plannedNodes":2},{"title":"Lesson U","slug":"u","plannedNodes":1}]},{"title":"Vuoto","slug":"vuoto","lessons":[]}]}"#;
-
-const SEED_PROGRESS: &str = r#"{"at":"2023-11-14T00:00:00.000Z","sessionId":"s1","course":"demo","lessonSlug":"t","nodeRefs":["demo/t#alpha"],"kind":"check","correct":true}"#;
-
-fn lesson(number: u64, title: &str, slug: &str, nodes: &[&str]) -> String {
-    json!({
-        "metadata": {
-            "lessonNumber": number,
-            "topic": "Demo",
-            "title": title,
-            "slug": slug,
-            "dateCreated": "",
-            "dateModified": "",
-            "version": "1",
-        },
-        "nodes": nodes
-            .iter()
-            .map(|id| json!({ "nodeId": id, "title": "N", "tier": "axiom", "content": "x" }))
-            .collect::<Vec<_>>(),
-    })
-    .to_string()
-}
-
-fn write_lesson(data_root: &Path, course: &str, filename: &str, island: &str) {
-    let dir = data_root.join("courses").join(course).join("lessons");
-    std::fs::create_dir_all(&dir).expect("create lessons dir");
-    std::fs::write(
-        dir.join(filename),
-        format!(r#"<script type="application/json" id="lesson-data">{island}</script>"#),
-    )
-    .expect("write lesson");
-}
-
-/// The api-anki seed: Demo and Vuoto planned, orfano only on disk, one check already logged.
-fn seed(data_root: &Path) {
-    std::fs::write(data_root.join("curriculum.json"), CURRICULUM).expect("write curriculum");
-    write_lesson(
-        data_root,
-        "demo",
-        "0001-t.html",
-        &lesson(1, "Lesson T", "t", &["alpha", "dup"]),
-    );
-    write_lesson(data_root, "demo", "0002-u.html", &lesson(2, "Lesson U", "u", &["dup"]));
-    write_lesson(data_root, "orfano", "0001-o.html", &lesson(1, "O", "o", &["x"]));
-    std::fs::write(
-        data_root.join("courses").join("demo").join("progress.jsonl"),
-        format!("{SEED_PROGRESS}\n"),
-    )
-    .expect("write seed progress");
-}
-
-fn open_state() -> FakeState {
-    FakeState {
-        deck_names_and_ids: Some(json!({
-            "Proxi": 1,
-            "Proxi::Demo": 2,
-            "Proxi::Altro": 3,
-            "Default": 4,
-        })),
-        deck_stats: Some(json!({
-            "1": { "deck_id": 1, "name": "Proxi", "new_count": 5, "learn_count": 2, "review_count": 4, "total_in_deck": 0 },
-            "2": { "deck_id": 2, "name": "Demo", "new_count": 5, "learn_count": 2, "review_count": 4, "total_in_deck": 10 },
-            "3": { "deck_id": 3, "name": "Altro", "new_count": 1, "learn_count": 0, "review_count": 0, "total_in_deck": 3 },
-        })),
-        ..FakeState::default()
-    }
-}
 
 async fn setup(state: FakeState) -> (TempDir, FakeAnki, AnkiClient) {
     let data = common::temp_dir("anki-status");
