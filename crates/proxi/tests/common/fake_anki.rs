@@ -51,6 +51,8 @@ pub struct FakeState {
     pub deck_stats: Option<Value>,
     pub response_error: Option<String>,
     pub gui_deck_review_error: Option<String>,
+    /// When set, `getReviewsOfCards` answers this result instead of deriving it from `cards`.
+    pub reviews_result: Option<Value>,
     pub find_cards_delay: Duration,
     /// Parsed request bodies in arrival order, so a test can check that `params` is absent.
     pub requests: Vec<Value>,
@@ -208,6 +210,9 @@ fn notes_info(state: &FakeState, params: &Value) -> Value {
 }
 
 fn reviews_of_cards(state: &FakeState, params: &Value) -> Value {
+    if let Some(value) = &state.reviews_result {
+        return value.clone();
+    }
     let mut result = Map::new();
     for id in requested(params, "cards") {
         let key = match &id {

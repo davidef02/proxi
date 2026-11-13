@@ -185,6 +185,24 @@ async fn stats_keyed_by_another_id_fall_back_to_the_first_entry() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn stats_fall_back_in_javascript_key_order() {
+    let mut state = open_state();
+    // Demo's deck id is missing from the stats, so Node's Object.values(stats)[0] picks
+    // the smallest canonical array index, not the first inserted key.
+    state.deck_names_and_ids = Some(json!({ "Proxi": 1, "Proxi::Demo": 3 }));
+    state.deck_stats = Some(json!({
+        "10": { "deck_id": 10, "name": "Ten", "new_count": 10, "learn_count": 0, "review_count": 10, "total_in_deck": 1 },
+        "2": { "deck_id": 2, "name": "Two", "new_count": 2, "learn_count": 0, "review_count": 2, "total_in_deck": 1 },
+    }));
+    let (data, _fake, client) = setup(state).await;
+
+    assert_eq!(
+        serialise(&status_for_course(&client, &data.0, "demo").await),
+        r#"{"online":true,"due":2,"newCards":2,"learning":0,"total":1,"deck":"Proxi::Demo","deckExists":true}"#
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_closed_anki_is_offline_for_all_and_for_one_course() {
     let data = common::temp_dir("anki-status-closed");
     seed(&data.0);

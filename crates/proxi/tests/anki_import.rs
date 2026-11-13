@@ -450,6 +450,33 @@ async fn ease_outside_1_to_4_is_ignored() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_non_integer_review_id_is_an_invalid_time_value() {
+    let root = make_test_repo("import-invalid-time");
+    let mut state = FakeState::default();
+    state.cards = vec![card(
+        1001,
+        2001,
+        "Proxi::Demo",
+        &["node::alpha"],
+        10,
+        0,
+        &[],
+    )];
+    state.reviews_result = Some(json!({
+        "1001": [{ "id": 1.5, "ease": 3 }],
+    }));
+    let (_fake, anki) = start_anki(state).await;
+
+    let result = import_reviews(&anki, &root.0, "demo").await;
+
+    assert_eq!(result.online, false);
+    assert_eq!(result.imported, 0);
+    assert_eq!(result.skipped, 0);
+    assert_eq!(result.error.as_deref(), Some("Invalid time value"));
+    assert!(!progress_file(&root.0, "demo").exists());
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn no_course_directory_writes_nothing() {
     let root = make_test_repo("import-no-course-dir");
     fs::write(
