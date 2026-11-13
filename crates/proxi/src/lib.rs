@@ -1,6 +1,13 @@
+pub mod anki;
+pub mod chapter;
+pub mod clock;
 pub mod data_root;
 pub mod events;
+pub mod home;
+pub mod homepage;
+pub mod identity;
 pub mod limits;
 pub mod protocol;
 pub mod server;
 pub mod settings;
+pub mod slug;

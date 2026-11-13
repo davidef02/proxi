@@ -623,11 +623,14 @@ dependencies = [
  "axum",
  "clap",
  "futures-util",
+ "icu_normalizer",
+ "libc",
  "reqwest",
  "serde",
  "serde_json",
  "tokio",
  "tower-http 0.7.1",
+ "windows-sys",
 ]
 
 [[package]]

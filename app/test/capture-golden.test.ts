@@ -7,7 +7,7 @@ import { after, describe, it } from "node:test";
 import { captureGolden, GOLDEN_DIR, ISO_RE, normalise, rootVariants } from "./capture-golden.ts";
 import { REPO_ROOT } from "./harness.ts";
 
-const ROUTES = ["settings", "limits", "events"];
+const ROUTES = ["settings", "limits", "events", "home"];
 
 const dirs: string[] = [];
 function tempDir(prefix: string): string {
@@ -100,6 +100,70 @@ it("golden fixtures hold no raw timestamps", () => {
     walkStrings(file.cases, (s) => assert.doesNotMatch(s, ISO_RE, `${route}: ${s}`));
   }
   assert.match(goldenText("events"), /"<iso>"/);
+});
+
+it("home golden normalises the stamp and covers every AC case", () => {
+  const file = JSON.parse(goldenText("home")) as {
+    cases: Array<{
+      name: string;
+      result: { exitCode: number; stdout: string; stderr: string };
+      ankiRequests?: unknown[];
+      files: Record<string, string>;
+    }>;
+  };
+  const byName = (name: string) => {
+    const found = file.cases.find((entry) => entry.name === name);
+    assert.ok(found, `missing home case ${name}`);
+    return found;
+  };
+
+  const anki = byName("generate-anki");
+  const ankiHtml = anki.files["index.html"] ?? "";
+  assert.match(ankiHtml, /Dati Anki al <it-IT>/);
+  assert.match(ankiHtml, /rigenera con <code>npm run home<\/code>/);
+  assert.equal(anki.ankiRequests?.length, 2);
+  assert.deepEqual(anki.ankiRequests?.[0], { action: "deckNamesAndIds", version: 6 });
+
+  const noAnki = byName("generate-no-anki");
+  assert.equal(
+    noAnki.result.stdout,
+    "<dataRoot>/index.html — 2 chapters, 6 lessons taught, 3 outside the plan, without Anki\n"
+  );
+  const html = noAnki.files["index.html"] ?? "";
+  assert.ok(html.includes('href="courses/docker/lessons/0002-con%20spazio.html"'));
+  const fuori = html.indexOf("Fuori dal piano");
+  assert.ok(fuori >= 0, "the orphan section is rendered");
+  const hrefs = [
+    'href="courses/docker/lessons/0002-con%20spazio.html"',
+    'href="courses/docker/lessons/0004-image-e-container-bis.html"',
+    'href="courses/probabilita/lessons/0002-dadi.html"',
+  ].map((href) => html.indexOf(href, fuori));
+  assert.ok(hrefs[0] >= 0, "first orphan");
+  assert.ok(hrefs[1] > hrefs[0], "docker 0004 after docker 0002");
+  assert.ok(hrefs[2] > hrefs[1], "probabilita 0002 after docker 0004");
+
+  const options = byName("generate-options");
+  assert.equal(
+    options.result.stdout,
+    "<dataRoot>/board.html — 3 chapters, 2 lessons taught, 1 outside the plan, without Anki\n"
+  );
+  assert.deepEqual(Object.keys(options.files), ["board.html"]);
+  assert.ok(options.files["board.html"]?.includes('href="courses/rust/"'));
+  assert.ok(options.files["board.html"]?.includes("0001-ownership.html"));
+
+  assert.deepEqual(Object.keys(byName("plan-curriculum").files), ["plan.json"]);
+
+  const optionsListing = byName("chapters-options").result.stdout;
+  assert.match(optionsListing, /Ownership/);
+  assert.match(optionsListing, /Borrow/);
+  assert.notEqual(optionsListing, byName("chapters").result.stdout);
+
+  const unreachable = byName("generate-anki-unreachable");
+  assert.equal(unreachable.result.exitCode, 1);
+  assert.deepEqual(unreachable.files, {});
+  assert.match(unreachable.result.stderr, /AnkiConnect non raggiungibile \(fetch failed\)/);
+
+  assert.deepEqual(byName("chapters").files, {});
 });
 
 it("golden fixtures hold no key-like or personal data", () => {

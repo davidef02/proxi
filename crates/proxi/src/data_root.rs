@@ -41,12 +41,17 @@ pub struct ResolvedDataRoot {
 
 /// Node `path.resolve`: absolute paths stay absolute, everything else resolves against the cwd.
 pub fn resolve_path(p: &Path) -> PathBuf {
+    resolve_path_from(&env::current_dir().unwrap_or_default(), p)
+}
+
+/// Same as `resolve_path`, but relative paths resolve against `base` instead of the cwd.
+pub fn resolve_path_from(base: &Path, p: &Path) -> PathBuf {
     let has_prefix = matches!(p.components().next(), Some(Component::Prefix(_)));
-    // Windows: a rooted path without a drive (`\foo`) still takes the cwd's drive.
+    // Windows: a rooted path without a drive (`\foo`) still takes the base's drive.
     let source = if p.has_root() && has_prefix {
         p.to_path_buf()
     } else {
-        env::current_dir().unwrap_or_default().join(p)
+        base.join(p)
     };
     let mut out = PathBuf::new();
     for component in source.components() {
@@ -128,6 +133,19 @@ pub fn repo_root() -> PathBuf {
         env::current_exe().ok().as_deref(),
         Path::new(env!("CARGO_MANIFEST_DIR")),
     )
+}
+
+/// CLI entrypoints only: mirrors `enterDataRoot` (extensions/data-root.ts:107-112); process-global chdir.
+pub fn enter_data_root() -> std::io::Result<PathBuf> {
+    let root = resolve_data_root(
+        &repo_root(),
+        env::var(DATA_ROOT_ENV).ok().as_deref(),
+        &home_dir(),
+    )
+    .data_root;
+    std::fs::create_dir_all(&root)?;
+    env::set_current_dir(&root)?;
+    Ok(root)
 }
 
 pub fn run_cli_with(
@@ -341,6 +359,37 @@ mod tests {
     fn resolve_path_drops_trailing_separator() {
         let cwd = env::current_dir().expect("cwd");
         assert_eq!(resolve_path(Path::new("a/b/")), cwd.join("a").join("b"));
+    }
+
+    #[test]
+    fn resolve_path_from_joins_relative_path_to_base() {
+        let base = env::temp_dir().join("proxi-base");
+        assert_eq!(
+            resolve_path_from(&base, Path::new("corsi/plan.json")),
+            base.join("corsi").join("plan.json")
+        );
+    }
+
+    #[test]
+    fn resolve_path_from_collapses_parent_dirs() {
+        let base = env::temp_dir().join("proxi-base");
+        assert_eq!(resolve_path_from(&base, Path::new("a/../b")), base.join("b"));
+    }
+
+    #[test]
+    fn resolve_path_from_keeps_absolute_paths() {
+        let absolute = env::temp_dir();
+        assert_eq!(
+            resolve_path_from(Path::new("relative/base"), &absolute),
+            absolute
+        );
+    }
+
+    #[test]
+    fn resolve_path_equals_resolve_path_from_cwd() {
+        let cwd = env::current_dir().expect("cwd");
+        let p = Path::new("rel/../a/b");
+        assert_eq!(resolve_path(p), resolve_path_from(&cwd, p));
     }
 
     #[test]

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { captureHome } from "./capture-golden-home.ts";
 import { REPO_ROOT, startServer } from "./harness.ts";
 
 export interface GoldenRequest {
@@ -136,6 +137,7 @@ export async function captureGolden(outDir: string = GOLDEN_DIR): Promise<string
       fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
     }
   }
+  written.push(await captureHome(outDir));
   return written;
 }
 
