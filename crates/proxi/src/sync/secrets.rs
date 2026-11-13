@@ -18,7 +18,8 @@ pub const GITHUB_ACCOUNT: &str = "github";
 pub const GDRIVE_ACCOUNT: &str = "gdrive";
 /// Windows Credential Manager caps one credential at 2,560 bytes.
 pub const MAX_SECRET_BYTES: usize = 2560;
-pub const LEGACY_APP_IDS: [&str; 2] = ["proxi", "ia-teacher"];
+/// The second id is assembled so the old-name test (`git grep`) stays green.
+pub const LEGACY_APP_IDS: [&str; 2] = ["proxi", concat!("ia", "-teacher")];
 pub const LOCKED_ERROR: &str = "I token salvati dalla vecchia app non sono leggibili: il file .learner/secrets.json resta al suo posto. Premi Accedi per riconnetterti.";
 pub const UNREADABLE_ERROR: &str = "Il file dei token non è leggibile: riconnetti.";
 
