@@ -12,6 +12,7 @@ export const RUST_PORTED = [
   "app/test/api-settings.test.ts",
   "app/test/api-limits.test.ts",
   "app/test/api-events.test.ts",
+  "app/test/api-anki.test.ts",
 ];
 
 export function rustTestEnv(base = process.env) {
