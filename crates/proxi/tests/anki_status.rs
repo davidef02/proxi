@@ -261,6 +261,52 @@ async fn an_answer_after_the_deadline_still_times_out() {
 }
 
 #[tokio::test]
+async fn a_body_that_finishes_after_the_deadline_still_times_out() {
+    // Headers beat the deadline, the body does not: AbortSignal.timeout aborts the whole exchange,
+    // so a body that lands inside the refusal grace must still read as a timeout, not as a result.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind slow body");
+    let address = listener.local_addr().expect("slow body address");
+    std::thread::spawn(move || {
+        let Ok((mut stream, _)) = listener.accept() else {
+            return;
+        };
+        let mut raw = Vec::new();
+        let mut chunk = [0u8; 1024];
+        while !raw.windows(4).any(|w| w == b"\r\n\r\n") {
+            match std::io::Read::read(&mut stream, &mut chunk) {
+                Ok(0) | Err(_) => return,
+                Ok(n) => raw.extend_from_slice(&chunk[..n]),
+            }
+        }
+        let body = br#"{"result":{},"error":null}"#;
+        let _ = std::io::Write::write_all(
+            &mut stream,
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .as_bytes(),
+        );
+        std::thread::sleep(Duration::from_millis(400));
+        let _ = std::io::Write::write_all(&mut stream, body);
+    });
+
+    let response = invoke(
+        &format!("http://127.0.0.1:{}", address.port()),
+        "deckNamesAndIds",
+        None,
+        Duration::from_millis(250),
+    )
+    .await;
+
+    assert_eq!(response.result, None);
+    assert_eq!(
+        response.error.as_deref(),
+        Some("AnkiConnect request timed out")
+    );
+}
+
+#[tokio::test]
 async fn slow_anki_times_out() {
     let anki = common::fake_anki(|_| common::FakeReply {
         status: 200,
