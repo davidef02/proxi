@@ -94,8 +94,10 @@ it("events golden holds the normalised first event", () => {
 });
 
 it("golden fixtures hold no raw timestamps", () => {
+  // Only the captured cases: the seed is the replay's input and keeps its fixed literal timestamp.
   for (const route of ROUTES) {
-    walkStrings(JSON.parse(goldenText(route)), (s) => assert.doesNotMatch(s, ISO_RE, `${route}: ${s}`));
+    const file = JSON.parse(goldenText(route)) as { cases: unknown };
+    walkStrings(file.cases, (s) => assert.doesNotMatch(s, ISO_RE, `${route}: ${s}`));
   }
   assert.match(goldenText("events"), /"<iso>"/);
 });

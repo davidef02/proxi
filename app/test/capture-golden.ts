@@ -127,8 +127,8 @@ export async function captureGolden(outDir: string = GOLDEN_DIR): Promise<string
       const cases: GoldenCase[] = [];
       for (const c of script.cases) cases.push(await captureCase(server.url, c, roots));
       const target = path.join(outDir, `${script.route}.json`);
-      // The seed is normalised too: the fixture may not keep a raw timestamp anywhere.
-      const file: GoldenFile = { route: script.route, seed: normalise(script.seed, roots) as Record<string, unknown>, cases };
+      // The seed is the replay's input, so it stays raw; only the captured responses are normalised.
+      const file: GoldenFile = { route: script.route, seed: script.seed, cases };
       fs.writeFileSync(target, JSON.stringify(file, null, 2) + "\n"); // always LF, never os.EOL
       written.push(target);
     } finally {
