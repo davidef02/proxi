@@ -113,8 +113,14 @@ pub fn scan_lesson_docs(data_root: &Path) -> Result<Vec<LessonDoc>, String> {
             if doc.get("metadata").is_none_or(Value::is_null) {
                 return Err(format!("{rel}: metadata mancante"));
             }
-            if !doc.get("nodes").is_some_and(Value::is_array) {
-                return Err(format!("{rel}: nodes non è un array"));
+            match doc.get("nodes") {
+                Some(Value::Array(nodes)) => {
+                    // Node's summary reads `n.tier` of every node outside its per-file try.
+                    if nodes.iter().any(Value::is_null) {
+                        return Err(format!("{rel}: nodo null"));
+                    }
+                }
+                _ => return Err(format!("{rel}: nodes non è un array")),
             }
             docs.push(LessonDoc {
                 course: course.clone(),
@@ -293,6 +299,20 @@ mod tests {
         );
         let err = scan_lesson_docs(&root).unwrap_err();
         assert_eq!(err, "courses/demo/lessons/0001-x.html: nodes non è un array");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_null_node_fails_the_scan() {
+        let root = temp_dir("null-node");
+        write_lesson(
+            &root,
+            "demo",
+            "0001-x.html",
+            &lesson_html(&metadata(1, "x", "X", ""), &json!([{ "nodeId": "a" }, null])),
+        );
+        let err = scan_lesson_docs(&root).unwrap_err();
+        assert_eq!(err, "courses/demo/lessons/0001-x.html: nodo null");
         let _ = fs::remove_dir_all(&root);
     }
 

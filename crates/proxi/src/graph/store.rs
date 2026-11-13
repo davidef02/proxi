@@ -777,6 +777,21 @@ mod tests {
     }
 
     #[test]
+    fn a_null_lesson_node_drops_every_lesson_label() {
+        let root = temp_dir("null-node-labels");
+        write_lesson(
+            &root,
+            "demo",
+            "0001-t.html",
+            metadata(1, "t", "T", "T"),
+            json!([{ "nodeId": "a", "tier": "axiom" }, null]),
+        );
+        // The scan fails as a whole, like Node's summary outside its per-file try.
+        assert!(GraphStore::lesson_labels(&root).is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn sessions_and_courses_use_disk_labels_and_fall_back_to_raw_ids() {
         let root = temp_dir("labels");
         write_lesson(

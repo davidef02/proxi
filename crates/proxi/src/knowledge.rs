@@ -228,14 +228,10 @@ pub fn build_knowledge_map(data_root: &Path) -> Result<KnowledgeMap, String> {
             .collect();
 
         for (index, node) in lesson_nodes.iter().enumerate() {
-            if node.is_null() {
-                return Err(format!("{}: nodo null", doc.rel()));
-            }
             let node_id = node.get("nodeId");
             let key = key_of(&js::display(node_id));
 
-            let mut mine = records_for_node(records, &key, doc.slug(), node_id, index);
-            mine.sort_by(|a, b| at_of(a).cmp(at_of(b)));
+            let mine = records_for_node(records, &key, doc.slug(), node_id, index);
             let reviews: Vec<&Value> = mine
                 .iter()
                 .copied()
