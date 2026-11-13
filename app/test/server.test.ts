@@ -4,7 +4,6 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { after, before, describe, it } from "node:test";
-import { startFakeServers } from "./fake-servers.ts";
 
 let mod: typeof import("../server/main.ts") | undefined;
 try {
@@ -87,39 +86,6 @@ describe("server guards and read routes", { skip }, () => {
     assert.equal(courses[0].slug, "demo");
     const map = JSON.parse((await raw(srv.port, "/api/map")).body);
     assert.ok(Array.isArray(map.nodes) && Array.isArray(map.edges));
-  });
-
-  it("maps /api/anki to byCourse per course, and to no badges when AnkiConnect is down", async () => {
-    const fakes = await startFakeServers();
-    const stats = { new_count: 5, learn_count: 2, review_count: 4, total_in_deck: 10 };
-    fakes.anki.deckNamesAndIds = { "Proxi": 1, "Proxi::Demo": 2 };
-    fakes.anki.deckStats = { "1": { deck_id: 1, name: "Proxi", ...stats }, "2": { deck_id: 2, name: "Demo", ...stats } };
-    const prev = process.env.LEARNER_ANKI_URL;
-    try {
-      process.env.LEARNER_ANKI_URL = fakes.urls.anki;
-      const online = await raw(srv.port, "/api/anki");
-      assert.equal(online.status, 200);
-      const body = JSON.parse(online.body);
-      assert.equal(body.online, true);
-      assert.deepEqual(body.byCourse.demo, { due: 4, learning: 2, newCards: 5 });
-
-      // The whole map belongs to the batch request only: one course gets its own deck, never every deck.
-      const one = JSON.parse((await raw(srv.port, "/api/anki?course=demo")).body);
-      assert.equal(one.online, true);
-      assert.equal(one.deck, "Proxi::Demo");
-      assert.equal(one.deckExists, true);
-      assert.equal(one.due, 4);
-      assert.equal(one.byCourse, undefined);
-
-      process.env.LEARNER_ANKI_URL = "http://127.0.0.1:9";
-      const offline = JSON.parse((await raw(srv.port, "/api/anki")).body);
-      assert.equal(offline.online, false);
-      assert.equal(offline.byCourse, undefined);
-    } finally {
-      await fakes.close();
-      if (prev === undefined) delete process.env.LEARNER_ANKI_URL;
-      else process.env.LEARNER_ANKI_URL = prev;
-    }
   });
 
   it("serves a lesson's data island under /api/lesson, only for lesson artifacts", async () => {

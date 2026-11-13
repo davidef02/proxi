@@ -1,3 +1,7 @@
+pub mod anki_client;
+pub mod anki_import;
+pub mod anki_status;
+pub mod course_data;
 pub mod data_root;
 pub mod events;
 pub mod limits;

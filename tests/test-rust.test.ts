@@ -55,6 +55,10 @@ describe("RUST_PORTED", () => {
     }
     assert.ok(RUST_PORTED.includes("app/test/harness.test.ts"));
   });
+
+  it("runs the Anki routes against the spawned binary", () => {
+    assert.ok(RUST_PORTED.includes("app/test/api-anki.test.ts"));
+  });
 });
 
 describe("missingFiles", () => {
