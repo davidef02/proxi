@@ -7,7 +7,7 @@ import path from "node:path";
 import { describe, it } from "node:test";
 import { startServer, type TestServer } from "./harness.ts";
 
-// Built at runtime: a literal `sk-ant…` key would trip the secret preflight (L12/L13).
+// Built at runtime: a literal cleartext key would trip the secret preflight (L12/L13).
 const key = ["sk", "-ant-api03-", "harness0123456789"].join("");
 const mask = `${key.slice(0, 7)}…${key.slice(-4)}`;
 
