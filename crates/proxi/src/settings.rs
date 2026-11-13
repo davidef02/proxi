@@ -389,6 +389,16 @@ mod tests {
     }
 
     #[test]
+    fn dictation_language_survives_read_and_write() {
+        let repo = temp_dir("dictation-language");
+        assert_eq!(read_settings(&repo).dictation_language, "it");
+
+        let s = write_settings(&repo, &json!({"dictationLanguage": "fr"})).unwrap();
+        assert_eq!(s.dictation_language, "fr");
+        assert_eq!(read_settings(&repo).dictation_language, "fr");
+    }
+
+    #[test]
     fn write_ignores_the_masked_key() {
         let repo = temp_dir("write-masked");
         let first =
