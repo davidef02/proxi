@@ -114,16 +114,17 @@ describe("POST /api/transcribe", () => {
         assert.equal(req.method, "POST");
         assert.equal(req.path, GROQ_PATH);
         assert.equal(req.headers.authorization, `Bearer ${key}`);
-        for (const part of [
-          'name="model"',
-          "whisper-large-v3-turbo",
-          'name="language"',
-          'name="response_format"',
-          'name="temperature"',
-          'filename="dictation.webm"',
-          "fake-audio",
-        ]) {
+        for (const part of ['name="file"', 'filename="dictation.webm"', "fake-audio"]) {
           assert.ok(req.body.includes(part), `missing ${part} in ${req.body}`);
+        }
+        // Exact field values, not just names: Node and the binary must send the same form.
+        for (const [field, value] of [
+          ["model", "whisper-large-v3-turbo"],
+          ["language", "it"],
+          ["response_format", "json"],
+          ["temperature", "0"],
+        ]) {
+          assert.ok(req.body.includes(`name="${field}"\r\n\r\n${value}\r\n`), `missing ${field}=${value} in ${req.body}`);
         }
       },
       { sttProvider: "groq", sttApiKey: key },
