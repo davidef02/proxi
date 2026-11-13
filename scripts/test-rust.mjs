@@ -32,7 +32,7 @@ function main() {
     for (const file of missing) console.error(`test:rust: missing ${file}`);
     process.exit(1);
   }
-  // no shell: the Windows .exe path would need quoting otherwise (L12)
+  // no shell: the Windows .exe path would need quoting otherwise (L15)
   const result = spawnSync(process.execPath, rustTestArgs(), {
     cwd: ROOT,
     stdio: "inherit",

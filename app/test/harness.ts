@@ -129,7 +129,7 @@ async function startBinary(repoRoot: string, dataRoot: string, fakes?: FakeUrls)
     if (url) args.push(service.flag, url);
   }
 
-  // No shell (L12): a quoted path breaks under cmd.exe.
+  // No shell (L15): a quoted path breaks under cmd.exe.
   const child = spawn(proxiBinary(), args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
   let stdout = "";
   let stderr = "";
