@@ -372,13 +372,21 @@ impl SyncService {
                 return self.emit();
             }
         };
-        {
+        let cancelled = {
             let mut state = self.lock_state();
-            state.github_pending = Some(GithubPending {
-                user_code: code.user_code.clone(),
-                verification_uri: code.verification_uri.clone(),
-                expires_at: iso_from_millis(now_ms() + (code.expires_in * 1000.0) as i64),
-            });
+            // A cancel (or a newer start) may have landed while the code was in flight.
+            let cancelled = cancel.is_cancelled();
+            if !cancelled {
+                state.github_pending = Some(GithubPending {
+                    user_code: code.user_code.clone(),
+                    verification_uri: code.verification_uri.clone(),
+                    expires_at: iso_from_millis(now_ms() + (code.expires_in * 1000.0) as i64),
+                });
+            }
+            cancelled
+        };
+        if cancelled {
+            return self.emit();
         }
         // Emit before the poller can clear the pending code: the response must show it.
         let status = self.emit();

@@ -702,7 +702,7 @@ pub fn serve_cli(args: ServeArgs) -> i32 {
         }
     };
 
-    runtime.block_on(async move {
+    let code = runtime.block_on(async move {
         match start(opts).await {
             Ok(server) => {
                 println!("Proxi: {}", server.url);
@@ -715,7 +715,10 @@ pub fn serve_cli(args: ServeArgs) -> i32 {
                 1
             }
         }
-    })
+    });
+    // Do not wait for the blocking pool: a pass stuck on GitHub would keep quitting for minutes.
+    runtime.shutdown_timeout(Duration::from_secs(1));
+    code
 }
 
 #[cfg(test)]

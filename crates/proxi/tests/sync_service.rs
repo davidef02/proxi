@@ -13,7 +13,7 @@ mod fake_github;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
@@ -419,6 +419,80 @@ fn github_start_polls_the_device_flow_sets_up_the_repo_and_switches_the_provider
             .count(),
         1
     );
+}
+
+#[test]
+fn a_cancel_while_the_device_code_is_in_flight_leaves_no_pending_code() {
+    // Holds the device-code request open so the cancel lands while `github_start` awaits it.
+    #[derive(Default)]
+    struct Gate {
+        state: Mutex<(bool, bool)>, // (request arrived, reply released)
+        ready: Condvar,
+    }
+
+    impl Gate {
+        fn arrive(&self) {
+            let mut state = self.state.lock().expect("gate");
+            state.0 = true;
+            self.ready.notify_all();
+        }
+
+        fn wait_until_arrived(&self) {
+            let mut state = self.state.lock().expect("gate");
+            while !state.0 {
+                state = self.ready.wait(state).expect("gate wait");
+            }
+        }
+
+        fn release(&self) {
+            let mut state = self.state.lock().expect("gate");
+            state.1 = true;
+            self.ready.notify_all();
+        }
+
+        fn wait_for_release(&self) {
+            let mut state = self.state.lock().expect("gate");
+            while !state.1 {
+                state = self.ready.wait(state).expect("gate wait");
+            }
+        }
+    }
+
+    let t = Harness::new(&[]);
+    let gate = Arc::new(Gate::default());
+    let handler_gate = Arc::clone(&gate);
+    let fake = FakeHttp::start(move |request| {
+        if request.method == "POST" && request.path == "/login/device/code" {
+            handler_gate.arrive();
+            handler_gate.wait_for_release();
+            Reply::json(
+                200,
+                json!({
+                    "device_code": "dc",
+                    "user_code": "ABCD-1234",
+                    "verification_uri": "https://github.com/login/device",
+                    "expires_in": 900,
+                    "interval": 1,
+                }),
+            )
+        } else {
+            Reply::json(404, json!({ "message": "Not Found" }))
+        }
+    });
+    let make = mem_make_provider(&t.provider);
+    let svc = t.service_with(GithubEndpoints::from_override(Some(&fake.url)), Some(make));
+
+    let starter = svc.clone();
+    let start = thread::spawn(move || starter.github_start());
+    gate.wait_until_arrived();
+    svc.github_cancel();
+    gate.release();
+
+    let started = start.join().expect("start thread");
+    assert_eq!(started.github.pending, None);
+    assert_eq!(svc.status().github.pending, None);
+    // No poller ran: only the device-code request reached the fake.
+    assert_eq!(fake.requests().len(), 1);
 }
 
 #[test]
