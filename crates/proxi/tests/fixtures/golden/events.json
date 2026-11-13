@@ -1,0 +1,58 @@
+{
+  "route": "events",
+  "seed": {},
+  "cases": [
+    {
+      "name": "limits-off",
+      "request": {
+        "method": "POST",
+        "path": "/api/settings",
+        "body": {
+          "provider": "opencode"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "provider": "opencode",
+          "claudeAuth": "subscription",
+          "anthropicApiKey": "",
+          "agyModels": {
+            "teacher": "gemini-3.8-flash-high",
+            "subagent": "gemini-3.8-flash-medium",
+            "map": "gemini-3.8-flash-medium"
+          },
+          "opencodeModels": {
+            "teacher": "omniroute/auto/best-coding",
+            "subagent": "omniroute/auto/fast",
+            "map": "omniroute/auto/fast"
+          },
+          "teacherModel": "sonnet",
+          "subagentModel": "sonnet",
+          "mapModel": "sonnet",
+          "effort": {
+            "teacher": "default",
+            "subagent": "default",
+            "map": "default"
+          },
+          "autoMap": true,
+          "sttProvider": "groq",
+          "sttApiKey": "",
+          "dictationLanguage": "it",
+          "syncProvider": "local",
+          "githubClientId": "",
+          "googleClientId": "",
+          "googleClientSecret": "",
+          "repoRoot": "<repoRoot>",
+          "dataRoot": "<dataRoot>"
+        }
+      },
+      "firstEvent": {
+        "type": "limits",
+        "limits": {
+          "at": "<iso>"
+        }
+      }
+    }
+  ]
+}

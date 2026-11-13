@@ -1,0 +1,88 @@
+{
+  "route": "limits",
+  "seed": {
+    ".learner/limits.json": {
+      "fiveHour": {
+        "utilization": 0.42,
+        "resetsAt": 1700000000
+      },
+      "at": "2026-11-12T10:00:00.000Z"
+    }
+  },
+  "cases": [
+    {
+      "name": "get-seeded",
+      "request": {
+        "method": "GET",
+        "path": "/api/limits"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "fiveHour": {
+            "utilization": 0.42,
+            "resetsAt": 1700000000
+          },
+          "at": "<iso>"
+        }
+      }
+    },
+    {
+      "name": "post-provider-agy",
+      "request": {
+        "method": "POST",
+        "path": "/api/settings",
+        "body": {
+          "provider": "agy"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "provider": "agy",
+          "claudeAuth": "subscription",
+          "anthropicApiKey": "",
+          "agyModels": {
+            "teacher": "gemini-3.8-flash-high",
+            "subagent": "gemini-3.8-flash-medium",
+            "map": "gemini-3.8-flash-medium"
+          },
+          "opencodeModels": {
+            "teacher": "omniroute/auto/best-coding",
+            "subagent": "omniroute/auto/fast",
+            "map": "omniroute/auto/fast"
+          },
+          "teacherModel": "sonnet",
+          "subagentModel": "sonnet",
+          "mapModel": "sonnet",
+          "effort": {
+            "teacher": "default",
+            "subagent": "default",
+            "map": "default"
+          },
+          "autoMap": true,
+          "sttProvider": "groq",
+          "sttApiKey": "",
+          "dictationLanguage": "it",
+          "syncProvider": "local",
+          "githubClientId": "",
+          "googleClientId": "",
+          "googleClientSecret": "",
+          "repoRoot": "<repoRoot>",
+          "dataRoot": "<dataRoot>"
+        }
+      }
+    },
+    {
+      "name": "get-after-agy",
+      "request": {
+        "method": "GET",
+        "path": "/api/limits"
+      },
+      "response": {
+        "status": 200,
+        "body": null
+      }
+    }
+  ]
+}

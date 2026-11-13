@@ -27,12 +27,34 @@ use crate::settings::{self, SettingsError};
 /// Shown instead of the SPA when `app/web/dist` has not been built (main.ts:536-537).
 const MISSING_UI: &str = "Proxi: la UI non è stata compilata. Esegui `npm run app:build` e riapri questa pagina.";
 
+/// Base URLs for tests; `None` = the real service. Stored now, honoured by the issues that port each client.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Endpoints {
+    pub anki: Option<String>,
+    pub github: Option<String>,
+    pub google: Option<String>,
+    pub huggingface: Option<String>,
+    pub transcription: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EngineBins {
+    pub claude: Option<PathBuf>,
+    pub agy: Option<PathBuf>,
+    pub opencode: Option<PathBuf>,
+    pub git: Option<PathBuf>,
+    pub npm: Option<PathBuf>,
+}
+
 pub struct ServerOptions {
     pub repo_root: PathBuf,
     pub data_root: Option<PathBuf>,
     pub port: u16,
     pub dist_dir: Option<PathBuf>,
     pub keep_alive: Duration,
+    pub endpoints: Endpoints,
+    pub bins: EngineBins,
+    pub memory_secrets: bool,
 }
 
 impl ServerOptions {
@@ -43,6 +65,9 @@ impl ServerOptions {
             port: 0,
             dist_dir: None,
             keep_alive: events::KEEP_ALIVE,
+            endpoints: Endpoints::default(),
+            bins: EngineBins::default(),
+            memory_secrets: false,
         }
     }
 }
@@ -294,9 +319,87 @@ pub fn port_from_env(v: Option<&str>) -> Result<u16, String> {
     Err(format!("LEARNER_PORT non valido: {raw}"))
 }
 
-pub fn serve_cli() -> i32 {
-    let port = match port_from_env(std::env::var("LEARNER_PORT").ok().as_deref()) {
-        Ok(port) => port,
+/// `proxi serve` flags. Help text is English: the CLI is a dev tool, not learner copy.
+/// The doc comments are the help text.
+#[derive(clap::Args, Debug, Default)]
+pub struct ServeArgs {
+    /// Code repo root (default: LEARNER_REPO_ROOT, then the binary's repo)
+    #[arg(long, value_name = "PATH")]
+    pub repo_root: Option<PathBuf>,
+    /// Data folder (default: LEARNER_DATA_ROOT, .learner/config.json, ~/Documents/proxi-data)
+    #[arg(long, value_name = "PATH")]
+    pub data_root: Option<PathBuf>,
+    /// Port; 0 = a free port (default: LEARNER_PORT, then 4317)
+    #[arg(long, value_name = "PORT")]
+    pub port: Option<u16>,
+    /// Claude executable (tests: a fake)
+    #[arg(long, value_name = "PATH")]
+    pub claude_bin: Option<PathBuf>,
+    /// Antigravity executable (tests: a fake)
+    #[arg(long, value_name = "PATH")]
+    pub agy_bin: Option<PathBuf>,
+    /// OpenCode executable (tests: a fake)
+    #[arg(long, value_name = "PATH")]
+    pub opencode_bin: Option<PathBuf>,
+    /// Git executable (tests: a fake)
+    #[arg(long, value_name = "PATH")]
+    pub git_bin: Option<PathBuf>,
+    /// npm executable (tests: a fake)
+    #[arg(long, value_name = "PATH")]
+    pub npm_bin: Option<PathBuf>,
+    /// AnkiConnect base URL (tests: a local fake)
+    #[arg(long, value_name = "URL")]
+    pub anki_url: Option<String>,
+    /// GitHub base URL for the API and OAuth (tests: a local fake)
+    #[arg(long, value_name = "URL")]
+    pub github_url: Option<String>,
+    /// Google base URL for OAuth and Drive (tests: a local fake)
+    #[arg(long, value_name = "URL")]
+    pub google_url: Option<String>,
+    /// Hugging Face base URL (tests: a local fake)
+    #[arg(long, value_name = "URL")]
+    pub huggingface_url: Option<String>,
+    /// Transcription service base URL (tests: a local fake)
+    #[arg(long, value_name = "URL")]
+    pub transcription_url: Option<String>,
+    /// Keep secrets in memory instead of the OS store (tests)
+    #[arg(long)]
+    pub memory_secrets: bool,
+}
+
+impl ServeArgs {
+    /// The flag wins over `LEARNER_PORT`; 0 stays 0 (ephemeral port).
+    pub fn into_options(self, env_port: Option<&str>) -> Result<ServerOptions, String> {
+        let port = match self.port {
+            Some(port) => port,
+            None => port_from_env(env_port)?,
+        };
+        let mut options = ServerOptions::new(self.repo_root.unwrap_or_else(data_root::repo_root));
+        // `None` here keeps the env/config resolution in `start`.
+        options.data_root = self.data_root;
+        options.port = port;
+        options.endpoints = Endpoints {
+            anki: self.anki_url,
+            github: self.github_url,
+            google: self.google_url,
+            huggingface: self.huggingface_url,
+            transcription: self.transcription_url,
+        };
+        options.bins = EngineBins {
+            claude: self.claude_bin,
+            agy: self.agy_bin,
+            opencode: self.opencode_bin,
+            git: self.git_bin,
+            npm: self.npm_bin,
+        };
+        options.memory_secrets = self.memory_secrets;
+        Ok(options)
+    }
+}
+
+pub fn serve_cli(args: ServeArgs) -> i32 {
+    let opts = match args.into_options(std::env::var("LEARNER_PORT").ok().as_deref()) {
+        Ok(opts) => opts,
         Err(message) => {
             eprintln!("Error: {message}");
             return 1;
@@ -312,10 +415,6 @@ pub fn serve_cli() -> i32 {
     };
 
     runtime.block_on(async move {
-        let opts = ServerOptions {
-            port,
-            ..ServerOptions::new(data_root::repo_root())
-        };
         match start(opts).await {
             Ok(server) => {
                 println!("Proxi: {}", server.url);
@@ -333,7 +432,102 @@ pub fn serve_cli() -> i32 {
 
 #[cfg(test)]
 mod tests {
+    use clap::Parser;
+
     use super::*;
+
+    /// Parses `serve` flags the way clap does inside `proxi serve`.
+    #[derive(Parser)]
+    struct ServeArgsParser {
+        #[command(flatten)]
+        args: ServeArgs,
+    }
+
+    fn parse_serve_args(args: &[&str]) -> Result<ServeArgs, clap::Error> {
+        ServeArgsParser::try_parse_from(std::iter::once("proxi-serve").chain(args.iter().copied()))
+            .map(|parsed| parsed.args)
+    }
+
+    #[test]
+    fn serve_args_port_flag_wins_over_env() {
+        let args = parse_serve_args(&["--port", "0"]).expect("parse --port 0");
+        assert_eq!(args.into_options(Some("5000")).unwrap().port, 0);
+
+        let args = parse_serve_args(&[]).expect("parse without a port");
+        assert_eq!(args.into_options(Some("5000")).unwrap().port, 5000);
+
+        let args = parse_serve_args(&[]).expect("parse without a port");
+        assert_eq!(args.into_options(None).unwrap().port, DEFAULT_PORT);
+    }
+
+    #[test]
+    fn serve_args_invalid_env_port_is_an_error() {
+        let args = parse_serve_args(&[]).expect("parse without a port");
+        let Err(message) = args.into_options(Some("70000")) else {
+            panic!("expected an invalid LEARNER_PORT error");
+        };
+        assert!(message.starts_with("LEARNER_PORT non valido:"), "{message}");
+    }
+
+    #[test]
+    fn serve_args_fill_endpoints_bins_and_secrets() {
+        let args = parse_serve_args(&[
+            "--repo-root",
+            "r",
+            "--data-root",
+            "x",
+            "--port",
+            "4321",
+            "--claude-bin",
+            "c",
+            "--agy-bin",
+            "a",
+            "--opencode-bin",
+            "o",
+            "--git-bin",
+            "g",
+            "--npm-bin",
+            "n",
+            "--anki-url",
+            "http://anki",
+            "--github-url",
+            "http://github",
+            "--google-url",
+            "http://google",
+            "--huggingface-url",
+            "http://hf",
+            "--transcription-url",
+            "http://stt",
+            "--memory-secrets",
+        ])
+        .expect("parse full flags");
+        let opts = args.into_options(None).expect("into options");
+
+        assert_eq!(opts.port, 4321);
+        assert_eq!(opts.repo_root, PathBuf::from("r"));
+        assert_eq!(opts.data_root, Some(PathBuf::from("x")));
+        assert_eq!(
+            opts.endpoints,
+            Endpoints {
+                anki: Some("http://anki".to_string()),
+                github: Some("http://github".to_string()),
+                google: Some("http://google".to_string()),
+                huggingface: Some("http://hf".to_string()),
+                transcription: Some("http://stt".to_string()),
+            }
+        );
+        assert_eq!(
+            opts.bins,
+            EngineBins {
+                claude: Some(PathBuf::from("c")),
+                agy: Some(PathBuf::from("a")),
+                opencode: Some(PathBuf::from("o")),
+                git: Some(PathBuf::from("g")),
+                npm: Some(PathBuf::from("n")),
+            }
+        );
+        assert!(opts.memory_secrets);
+    }
 
     #[test]
     fn port_defaults_when_unset_or_non_numeric() {

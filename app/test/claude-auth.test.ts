@@ -5,11 +5,9 @@ import path from "node:path";
 import { describe, it } from "node:test";
 import { DEFAULT_SETTINGS, type SessionStatus } from "../shared/protocol.ts";
 import { maskApiKey, readSettings, writeSettings } from "../server/settings.ts";
-import { createServer } from "../server/main.ts";
 import { spawnClaude, CLAUDE_AUTH_ERROR_MESSAGE, CLAUDE_AUTH_ERROR_RE } from "../server/claude.ts";
 import { Turns, type TurnHost } from "../server/turns.ts";
 import type { EngineLaunch, EngineCallbacks, EngineHandle } from "../server/types.ts";
-import { subscribeGlobal } from "../server/events.ts";
 
 describe("claude auth settings and engine integration", () => {
   it("default settings include claudeAuth: 'subscription' and anthropicApiKey: ''", () => {
@@ -74,81 +72,6 @@ describe("claude auth settings and engine integration", () => {
       writeSettings(tmp, { anthropicApiKey: "" });
       assert.equal(readSettings(tmp).anthropicApiKey, "");
     } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
-  });
-
-  it("GET /api/settings response does not expose cleartext key", async () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "claude-auth-srv-"));
-    fs.mkdirSync(path.join(tmp, "courses"), { recursive: true });
-    fs.mkdirSync(path.join(tmp, "assets"), { recursive: true });
-    writeSettings(tmp, { claudeAuth: "apiKey", anthropicApiKey: "sk-ant-api03-super-secret-key-xyz" });
-
-    const srv = await createServer({ repoRoot: tmp, dataRoot: tmp, port: 0, openBrowser: false });
-    try {
-      const res = await fetch(`${srv.url}/api/settings`);
-      const body = (await res.json()) as any;
-      assert.equal(body.claudeAuth, "apiKey");
-      assert.equal(body.anthropicApiKey, maskApiKey("sk-ant-api03-super-secret-key-xyz"));
-      assert.ok(!JSON.stringify(body).includes("super-secret"));
-
-      // POST /api/settings with a new key also returns masked key
-      const postRes = await fetch(`${srv.url}/api/settings`, {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-learner-client": "1" },
-        body: JSON.stringify({ anthropicApiKey: "sk-ant-api03-another-secret-token-987" }),
-      });
-      const postBody = (await postRes.json()) as any;
-      assert.equal(postBody.anthropicApiKey, maskApiKey("sk-ant-api03-another-secret-token-987"));
-      assert.ok(!JSON.stringify(postBody).includes("another-secret"));
-      assert.equal(readSettings(tmp).anthropicApiKey, "sk-ant-api03-another-secret-token-987");
-    } finally {
-      await srv.close();
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
-  });
-
-  it("GET /api/limits returns null when claudeAuth === 'apiKey'", async () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "claude-auth-limits-"));
-    fs.mkdirSync(path.join(tmp, "courses"), { recursive: true });
-    fs.mkdirSync(path.join(tmp, "assets"), { recursive: true });
-    const limitsFile = path.join(tmp, ".learner", "limits.json");
-    fs.mkdirSync(path.dirname(limitsFile), { recursive: true });
-    fs.writeFileSync(limitsFile, JSON.stringify({ fiveHour: { utilization: 0.5, resetsAt: 12345 } }));
-
-    writeSettings(tmp, { claudeAuth: "subscription", provider: "claude" });
-    const srv = await createServer({ repoRoot: tmp, dataRoot: tmp, port: 0, openBrowser: false });
-    try {
-      // Under subscription, limits are returned
-      let res = await fetch(`${srv.url}/api/limits`);
-      let data = (await res.json()) as any;
-      assert.notEqual(data, null);
-      assert.equal(data.fiveHour?.utilization, 0.5);
-
-      const events: any[] = [];
-      const unsub = subscribeGlobal((e) => {
-        if (e.type === "limits") events.push(e);
-      });
-
-      // Switch to apiKey: clears UI quota meter and GET /api/limits becomes null
-      await fetch(`${srv.url}/api/settings`, {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-learner-client": "1" },
-        body: JSON.stringify({ claudeAuth: "apiKey" }),
-      });
-
-      res = await fetch(`${srv.url}/api/limits`);
-      data = await res.json();
-      assert.equal(data, null);
-
-      assert.ok(events.length > 0);
-      const last = events.at(-1);
-      assert.equal(last.limits.fiveHour, undefined);
-      assert.ok(last.limits.at);
-
-      unsub();
-    } finally {
-      await srv.close();
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   });

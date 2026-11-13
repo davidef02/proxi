@@ -1,0 +1,2 @@
+# false positive: the pre-fix synthetic test key in the PR's first test commit
+2ac9c0baa38ff3c869dd443985eb7b568e769e6b:app/test/api-settings.test.ts:generic-api-key:11

@@ -41,6 +41,7 @@ npm test            # engine (tests/)
 npm run app:build   # before test:app and e2e: both expect app/web/dist
 npm run test:app    # app (app/test/)
 cargo build --release --locked
+npm run test:rust   # ported HTTP/SSE tests against the proxi binary (needs the release build)
 cargo test --locked # Rust backend (crates/proxi)
 npm run e2e         # app, Playwright (Chromium)
 ```
@@ -48,6 +49,14 @@ npm run e2e         # app, Playwright (Chromium)
 `npm run eval -- [scenario] [--engine claude|agy|opencode]` drives the real configured engine on fixed
 scenarios (`app/eval/scenarios.ts`, fixture Vue graph in `app/eval/fixture.ts`). Never in CI; the agent
 runs it after changing teach/plan prompts.
+
+`npm run golden:capture` is manual, never in CI: it rewrites `crates/proxi/tests/fixtures/golden/*.json`
+from the Node server. Run it only when a ported route's Node behaviour changes on purpose, before the
+cutover, and commit the fixtures with that change; `app/test/capture-golden.test.ts` fails until you do.
+
+Server tests start servers through `startServer` in `app/test/harness.ts` (`PROXI_TEST_SERVER=node|binary`,
+default node) with the external services faked by `app/test/fake-servers.ts`; a test file that runs against
+the binary uses only HTTP/SSE and is listed in `RUST_PORTED` of `scripts/test-rust.mjs`.
 
 ## Where the logic lives
 
