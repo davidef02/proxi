@@ -6,6 +6,8 @@ use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub mod fake_anki;
+
 pub fn repo_root() -> PathBuf {
     let raw = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
