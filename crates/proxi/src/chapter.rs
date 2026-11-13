@@ -483,6 +483,16 @@ mod tests {
     }
 
     #[test]
+    fn a_blank_chapter_title_is_refused_before_reading_the_plan() {
+        let t = temp_dir("blank-chapter");
+        let file = curriculum_file(&t.0, None);
+        // Whitespace-only is empty after `js_trim`, and the check runs before any read or write.
+        let error = plan_chapter(&file, "   ", None, &lessons_json("[]")).expect_err("blank title");
+        assert_eq!(error, "A chapter title is required");
+        assert!(!file.exists());
+    }
+
+    #[test]
     fn plan_slugifies_titles_and_keeps_an_explicit_course_slug() {
         let t = temp_dir("plan");
         let file = curriculum_file(&t.0, None);

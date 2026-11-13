@@ -537,6 +537,70 @@ mod tests {
         assert!(!t.0.join("index.html").exists());
     }
 
+    /// Node's falsy option values: `--dir=`, `--curriculum=` and `--out=` mean "not given".
+    #[test]
+    fn empty_option_values_mean_not_given() {
+        let t = wiring_base("empty-values");
+        let (code, out, err) = run(&t.0, &["--no-anki", "--dir=", "--curriculum=", "--out="]);
+        assert_eq!(code, 0, "{err}");
+        assert_eq!(
+            out,
+            format!(
+                "{} — 1 chapters, 1 lessons taught, without Anki\n",
+                t.0.join("index.html").display()
+            )
+        );
+        assert_eq!(err, "");
+        assert!(t.0.join("index.html").exists());
+
+        // `--chapter=` and `--lessons-json=` are empty too: the required-flag errors fire.
+        let (code, out, err) = run(&t.0, &["plan", "--chapter=", "--lessons-json", "[]"]);
+        assert_eq!(code, 1);
+        assert_eq!(out, "");
+        assert_eq!(err, "Error: plan requires --chapter <title>\n");
+
+        let (code, out, err) = run(&t.0, &["plan", "--chapter", "X", "--lessons-json="]);
+        assert_eq!(code, 1);
+        assert_eq!(out, "");
+        assert_eq!(
+            err,
+            "Error: plan requires --lessons-json '[{\"title\":\"...\"}]'\n"
+        );
+    }
+
+    #[test]
+    fn double_dash_and_lone_dash_are_positionals_and_the_last_option_wins() {
+        let t = temp_dir("positionals");
+        // Everything after `--` is positional: `-h` must not print the usage.
+        let (code, out, err) = run(&t.0, &["chapters", "--", "-h"]);
+        assert_eq!(code, 0, "{err}");
+        assert_eq!(out, "Nessun capitolo pianificato.\n");
+        assert_eq!(err, "");
+
+        // A lone `-` is a positional too, not an option-like token.
+        let (code, out, err) = run(&t.0, &["chapters", "-", "--no-anki"]);
+        assert_eq!(code, 0, "{err}");
+        assert_eq!(out, "Nessun capitolo pianificato.\n");
+        assert_eq!(err, "");
+
+        // Repeated options: the last value wins, like `node:util.parseArgs`.
+        let (code, out, err) = run(
+            &t.0,
+            &["--no-anki", "--out", "first.html", "--out", "second.html"],
+        );
+        assert_eq!(code, 0, "{err}");
+        assert_eq!(
+            out,
+            format!(
+                "{} — 0 chapters, 0 lessons taught, without Anki\n",
+                t.0.join("second.html").display()
+            )
+        );
+        assert_eq!(err, "");
+        assert!(t.0.join("second.html").exists());
+        assert!(!t.0.join("first.html").exists());
+    }
+
     /// Base with two plans and two course trees, so ignoring `--dir`/`--curriculum` is visible.
     fn wiring_base(tag: &str) -> TempDir {
         let t = temp_dir(tag);
