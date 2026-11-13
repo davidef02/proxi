@@ -7,7 +7,7 @@ import { after, describe, it } from "node:test";
 import { captureGolden, GOLDEN_DIR, ISO_RE, normalise, rootVariants } from "./capture-golden.ts";
 import { REPO_ROOT } from "./harness.ts";
 
-const ROUTES = ["settings", "limits", "events"];
+const ROUTES = ["settings", "limits", "events", "graph"];
 
 const dirs: string[] = [];
 function tempDir(prefix: string): string {
@@ -91,6 +91,24 @@ it("events golden holds the normalised first event", () => {
   const file = JSON.parse(goldenText("events")) as { cases: Array<{ name: string; firstEvent?: unknown }> };
   assert.equal(file.cases[0]?.name, "limits-off");
   assert.deepStrictEqual(file.cases[0]?.firstEvent, { type: "limits", limits: { at: "<iso>" } });
+});
+
+it("graph golden holds the graph event and JS-shaped positions", () => {
+  interface GraphBody {
+    nodes: Array<{ id: string }>;
+    positions: Record<string, unknown>;
+  }
+  const file = JSON.parse(goldenText("graph")) as { cases: Array<{ name: string; firstEvent?: unknown; response: { body: GraphBody } }> };
+  const byName = (name: string) => {
+    const found = file.cases.find((c) => c.name === name);
+    assert.ok(found, `missing graph case ${name}`);
+    return found;
+  };
+  assert.deepStrictEqual(byName("delete-node").firstEvent, { type: "graph", revision: 1 });
+  assert.deepStrictEqual(byName("get-graph-after-positions").response.body.positions.n_a, { x: 5, y: 6.5 });
+  const body = byName("get-graph").response.body;
+  for (const node of body.nodes) assert.ok(node.id in body.positions, `no position for ${node.id}`);
+  assert.match(goldenText("graph"), /"dataSeed"/);
 });
 
 it("golden fixtures hold no raw timestamps", () => {

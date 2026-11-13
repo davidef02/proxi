@@ -22,6 +22,8 @@ export interface GoldenCase {
 export interface GoldenFile {
   route: string;
   seed: Record<string, unknown>;
+  /** Raw file contents written verbatim under the data folder (lessons, JSONL ledgers): the replay's input, never normalised. */
+  dataSeed?: Record<string, string>;
   cases: GoldenCase[];
 }
 
@@ -69,11 +71,30 @@ interface ScriptedCase {
 interface Script {
   route: string;
   seed: Record<string, unknown>;
+  /** Raw file contents written verbatim under the data folder (lessons, JSONL ledgers): the replay's input, never normalised. */
+  dataSeed?: Record<string, string>;
   cases: ScriptedCase[];
 }
 
 // Low entropy and no `sk` prefix: neither gitleaks nor the JSON fixtures may read it as a key (L12/L13).
 const KEY = "x".repeat(16) + "abcd";
+
+const GRAPH_AT = "2026-01-01T00:00:00.000Z";
+
+/** One graph/nodes.jsonl line: a proposition with one provenance point. `extra` lands after `provenance`. */
+function nodeLine(id: string, name: string, statement: string, chatId: string, messageId: string, extra: Record<string, unknown> = {}): string {
+  return JSON.stringify({ id, name, statement, aliases: [], createdAt: GRAPH_AT, provenance: [{ chatId, messageId }], ...extra });
+}
+
+/** One graph/chains.jsonl line: a lesson-level assertion (empty messageId). */
+function chainLine(id: string, premises: string[], conclusion: string, chatId: string): string {
+  return JSON.stringify({ id, premises, conclusion, createdAt: GRAPH_AT, provenance: [{ chatId, messageId: "" }] });
+}
+
+/** A lesson artifact: the HTML shell around its #lesson-data island. */
+function lessonHtml(metadata: Record<string, unknown>, nodes: unknown[]): string {
+  return `<html><body><script type="application/json" id="lesson-data">${JSON.stringify({ metadata, nodes })}</script></body></html>`;
+}
 
 const SCRIPTS: Script[] = [
   {
@@ -104,6 +125,79 @@ const SCRIPTS: Script[] = [
       { name: "limits-off", request: { method: "POST", path: "/api/settings", body: { provider: "opencode" } }, awaitEvent: true },
     ],
   },
+  {
+    route: "graph",
+    seed: {},
+    dataSeed: {
+      "curriculum.json": JSON.stringify({ chapters: [{ title: "Corso Demo", slug: "demo", lessons: [] }] }),
+      "courses/demo/lessons/0001-t.html": lessonHtml(
+        { lessonNumber: 1, topic: "T", title: "Tema", slug: "t", dateCreated: "", dateModified: "", version: "1" },
+        [
+          { nodeId: "alpha", title: "Alfa", tier: "axiom", content: "x" },
+          { nodeId: "beta", title: "Beta", tier: "derivation", content: "x", dependencies: ["alpha", "ghost"] },
+          { nodeId: "gamma", title: "Gamma", tier: "derivation", content: "x", dependencies: ["beta"] },
+        ],
+      ),
+      "courses/demo/lessons/0002-u.html": lessonHtml(
+        { lessonNumber: 2, topic: "Topic U", title: "", slug: "u", dateCreated: "", dateModified: "", version: "1" },
+        [{ nodeId: "delta", title: "Delta", tier: "axiom", content: "x" }],
+      ),
+      "courses/demo/lessons/notes.html": "<html><body>appunti</body></html>",
+      "courses/demo/progress.jsonl": [
+        JSON.stringify({ at: "2026-01-02T00:00:00Z", sessionId: "s", course: "demo", lessonSlug: "t", nodeRefs: ["alpha"], kind: "check", correct: true, confidence: 20 }),
+        JSON.stringify({ at: "2026-01-02T00:00:00Z", sessionId: "s", course: "demo", lessonSlug: "t", nodeRefs: ["beta"], kind: "check", correct: false }),
+        JSON.stringify({ at: "2026-01-02T00:00:00Z", sessionId: "s", course: "demo", lessonSlug: "u", nodeRefs: ["N1"], kind: "check", correct: true, confidence: 90 }),
+        JSON.stringify({ kind: "review", source: "anki", sessionId: "anki", course: "demo", lessonSlug: "t", nodeRefs: ["demo/t#gamma"], cardId: 7, reviewId: 100, ease: 3, interval: 30, lapses: 0, at: "2026-01-03T00:00:00Z" }),
+        "not json",
+      ]
+        .map((line) => line + "\n")
+        .join(""),
+      "graph/nodes.jsonl": [
+        nodeLine("n_a", "A", "A vale.", "demo/0001-t", "alpha"),
+        nodeLine("n_b", "B", "B vale.", "demo/0001-t", "beta"),
+        nodeLine("n_c", "C", "C vale.", "demo/0001-t", "gamma"),
+        nodeLine("n_g", "G", "G vale.", "demo/0001-t", "alpha", { note: "kept" }),
+        nodeLine("n_d", "D", "D vale.", "demo/0002-u", "delta"),
+        nodeLine("n_e", "E", "E vale.", "other/0001-x", ""),
+        nodeLine("n_f", "F", "F vale.", "other/0001-x", ""),
+        JSON.stringify({ id: "n_a", name: "A bis", statement: "A riformulato", aliases: ["A2"], createdAt: GRAPH_AT, provenance: [{ chatId: "demo/0002-u", messageId: "delta" }] }),
+        "{not json",
+        '{"id":"n_bad","name":"x"}',
+      ]
+        .map((line) => line + "\n")
+        .join(""),
+      "graph/chains.jsonl": [
+        chainLine("arg_abc", ["n_a", "n_b"], "n_c", "demo/0001-t"),
+        chainLine("arg_cd", ["n_c"], "n_d", "demo/0002-u"),
+        chainLine("arg_dup", ["n_b", "n_a"], "n_c", "other/0001-x"),
+        chainLine("arg_ef", ["n_e"], "n_f", "other/0001-x"),
+        chainLine("arg_dangling", ["n_missing"], "n_a", "other/0001-x"),
+        chainLine("arg_gad", ["n_g", "n_a"], "n_d", "demo/0002-u"),
+        '{"id":"arg_cut","premises":["n_a"]', // unterminated: a crashed append, kept verbatim
+      ].join("\n"),
+      "graph/positions.json": JSON.stringify({ n_a: { x: 1, y: 1 } }),
+    },
+    cases: [
+      { name: "get-map", request: { method: "GET", path: "/api/map" } },
+      { name: "get-graph", request: { method: "GET", path: "/api/graph" } },
+      {
+        name: "post-positions",
+        request: {
+          method: "POST",
+          path: "/api/graph/positions",
+          body: { positions: { n_a: { x: 5, y: 6.5 }, arg_ef: { x: 1, y: 2 }, ghost: { x: 1, y: 2 }, n_c: { x: "7", y: 1 } } },
+        },
+      },
+      { name: "get-graph-after-positions", request: { method: "GET", path: "/api/graph" } },
+      { name: "post-positions-missing", request: { method: "POST", path: "/api/graph/positions", body: {} } },
+      { name: "post-positions-invalid-json", request: { method: "POST", path: "/api/graph/positions", rawBody: "{" } },
+      { name: "delete-node", request: { method: "POST", path: "/api/graph/nodes/n_b/delete", body: {} }, awaitEvent: true },
+      { name: "get-graph-after-delete", request: { method: "GET", path: "/api/graph" } },
+      { name: "delete-chain", request: { method: "POST", path: "/api/graph/nodes/arg_gad/delete", body: {} } },
+      { name: "delete-invalid-id", request: { method: "POST", path: "/api/graph/nodes/x_1/delete", body: {} } },
+      { name: "get-map-after", request: { method: "GET", path: "/api/map" } },
+    ],
+  },
 ];
 
 /** Writes `<outDir>/<route>.json` for every scripted route and returns the file paths. Always Node mode. */
@@ -121,6 +215,11 @@ export async function captureGolden(outDir: string = GOLDEN_DIR): Promise<string
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, JSON.stringify(content, null, 2) + "\n");
     }
+    for (const [rel, content] of Object.entries(script.dataSeed ?? {})) {
+      const file = path.join(data, rel);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, content);
+    }
     const roots = { repoRoot: rootVariants(repo), dataRoot: rootVariants(data) };
     const server = await startServer({ repoRoot: repo, dataRoot: data, mode: "node" });
     try {
@@ -128,7 +227,7 @@ export async function captureGolden(outDir: string = GOLDEN_DIR): Promise<string
       for (const c of script.cases) cases.push(await captureCase(server.url, c, roots));
       const target = path.join(outDir, `${script.route}.json`);
       // The seed is the replay's input, so it stays raw; only the captured responses are normalised.
-      const file: GoldenFile = { route: script.route, seed: script.seed, cases };
+      const file: GoldenFile = { route: script.route, seed: script.seed, ...(script.dataSeed ? { dataSeed: script.dataSeed } : {}), cases };
       fs.writeFileSync(target, JSON.stringify(file, null, 2) + "\n"); // always LF, never os.EOL
       written.push(target);
     } finally {
