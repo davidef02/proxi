@@ -1,0 +1,535 @@
+//! The `/api/sync` HTTP surface of the in-process server: validation, migration and auto-sync (T8).
+
+mod common;
+
+#[path = "common/fake_http.rs"]
+mod fake_http;
+#[path = "common/fake_github.rs"]
+mod fake_github;
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use reqwest::header::CONTENT_TYPE;
+use reqwest::{Client, Response, StatusCode};
+use serde_json::{Value, json};
+
+use fake_github::{FakeGithub, FakeGithubOpts};
+use fake_http::{FakeHttp, Reply};
+use proxi::server::{RunningServer, ServerOptions, start};
+
+/// Low-entropy on purpose (L12).
+fn token() -> String {
+    "t".repeat(12)
+}
+
+/// A legacy `secrets.json` in the plaintext shape the Node app wrote.
+fn legacy_github_secret() -> String {
+    let data = json!({
+        "github": {
+            "token": token(),
+            "login": fake_github::LOGIN,
+            "repo": fake_github::FULL,
+            "branch": "main",
+        }
+    })
+    .to_string();
+    json!({ "v": 1, "encrypted": false, "data": data }).to_string()
+}
+
+fn write(root: &Path, rel: &str, body: &str) {
+    let target = root.join(rel);
+    fs::create_dir_all(target.parent().expect("seed file has a parent")).expect("create parents");
+    fs::write(target, body).expect("write seed");
+}
+
+struct Fixture {
+    repo: PathBuf,
+    data: PathBuf,
+}
+
+impl Fixture {
+    fn new(root: &Path) -> Self {
+        let repo = root.join("repo");
+        let data = root.join("data");
+        fs::create_dir_all(repo.join(".learner")).expect("create .learner");
+        fs::create_dir_all(&data).expect("create data folder");
+        Self { repo, data }
+    }
+
+    fn seed(&self, rel: &str, body: &str) {
+        write(&self.repo, rel, body);
+    }
+
+    fn seed_data(&self, rel: &str, body: &str) {
+        write(&self.data, rel, body);
+    }
+
+    fn options(&self) -> ServerOptions {
+        let mut options = ServerOptions::new(self.repo.clone());
+        options.data_root = Some(self.data.clone());
+        options.memory_secrets = true;
+        options
+    }
+}
+
+fn url(server: &RunningServer, path: &str) -> String {
+    format!("{}{}", server.url, path)
+}
+
+async fn post(client: &Client, server: &RunningServer, path: &str, body: &str) -> Response {
+    client
+        .post(url(server, path))
+        .header("x-learner-client", "1")
+        .header(CONTENT_TYPE, "application/json")
+        .body(body.to_string())
+        .send()
+        .await
+        .expect("POST request")
+}
+
+async fn body_json(response: Response) -> Value {
+    let text = response.text().await.expect("read body");
+    serde_json::from_str(&text).unwrap_or_else(|error| panic!("not JSON ({error}): {text}"))
+}
+
+async fn get_status(client: &Client, server: &RunningServer) -> Value {
+    let response = client
+        .get(url(server, "/api/sync"))
+        .send()
+        .await
+        .expect("GET /api/sync");
+    assert_eq!(response.status(), StatusCode::OK);
+    body_json(response).await
+}
+
+async fn wait_for_patches(fake: &FakeGithub, want: usize) -> usize {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let count = fake.count("PATCH", "/git/refs/heads/main");
+        if count >= want || tokio::time::Instant::now() >= deadline {
+            return count;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Polls until the pass that wrote `at`/`pushed` finished (the watcher runs it on another thread).
+async fn wait_for_idle(client: &Client, server: &RunningServer) -> Value {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let status = get_status(client, server).await;
+        let done = status["state"] == "idle"
+            && status["at"].is_string()
+            && status["pushed"].as_u64().unwrap_or(0) >= 1;
+        if done || tokio::time::Instant::now() >= deadline {
+            return status;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Reads chunks until `done` sees the accumulated text; panics after `timeout`.
+async fn read_until(
+    response: &mut Response,
+    timeout: Duration,
+    done: impl Fn(&str) -> bool,
+) -> String {
+    let deadline = tokio::time::Instant::now() + timeout;
+    let mut buffer = String::new();
+    while !done(&buffer) {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let chunk = tokio::time::timeout(remaining, response.chunk())
+            .await
+            .unwrap_or_else(|_| panic!("timed out; got {buffer:?}"))
+            .expect("read chunk")
+            .expect("stream closed early");
+        buffer.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    buffer
+}
+
+fn data_events(raw: &str) -> Vec<Value> {
+    raw.split("\n\n")
+        .filter_map(|event| {
+            event
+                .lines()
+                .find_map(|line| line.strip_prefix("data: "))
+                .and_then(|json| serde_json::from_str(json).ok())
+        })
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn get_sync_shape_on_a_fresh_folder() {
+    let tmp = common::temp_dir("sync-api-shape");
+    let fixture = Fixture::new(&tmp.0);
+    let server = start(fixture.options()).await.expect("start server");
+    let client = Client::new();
+
+    let status = get_status(&client, &server).await;
+    assert_eq!(status["state"], "idle");
+    assert_eq!(status["provider"], "local");
+    assert_eq!(status["needsData"], true);
+    assert_eq!(status["encrypted"], false);
+    assert_eq!(status["github"]["connected"], false);
+    assert_eq!(status["gdrive"]["connected"], false);
+    assert_eq!(status["gdrive"]["pending"], false);
+    assert_eq!(status["conflictCount"], 0);
+    assert_eq!(status["trashCount"], 0);
+    assert!(status.get("restartRequired").is_none(), "{status}");
+
+    server.close();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn run_needs_the_header_and_bad_bodies_get_the_zod_strings() {
+    let tmp = common::temp_dir("sync-api-run");
+    let fixture = Fixture::new(&tmp.0);
+    let server = start(fixture.options()).await.expect("start server");
+    let client = Client::new();
+
+    let response = client
+        .post(url(&server, "/api/sync/run"))
+        .header(CONTENT_TYPE, "application/json")
+        .body("{}")
+        .send()
+        .await
+        .expect("POST without the guard header");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        body_json(response).await,
+        json!({ "error": "Missing x-learner-client header" })
+    );
+
+    // Node's `c.req.json().catch(() => ({}))`: an unparsable body runs with the defaults.
+    let response = post(&client, &server, "/api/sync/run", "not json").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_json(response).await["state"], "idle");
+
+    for (body, message) in [
+        (
+            r#"{"confirmDeletions":"yes"}"#,
+            "confirmDeletions: Invalid input: expected boolean, received string",
+        ),
+        (
+            r#"{"confirmDeletions":null}"#,
+            "confirmDeletions: Invalid input: expected boolean, received null",
+        ),
+        ("[]", ": Invalid input: expected object, received array"),
+        (r#""x""#, ": Invalid input: expected object, received string"),
+    ] {
+        let response = post(&client, &server, "/api/sync/run", body).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(
+            body_json(response).await,
+            json!({ "error": message }),
+            "{body}"
+        );
+    }
+
+    server.close();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn disconnect_validates_provider() {
+    let tmp = common::temp_dir("sync-api-disconnect-args");
+    let fixture = Fixture::new(&tmp.0);
+    let server = start(fixture.options()).await.expect("start server");
+    let client = Client::new();
+
+    for body in [r#"{}"#, r#"{"provider":"x"}"#, r#"{"provider":5}"#] {
+        let response = post(&client, &server, "/api/sync/disconnect", body).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(
+            body_json(response).await,
+            json!({ "error": r#"provider: Invalid option: expected one of "github"|"gdrive""# }),
+            "{body}"
+        );
+    }
+
+    let response = post(&client, &server, "/api/sync/disconnect", "null").await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body_json(response).await,
+        json!({ "error": ": Invalid input: expected object, received null" })
+    );
+
+    server.close();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn get_run_is_404_and_unknown_api_paths_are_404() {
+    let tmp = common::temp_dir("sync-api-404");
+    let fixture = Fixture::new(&tmp.0);
+    let server = start(fixture.options()).await.expect("start server");
+    let client = Client::new();
+
+    for path in ["/api/sync/run", "/api/nope"] {
+        let response = client
+            .get(url(&server, path))
+            .send()
+            .await
+            .expect("GET request");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        assert_eq!(
+            body_json(response).await,
+            json!({ "error": "Not found" }),
+            "{path}"
+        );
+    }
+
+    server.close();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plaintext_legacy_file_is_migrated_at_start_and_the_file_is_gone() {
+    let tmp = common::temp_dir("sync-api-migrate");
+    let fixture = Fixture::new(&tmp.0);
+    fixture.seed(".learner/settings.json", r#"{"syncProvider":"local"}"#);
+    fixture.seed(".learner/secrets.json", &legacy_github_secret());
+    let server = start(fixture.options()).await.expect("start server");
+    let client = Client::new();
+
+    let status = get_status(&client, &server).await;
+    assert_eq!(status["github"]["connected"], true);
+    assert_eq!(status["github"]["login"], fake_github::LOGIN);
+    assert_eq!(status["github"]["repo"], fake_github::FULL);
+    assert_eq!(status["provider"], "local");
+    assert!(!fixture.repo.join(".learner").join("secrets.json").exists());
+
+    server.close();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn disconnect_removes_the_secret() {
+    let tmp = common::temp_dir("sync-api-disconnect");
+    let fixture = Fixture::new(&tmp.0);
+    fixture.seed(".learner/settings.json", r#"{"syncProvider":"local"}"#);
+    fixture.seed(".learner/secrets.json", &legacy_github_secret());
+    let server = start(fixture.options()).await.expect("start server");
+    let client = Client::new();
+
+    let status = get_status(&client, &server).await;
+    assert_eq!(status["github"]["connected"], true);
+    assert_eq!(status["provider"], "local");
+
+    let response = post(
+        &client,
+        &server,
+        "/api/sync/disconnect",
+        r#"{"provider":"github"}"#,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let status = body_json(response).await;
+    assert_eq!(status["github"]["connected"], false);
+    assert_eq!(status["provider"], "local");
+
+    // Back to github without a secret: run says how to reconnect.
+    let response = post(&client, &server, "/api/settings", r#"{"syncProvider":"github"}"#).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let status = body_json(post(&client, &server, "/api/sync/run", "{}").await).await;
+    assert_eq!(status["state"], "error");
+    assert_eq!(status["error"], "Non connesso: premi Accedi.");
+
+    server.close();
+}
+
+fn fake_github_with_readme() -> FakeGithub {
+    FakeGithub::start(FakeGithubOpts {
+        seed: vec![("README.md".to_string(), "# proxi-data\n".to_string())],
+        ..Default::default()
+    })
+}
+
+fn seed_connected_github(fixture: &Fixture) {
+    fixture.seed(".learner/settings.json", r#"{"syncProvider":"github"}"#);
+    fixture.seed(".learner/secrets.json", &legacy_github_secret());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn auto_sync_runs_a_pass_one_second_after_start_when_github_is_connected() {
+    let tmp = common::temp_dir("sync-api-auto");
+    let fixture = Fixture::new(&tmp.0);
+    seed_connected_github(&fixture);
+    fixture.seed_data("courses/algebra/notes.md", "# algebra\n");
+    let fake = fake_github_with_readme();
+    let mut options = fixture.options();
+    options.endpoints.github = Some(fake.http.url.clone());
+    let server = start(options).await.expect("start server");
+    let client = Client::new();
+
+    // No sync request here: the watcher fires 1 s after start on its own.
+    assert_eq!(wait_for_patches(&fake, 1).await, 1);
+    let status = wait_for_idle(&client, &server).await;
+    assert_eq!(status["state"], "idle", "{status}");
+    assert_eq!(status["at"].is_string(), true, "{status}");
+    assert!(status["pushed"].as_u64().unwrap_or(0) >= 1, "{status}");
+    assert!(
+        fake.head_paths()
+            .iter()
+            .any(|path| path == "courses/algebra/notes.md"),
+        "{:?}",
+        fake.head_paths()
+    );
+
+    server.close();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn shutdown_runs_a_last_pass() {
+    let tmp = common::temp_dir("sync-api-shutdown");
+    let fixture = Fixture::new(&tmp.0);
+    seed_connected_github(&fixture);
+    fixture.seed_data("courses/algebra/notes.md", "# algebra\n");
+    let fake = fake_github_with_readme();
+    let mut options = fixture.options();
+    options.endpoints.github = Some(fake.http.url.clone());
+    let server = start(options).await.expect("start server");
+    let client = Client::new();
+
+    assert_eq!(wait_for_patches(&fake, 1).await, 1);
+    assert_eq!(wait_for_idle(&client, &server).await["state"], "idle");
+
+    // Written straight to the disk: only shutdown's last pass can see it.
+    fixture.seed_data("courses/algebra/extra.md", "# extra\n");
+    server.shutdown().await;
+
+    assert_eq!(fake.count("PATCH", "/git/refs/heads/main"), 2);
+    assert!(
+        fake.head_paths()
+            .iter()
+            .any(|path| path == "courses/algebra/extra.md"),
+        "{:?}",
+        fake.head_paths()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn shutdown_with_a_local_provider_touches_no_remote() {
+    let tmp = common::temp_dir("sync-api-shutdown-local");
+    let fixture = Fixture::new(&tmp.0);
+    fixture.seed(".learner/settings.json", r#"{"syncProvider":"local"}"#);
+    fixture.seed(".learner/secrets.json", &legacy_github_secret());
+    fixture.seed_data("courses/algebra/notes.md", "# algebra\n");
+    let fake = fake_github_with_readme();
+    let mut options = fixture.options();
+    options.endpoints.github = Some(fake.http.url.clone());
+    let server = start(options).await.expect("start server");
+
+    server.shutdown().await;
+
+    assert!(fake.http.requests().is_empty(), "{:?}", fake.http.requests());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn github_start_and_cancel_against_the_fake() {
+    let tmp = common::temp_dir("sync-api-device");
+    let fixture = Fixture::new(&tmp.0);
+    fixture.seed(".learner/settings.json", r#"{"githubClientId":"gh-client"}"#);
+    let http = FakeHttp::start(|request| {
+        if request.method == "POST" && request.path == "/login/device/code" {
+            Reply::json(
+                200,
+                json!({
+                    "device_code": "dev-1",
+                    "user_code": "WXYZ-1234",
+                    "verification_uri": "https://github.com/login/device",
+                    "expires_in": 900,
+                    "interval": 1,
+                }),
+            )
+        } else {
+            Reply::json(200, json!({ "error": "authorization_pending" }))
+        }
+    });
+    let mut options = fixture.options();
+    options.endpoints.github = Some(http.url.clone());
+    let server = start(options).await.expect("start server");
+    let client = Client::new();
+
+    let response = post(&client, &server, "/api/sync/github/start", "{}").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let status = body_json(response).await;
+    let pending = &status["github"]["pending"];
+    assert_eq!(pending["userCode"], "WXYZ-1234");
+    assert_eq!(pending["verificationUri"], "https://github.com/login/device");
+    let expires_at = pending["expiresAt"].as_str().expect("expiresAt string");
+    assert_eq!(expires_at.len(), 24, "{expires_at}");
+    assert!(expires_at.ends_with('Z'), "{expires_at}");
+
+    let requests = http.requests();
+    let device = requests
+        .iter()
+        .find(|request| request.method == "POST" && request.path == "/login/device/code")
+        .expect("device-code request");
+    assert_eq!(
+        device.json(),
+        json!({ "client_id": "gh-client", "scope": "repo" })
+    );
+
+    let response = post(&client, &server, "/api/sync/github/cancel", "{}").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let status = body_json(response).await;
+    assert!(status["github"]["pending"].is_null(), "{status}");
+    assert!(status["github"]["error"].is_null(), "{status}");
+
+    server.close();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn github_cancel_emits_a_sync_event_on_the_events_stream() {
+    let tmp = common::temp_dir("sync-api-cancel-event");
+    let fixture = Fixture::new(&tmp.0);
+    let server = start(fixture.options()).await.expect("start server");
+    let client = Client::new();
+
+    let mut stream = client
+        .get(url(&server, "/api/events"))
+        .send()
+        .await
+        .expect("GET /api/events");
+    assert_eq!(stream.status(), StatusCode::OK);
+
+    let response = post(&client, &server, "/api/sync/github/cancel", "{}").await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let raw = read_until(&mut stream, Duration::from_secs(5), |raw| {
+        data_events(raw).iter().any(|event| event["type"] == "sync")
+    })
+    .await;
+    let event = data_events(&raw)
+        .into_iter()
+        .find(|event| event["type"] == "sync")
+        .expect("sync event");
+    assert_eq!(event["status"]["provider"], "local");
+    assert_eq!(event["status"]["state"], "idle");
+
+    server.close();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn start_without_memory_secrets_and_no_legacy_file_never_touches_the_keychain() {
+    let tmp = common::temp_dir("sync-api-keychain");
+    let fixture = Fixture::new(&tmp.0);
+    let mut options = ServerOptions::new(fixture.repo.clone());
+    options.data_root = Some(fixture.data.clone());
+    let server = start(options).await.expect("start server");
+    let client = Client::new();
+
+    let response = client
+        .get(url(&server, "/api/settings"))
+        .send()
+        .await
+        .expect("GET /api/settings");
+    assert_eq!(response.status(), StatusCode::OK);
+    let settings = body_json(response).await;
+    assert_eq!(
+        settings["dataRoot"],
+        proxi::data_root::resolve_path(&fixture.data).display().to_string()
+    );
+
+    server.close();
+}
