@@ -68,6 +68,13 @@ pub fn aside_exe(repo: &Path) -> PathBuf {
         .join(format!("proxi.old{}", std::env::consts::EXE_SUFFIX))
 }
 
+/// Set before a rebuild and cleared only by a successful one: the pulled code is not in the exe.
+pub fn build_pending(repo: &Path) -> PathBuf {
+    repo.join("target")
+        .join("release")
+        .join("proxi.build-pending")
+}
+
 /// Previous build left aside by `rebuild`; best effort, it may still be the running exe.
 pub fn remove_leftover(repo: &Path) {
     let _ = fs::remove_file(aside_exe(repo));
@@ -259,6 +266,18 @@ impl UpdateManager {
             });
         }
 
+        // A failed build already pulled: report an update so the UI offers the retry, and give
+        // the pending rebuild a positive count because that is what shows "Aggiorna ora".
+        if build_pending(repo).exists() {
+            return self.finish(UpdateStatus {
+                state: UpdateState::Available,
+                behind: 1,
+                commits: None,
+                checked_at: Some(events::iso_now()),
+                error: None,
+            });
+        }
+
         self.finish(UpdateStatus {
             state: UpdateState::UpToDate,
             behind: 0,
@@ -391,7 +410,9 @@ impl UpdateManager {
             .map(|output| stdout(&output).trim().to_string())?;
 
         // Node ran npm install only for package.json changes; the binary rebuilds instead.
-        if old != new {
+        // The marker covers a build that failed after a previous pull: HEAD already moved,
+        // so without it the retry would relaunch the stale exe.
+        if old != new || build_pending(&self.cfg.repo_root).exists() {
             if let Err(text) = self.rebuild().await {
                 self.fail(&text);
                 return Err(UpdateError {
@@ -422,11 +443,22 @@ impl UpdateManager {
         })
     }
 
-    /// Rename a running exe aside, rebuild, keep the old bytes if the build fails (A9).
+    /// Rename a running exe aside, rebuild, keep the old bytes and a marker if the build fails (A9).
     async fn rebuild(&self) -> Result<(), String> {
         let repo = &self.cfg.repo_root;
         let exe = release_exe(repo);
         let aside = aside_exe(repo);
+        let pending = build_pending(repo);
+
+        if let Some(parent) = pending.parent() {
+            if let Err(error) = fs::create_dir_all(parent) {
+                return Err(format!("cargo build fallito: {error}"));
+            }
+        }
+        // Written before the build so any failure below keeps the retry visible to `check`.
+        if let Err(error) = fs::write(&pending, b"") {
+            return Err(format!("cargo build fallito: {error}"));
+        }
 
         let moved = exe.exists();
         if moved {
@@ -449,7 +481,10 @@ impl UpdateManager {
         )
         .await
         {
-            Ok(_) if exe.is_file() => return Ok(()),
+            Ok(_) if exe.is_file() => {
+                let _ = fs::remove_file(&pending);
+                return Ok(());
+            }
             Ok(_) => format!(
                 "cargo build fallito: eseguibile non trovato: {}",
                 exe.display()
@@ -721,6 +756,7 @@ mod tests {
 
         assert_eq!(fs::read_to_string(&exe).unwrap().trim(), "new");
         assert_eq!(fs::read_to_string(aside_exe(&repo)).unwrap(), "old");
+        assert!(!build_pending(&repo).exists());
         assert_one_build_line(&repo);
     }
 
@@ -742,6 +778,7 @@ mod tests {
         assert_eq!(error, "cargo build fallito: boom");
         assert_eq!(fs::read_to_string(&exe).unwrap(), "old");
         assert!(!aside_exe(&repo).exists());
+        assert!(build_pending(&repo).is_file(), "a failed build stays pending");
         assert_one_build_line(&repo);
     }
 
@@ -766,6 +803,7 @@ mod tests {
         );
         assert_eq!(fs::read_to_string(&exe).unwrap(), "old");
         assert!(!aside_exe(&repo).exists());
+        assert!(build_pending(&repo).is_file());
         assert_one_build_line(&repo);
     }
 
@@ -786,6 +824,7 @@ mod tests {
 
         assert_eq!(fs::read_to_string(&exe).unwrap().trim(), "new");
         assert!(!aside_exe(&repo).exists());
+        assert!(!build_pending(&repo).exists());
         assert_one_build_line(&repo);
     }
 
@@ -795,10 +834,13 @@ mod tests {
         let aside = aside_exe(&repo);
         fs::create_dir_all(aside.parent().unwrap()).unwrap();
         fs::write(&aside, b"old").unwrap();
+        fs::write(build_pending(&repo), b"").unwrap();
 
         remove_leftover(&repo);
 
         assert!(!aside.exists());
+        // A build still pending must survive the restart, or its retry is lost.
+        assert!(build_pending(&repo).is_file());
         // Nothing to remove is not an error.
         remove_leftover(&repo);
     }

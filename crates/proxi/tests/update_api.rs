@@ -727,3 +727,82 @@ async fn failed_build_keeps_the_previous_executable() {
         git(&remote, &["rev-parse", "HEAD"])
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn retry_after_failed_build_rebuilds_and_relaunches() {
+    let root = common::temp_dir("update-api-build-retry");
+    let remote = root.0.join("remote");
+    let local = root.0.join("local");
+    init_repo(&remote);
+    clone(&remote, &local);
+    commit_file(&remote, "retry.txt", "retry\n", "feature: retry");
+    let exe = update::release_exe(&local);
+    fs::create_dir_all(exe.parent().expect("release dir")).expect("create release dir");
+    fs::write(&exe, "old build").expect("write old exe");
+
+    let cargo = script(
+        &root.0,
+        "fake-cargo",
+        "echo boom >&2\nexit 1\n",
+        "echo boom 1>&2\r\nexit /b 1\r\n",
+    );
+    let relaunched = Arc::new(AtomicBool::new(false));
+    let flag = relaunched.clone();
+    let mut options = options(&local);
+    options.bins.cargo = Some(cargo);
+    options.relaunch = Some(Arc::new(move || flag.store(true, Ordering::SeqCst)));
+    let server = start(options).await.expect("start server");
+    let client = Client::new();
+
+    let response = post(&client, &server, "/api/update/apply", r#"{"force":true}"#).await;
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        body_text(response).await,
+        r#"{"error":"cargo build fallito: boom"}"#
+    );
+    assert!(
+        update::build_pending(&local).is_file(),
+        "a failed build leaves the retry marker"
+    );
+    assert_eq!(
+        git(&local, &["rev-parse", "HEAD"]),
+        git(&remote, &["rev-parse", "HEAD"])
+    );
+
+    // The pull already moved HEAD (behind 0): the marker must make the next check offer the update.
+    let response = post(&client, &server, "/api/update/check", "{}").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["state"], "available");
+    assert!(
+        body["behind"].as_u64().unwrap_or(0) > 0,
+        "the UI shows \"Aggiorna ora\" only with a positive count: {body}"
+    );
+
+    // Same path, now a build that succeeds: apply rebuilds even though HEAD did not move again.
+    fake_build(&root.0);
+    let response = post(&client, &server, "/api/update/apply", r#"{"force":true}"#).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        body_text(response).await,
+        r#"{"ok":true,"relaunching":true}"#
+    );
+    assert_eq!(
+        fs::read_to_string(&exe).expect("read rebuilt exe").trim(),
+        "new build"
+    );
+    assert!(
+        !update::build_pending(&local).exists(),
+        "a successful retry clears the marker"
+    );
+    assert_one_build_line(&root.0);
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    while !relaunched.load(Ordering::SeqCst) {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "relaunch callback never ran"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
