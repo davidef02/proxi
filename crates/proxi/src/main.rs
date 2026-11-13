@@ -16,6 +16,11 @@ enum Command {
     },
     /// Run the local server
     Serve(proxi::server::ServeArgs),
+    /// Homepage and chapter plan: generate, plan, chapters, help
+    Home {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
 }
 
 fn main() -> std::process::ExitCode {
@@ -23,13 +28,16 @@ fn main() -> std::process::ExitCode {
         .map(|a| a.to_string_lossy().into_owned())
         .collect();
 
-    let code = if args.get(1).map(String::as_str) == Some("data") {
+    let code = if args.get(1).map(String::as_str) == Some("home") {
+        proxi::home::run_cli(&args[2..])
+    } else if args.get(1).map(String::as_str) == Some("data") {
         proxi::data_root::run_cli(&args[2..])
     } else {
         let cli = Cli::parse_from(&args);
         match cli.command {
             Command::Data { args } => proxi::data_root::run_cli(&args),
             Command::Serve(args) => proxi::server::serve_cli(args),
+            Command::Home { args } => proxi::home::run_cli(&args),
         }
     };
 
