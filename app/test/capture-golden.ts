@@ -3,7 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { REPO_ROOT, startServer } from "./harness.ts";
+import type { FakeGithubSeed } from "./fake-github.ts";
+import { installFakeGithub } from "./fake-github.ts";
+import { FakeHttpServer, type RecordedRequest } from "./fake-servers.ts";
+import { REPO_ROOT, startServer, type ServerMode } from "./harness.ts";
 
 export interface GoldenRequest {
   method: "GET" | "POST";
@@ -17,6 +20,8 @@ export interface GoldenCase {
   request: GoldenRequest;
   response: { status: number; body: unknown };
   firstEvent?: unknown;
+  /** Present on a `remote` case: the non-GET requests the fake GitHub received while it ran. */
+  remote?: { method: string; path: string; body: unknown }[];
 }
 
 export interface GoldenFile {
@@ -24,6 +29,7 @@ export interface GoldenFile {
   seed: Record<string, unknown>;
   /** Raw file contents written verbatim under the data folder (lessons, JSONL ledgers): the replay's input, never normalised. */
   dataSeed?: Record<string, string>;
+  github?: FakeGithubSeed;
   cases: GoldenCase[];
 }
 
@@ -66,14 +72,45 @@ interface ScriptedCase {
   request: GoldenRequest;
   /** Open GET /api/events first and record the first data event the request triggers. */
   awaitEvent?: boolean;
+  /** Record what the fake GitHub received: a `github` seed must be set. */
+  remote?: boolean;
 }
 
-interface Script {
+export interface Script {
   route: string;
   seed: Record<string, unknown>;
   /** Raw file contents written verbatim under the data folder (lessons, JSONL ledgers): the replay's input, never normalised. */
   dataSeed?: Record<string, string>;
+  /** Start a fake GitHub with this seed and point the server at it. */
+  github?: FakeGithubSeed;
   cases: ScriptedCase[];
+}
+
+/** The hostname a commit message ends with, before normalisation. */
+const HOST_SUFFIX = `(${os.hostname()})`;
+
+function parseBody(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+/** Non-GET requests with their JSON body, the commit hostname swapped for `<host>` so the fixture is portable. */
+function remoteRequests(requests: RecordedRequest[]): { method: string; path: string; body: unknown }[] {
+  return requests
+    .filter((r) => r.method !== "GET")
+    .map((r) => {
+      const body = parseBody(r.body);
+      if (body && typeof body === "object" && "message" in body) {
+        const { message } = body as { message?: unknown };
+        if (typeof message === "string" && message.endsWith(HOST_SUFFIX)) {
+          (body as { message: string }).message = message.slice(0, -HOST_SUFFIX.length) + "(<host>)";
+        }
+      }
+      return { method: r.method, path: r.path, body };
+    });
 }
 
 // Low entropy and no `sk` prefix: neither gitleaks nor the JSON fixtures may read it as a key (L12/L13).
@@ -96,7 +133,7 @@ function lessonHtml(metadata: Record<string, unknown>, nodes: unknown[]): string
   return `<html><body><script type="application/json" id="lesson-data">${JSON.stringify({ metadata, nodes })}</script></body></html>`;
 }
 
-const SCRIPTS: Script[] = [
+export const SCRIPTS: Script[] = [
   {
     route: "settings",
     seed: {},
@@ -198,6 +235,42 @@ const SCRIPTS: Script[] = [
       { name: "get-map-after", request: { method: "GET", path: "/api/map" } },
     ],
   },
+  {
+    route: "sync",
+    // "local" on purpose: the 1 s start pass of startAuto/spawn_auto then does nothing. The script switches to
+    // github through POST /api/settings, which emits no courses/graph event, so no auto pass races the runs.
+    seed: {
+      ".learner/settings.json": { syncProvider: "local" },
+      ".learner/secrets.json": {
+        v: 1,
+        encrypted: false,
+        data: JSON.stringify({
+          github: { token: "t".repeat(12), login: "tester", repo: "tester/proxi-data", branch: "main" },
+        }),
+      },
+    },
+    dataSeed: {
+      "curriculum.json": "{\"chapters\":[]}\n",
+      "courses/algebra/notes.md": "# algebra\n",
+      "courses/algebra/lessons/0001-intro.html": "<p>locale</p>\n",
+      "graph/nodes.jsonl": "{\"id\":\"n1\"}\n",
+    },
+    github: {
+      login: "tester",
+      files: {
+        "README.md": "# proxi-data\n",
+        "courses/algebra/lessons/0001-intro.html": "<p>remoto</p>\n",
+        "decks/algebra.tsv": "q\ta\n",
+      },
+    },
+    cases: [
+      { name: "status-connected", request: { method: "GET", path: "/api/sync" } },
+      { name: "provider-github", request: { method: "POST", path: "/api/settings", body: { syncProvider: "github" } } },
+      { name: "run-first", request: { method: "POST", path: "/api/sync/run", body: {} }, remote: true },
+      { name: "run-again", request: { method: "POST", path: "/api/sync/run", body: {} }, remote: true },
+      { name: "disconnect", request: { method: "POST", path: "/api/sync/disconnect", body: { provider: "github" } } },
+    ],
+  },
 ];
 
 /** Writes `<outDir>/<route>.json` for every scripted route and returns the file paths. Always Node mode. */
@@ -205,41 +278,63 @@ export async function captureGolden(outDir: string = GOLDEN_DIR): Promise<string
   fs.mkdirSync(outDir, { recursive: true });
   const written: string[] = [];
   for (const script of SCRIPTS) {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), `golden-${script.route}-`));
-    const repo = path.join(dir, "repo");
-    const data = path.join(dir, "data");
-    fs.mkdirSync(repo);
-    fs.mkdirSync(data);
-    for (const [rel, content] of Object.entries(script.seed)) {
-      const file = path.join(repo, rel);
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, JSON.stringify(content, null, 2) + "\n");
-    }
-    for (const [rel, content] of Object.entries(script.dataSeed ?? {})) {
-      const file = path.join(data, rel);
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, content);
-    }
-    const roots = { repoRoot: rootVariants(repo), dataRoot: rootVariants(data) };
-    const server = await startServer({ repoRoot: repo, dataRoot: data, mode: "node" });
-    try {
-      const cases: GoldenCase[] = [];
-      for (const c of script.cases) cases.push(await captureCase(server.url, c, roots));
-      const target = path.join(outDir, `${script.route}.json`);
-      // The seed is the replay's input, so it stays raw; only the captured responses are normalised.
-      const file: GoldenFile = { route: script.route, seed: script.seed, ...(script.dataSeed ? { dataSeed: script.dataSeed } : {}), cases };
-      fs.writeFileSync(target, JSON.stringify(file, null, 2) + "\n"); // always LF, never os.EOL
-      written.push(target);
-    } finally {
-      await server.close();
-      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
-    }
+    const target = path.join(outDir, `${script.route}.json`);
+    const file = await captureScript(script, "node");
+    fs.writeFileSync(target, JSON.stringify(file, null, 2) + "\n"); // always LF, never os.EOL
+    written.push(target);
   }
   return written;
 }
 
-async function captureCase(base: string, c: ScriptedCase, roots: Roots): Promise<GoldenCase> {
+/** Runs one script against a fresh temp repo + data folder and returns the golden, un-normalised seeds kept raw. */
+export async function captureScript(script: Script, mode: ServerMode = "node"): Promise<GoldenFile> {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `golden-${script.route}-`));
+  const repo = path.join(dir, "repo");
+  const data = path.join(dir, "data");
+  fs.mkdirSync(repo);
+  fs.mkdirSync(data);
+  for (const [rel, content] of Object.entries(script.seed)) {
+    const file = path.join(repo, rel);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(content, null, 2) + "\n");
+  }
+  for (const [rel, text] of Object.entries(script.dataSeed ?? {})) {
+    const file = path.join(data, rel);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, text);
+  }
+  const roots = { repoRoot: rootVariants(repo), dataRoot: rootVariants(data) };
+  const github = script.github;
+  const fake = github ? new FakeHttpServer("github") : undefined;
+  try {
+    if (fake && github) {
+      await fake.start();
+      installFakeGithub(fake, github);
+    }
+    const server = await startServer({ repoRoot: repo, dataRoot: data, mode, fakes: fake ? { github: fake.url } : undefined });
+    try {
+      const cases: GoldenCase[] = [];
+      for (const c of script.cases) cases.push(await captureCase(server.url, c, roots, fake));
+      // The seed and the data files are the replay's input, so they stay raw; only the captured output is normalised.
+      return {
+        route: script.route,
+        seed: script.seed,
+        ...(script.dataSeed ? { dataSeed: script.dataSeed } : {}),
+        ...(github ? { github } : {}),
+        cases,
+      };
+    } finally {
+      await server.close();
+    }
+  } finally {
+    await fake?.close();
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
+  }
+}
+
+async function captureCase(base: string, c: ScriptedCase, roots: Roots, fake?: FakeHttpServer): Promise<GoldenCase> {
   const events = c.awaitEvent ? openEvents(base) : undefined;
+  const seen = c.remote && fake ? fake.requests.length : 0;
   try {
     if (events) await events.ready;
     const res = await send(base, c.request);
@@ -247,6 +342,8 @@ async function captureCase(base: string, c: ScriptedCase, roots: Roots): Promise
     const out: GoldenCase = { name: c.name, request: c.request, response: { status: res.status, body } };
     // Node stamps the event with the current time: normalise it like any other field (app/server/main.ts:293).
     if (events) out.firstEvent = normalise(await events.first(5000), roots);
+    // Read the log only after the response: the run has committed by then.
+    if (c.remote && fake) out.remote = normalise(remoteRequests(fake.requests.slice(seen)), roots) as GoldenCase["remote"];
     return out;
   } finally {
     events?.close();
