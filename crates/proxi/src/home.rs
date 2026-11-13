@@ -104,7 +104,7 @@ fn parse_args(args: &[String]) -> Result<HomeArgs, String> {
                         _ => unreachable!(),
                     }
                 }
-                _ => return Err(unknown_option(&format!("--{name}"))),
+                _ => return Err(data_root::unknown_option(&format!("--{name}"))),
             }
             continue;
         }
@@ -114,18 +114,11 @@ fn parse_args(args: &[String]) -> Result<HomeArgs, String> {
             if c == 'h' {
                 parsed.help = true;
             } else {
-                return Err(unknown_option(&format!("-{c}")));
+                return Err(data_root::unknown_option(&format!("-{c}")));
             }
         }
     }
     Ok(parsed)
-}
-
-/// Same text as `data_root::unknown_option`; kept local because only this CLI needs it here.
-fn unknown_option(name: &str) -> String {
-    format!(
-        "Unknown option '{name}'. To specify a positional argument starting with a '-', place it at the end of the command after '--', as in '-- \"{name}\""
-    )
 }
 
 pub fn run_cli_with(

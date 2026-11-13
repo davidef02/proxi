@@ -2,7 +2,7 @@
 
 use std::fs;
 use std::io::{Read, Write};
-use std::net::{Shutdown, TcpListener};
+use std::net::{Shutdown, TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -210,4 +210,30 @@ pub fn closed_port_url() -> String {
     let port = listener.local_addr().expect("closed port address").port();
     drop(listener);
     format!("http://127.0.0.1:{port}")
+}
+
+/// A listener that never accepts, with its accept queue already full: a further connect hangs in
+/// SYN retransmission instead of being refused, like a host that drops packets.
+pub struct Blackhole {
+    pub url: String,
+    _listener: TcpListener,
+    _held: Vec<TcpStream>,
+}
+
+pub fn blackhole() -> Blackhole {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind blackhole");
+    let address = listener.local_addr().expect("blackhole address");
+    let mut held = Vec::new();
+    // The backlog size differs per OS (128 on Windows, up to somaxconn elsewhere), the symptom not.
+    loop {
+        match TcpStream::connect_timeout(&address, Duration::from_millis(20)) {
+            Ok(stream) => held.push(stream),
+            Err(_) => break,
+        }
+    }
+    Blackhole {
+        url: format!("http://127.0.0.1:{}", address.port()),
+        _listener: listener,
+        _held: held,
+    }
 }

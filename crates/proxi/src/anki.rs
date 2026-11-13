@@ -1,6 +1,6 @@
 //! Port of the `extensions/anki-client.ts` calls plus `fetchAnkiStatus` from `extensions/homepage.ts`.
 
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::{Map, Value};
 
@@ -9,6 +9,11 @@ use crate::identity::DECK_ROOT;
 pub const DEFAULT_ANKI_URL: &str = "http://127.0.0.1:8765";
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_millis(2000);
 const ANKI_VERSION: u64 = 6;
+/// Node aborts at `timeout`; Windows can take ~2 s to report a refused loopback connect, where
+/// undici sees `ECONNREFUSED` at once. The extra window lets that refusal surface, so a closed
+/// port still reads "fetch failed" instead of a timeout (a late answer is still refused below).
+const REFUSAL_GRACE: Duration = Duration::from_millis(250);
+const TIMEOUT_TEXT: &str = "AnkiConnect request timed out";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AnkiResponse {
@@ -26,17 +31,7 @@ pub async fn invoke(url: &str, action: &str, params: Option<Value>, timeout: Dur
     }
     let body = serde_json::to_vec(&Value::Object(request)).expect("AnkiConnect request is JSON");
 
-    // A refused loopback connect can take ~2s to surface on Windows: a hair shorter connect phase lets
-    // the refusal beat the whole-request timeout, so it still reads as "fetch failed" like Node.
-    let connect_timeout = if timeout > Duration::from_millis(200) {
-        timeout - Duration::from_millis(100)
-    } else {
-        timeout
-    };
-    let client = match reqwest::Client::builder()
-        .connect_timeout(connect_timeout)
-        .build()
-    {
+    let client = match reqwest::Client::builder().build() {
         Ok(client) => client,
         Err(error) => {
             return AnkiResponse {
@@ -46,11 +41,12 @@ pub async fn invoke(url: &str, action: &str, params: Option<Value>, timeout: Dur
         }
     };
 
+    let started = Instant::now();
     let response = client
         .post(url)
         .header("Content-Type", "application/json; charset=utf-8")
         .body(body)
-        .timeout(timeout)
+        .timeout(timeout + REFUSAL_GRACE)
         .send()
         .await;
 
@@ -63,6 +59,9 @@ pub async fn invoke(url: &str, action: &str, params: Option<Value>, timeout: Dur
             };
         }
     };
+    if started.elapsed() > timeout {
+        return timed_out();
+    }
 
     if !response.status().is_success() {
         let status = response.status();
@@ -85,6 +84,9 @@ pub async fn invoke(url: &str, action: &str, params: Option<Value>, timeout: Dur
             };
         }
     };
+    if started.elapsed() > timeout {
+        return timed_out();
+    }
 
     match serde_json::from_slice::<Value>(&bytes) {
         Ok(Value::Object(body)) => AnkiResponse {
@@ -103,15 +105,24 @@ pub async fn invoke(url: &str, action: &str, params: Option<Value>, timeout: Dur
 }
 
 fn reqwest_error_text(error: &reqwest::Error, url: &str) -> String {
-    if error.is_connect() {
+    // A connect timeout is both `is_timeout` and `is_connect`: the timeout must win, or a host
+    // that drops SYNs reads as "fetch failed" where Node's AbortSignal says it timed out.
+    if error.is_timeout() {
+        TIMEOUT_TEXT.to_string()
+    } else if error.is_connect() {
         // undici's text for refused/reset connections.
         "fetch failed".to_string()
-    } else if error.is_timeout() {
-        "AnkiConnect request timed out".to_string()
     } else if error.is_builder() {
         format!("Failed to parse URL from {url}")
     } else {
         "fetch failed".to_string()
+    }
+}
+
+fn timed_out() -> AnkiResponse {
+    AnkiResponse {
+        result: None,
+        error: Some(TIMEOUT_TEXT.to_string()),
     }
 }
 

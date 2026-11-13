@@ -215,6 +215,52 @@ async fn http_error_keeps_node_status_text() {
 }
 
 #[tokio::test]
+async fn a_connect_that_drops_syns_times_out() {
+    // Node's AbortSignal.timeout reports the deadline, never "fetch failed", when the host drops
+    // SYNs; a connect timeout must not be classified as a refused connection.
+    let blackhole = common::blackhole();
+
+    let response = invoke(
+        &blackhole.url,
+        "deckNamesAndIds",
+        None,
+        Duration::from_millis(250),
+    )
+    .await;
+
+    assert_eq!(response.result, None);
+    assert_eq!(
+        response.error.as_deref(),
+        Some("AnkiConnect request timed out")
+    );
+}
+
+#[tokio::test]
+async fn an_answer_after_the_deadline_still_times_out() {
+    // The refusal grace only extends how long Windows takes to say ECONNREFUSED; a real answer
+    // that arrives after Node's deadline must still read as a timeout.
+    let anki = common::fake_anki(|_| common::FakeReply {
+        status: 200,
+        body: json!({ "result": {}, "error": null }).to_string(),
+        delay: Duration::from_millis(300),
+    });
+
+    let response = invoke(
+        &anki.url,
+        "deckNamesAndIds",
+        None,
+        Duration::from_millis(250),
+    )
+    .await;
+
+    assert_eq!(response.result, None);
+    assert_eq!(
+        response.error.as_deref(),
+        Some("AnkiConnect request timed out")
+    );
+}
+
+#[tokio::test]
 async fn slow_anki_times_out() {
     let anki = common::fake_anki(|_| common::FakeReply {
         status: 200,

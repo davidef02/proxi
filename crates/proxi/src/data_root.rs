@@ -207,7 +207,7 @@ pub fn run_cli_with(
     }
 }
 
-fn unknown_option(name: &str) -> String {
+pub(crate) fn unknown_option(name: &str) -> String {
     // Node's text really has no closing quote after the example: parity wins over prettiness.
     format!(
         "Unknown option '{name}'. To specify a positional argument starting with a '-', place it at the end of the command after '--', as in '-- \"{name}\""
