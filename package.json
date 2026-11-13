@@ -20,6 +20,7 @@
     "app:web": "vite --config app/web/vite.config.ts",
     "app:build": "vite build --config app/web/vite.config.ts",
     "test:app": "node --import tsx --test app/test/*.test.ts",
+    "golden:capture": "node --import tsx app/test/capture-golden.ts",
     "typecheck:app": "tsc -p app/tsconfig.json --noEmit",
     "e2e": "playwright test -c app/e2e/playwright.config.ts",
     "eval": "node --import tsx app/eval/run.ts",
