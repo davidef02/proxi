@@ -28,6 +28,7 @@ jobs:
       - run: npm run test:app
       - run: rustup toolchain install stable --profile minimal && rustup default stable
       - run: cargo build --release --locked
+      - run: npm run test:rust # ported HTTP/SSE tests against target/release/proxi
       - run: cargo test --locked
       - run: npx playwright install --with-deps chromium
       - run: npm run e2e
