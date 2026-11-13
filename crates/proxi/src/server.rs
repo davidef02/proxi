@@ -1,8 +1,4 @@
-<<<<<<< HEAD
-//! The local HTTP server: settings, limits, events, Anki status and the built UI.
-=======
-//! The local HTTP server: settings, limits, events, the map routes and the built UI.
->>>>>>> c67b96d (feat: serve map, graph, positions and node-delete from Rust, wave 4 (#5))
+//! The local HTTP server: settings, limits, events, Anki status, the map routes and the built UI.
 
 use std::convert::Infallible;
 use std::path::PathBuf;
@@ -10,12 +6,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Bytes;
-<<<<<<< HEAD
 use axum::extract::rejection::QueryRejection;
-use axum::extract::{Query, Request, State};
-=======
-use axum::extract::{Path, Request, State};
->>>>>>> c67b96d (feat: serve map, graph, positions and node-delete from Rust, wave 4 (#5))
+use axum::extract::{Path, Query, Request, State};
 use axum::http::{header, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -117,12 +109,9 @@ struct AppState {
     events: EventBus,
     keep_alive: Duration,
     limits: LimitsCache,
-<<<<<<< HEAD
     anki: AnkiClient,
     imports: ImportRegistry,
-=======
     graph: Arc<GraphStore>,
->>>>>>> c67b96d (feat: serve map, graph, positions and node-delete from Rust, wave 4 (#5))
 }
 
 pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
@@ -153,23 +142,16 @@ pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
         repo_str: repo_root.display().to_string(),
         data_str: data_root.display().to_string(),
         repo_root,
-<<<<<<< HEAD
-        data_root,
-=======
         data_root: data_root.clone(),
->>>>>>> c67b96d (feat: serve map, graph, positions and node-delete from Rust, wave 4 (#5))
         port,
         dist,
         events: events.clone(),
         keep_alive: opts.keep_alive,
         // One cache per server: Node keys it by repo root, and a server serves one repo.
         limits: LimitsCache::new(),
-<<<<<<< HEAD
         anki,
         imports: ImportRegistry::new(),
-=======
         graph: Arc::new(GraphStore::new(data_root)),
->>>>>>> c67b96d (feat: serve map, graph, positions and node-delete from Rust, wave 4 (#5))
     });
 
     let app = router(state);
@@ -193,7 +175,6 @@ fn router(state: Arc<AppState>) -> Router {
         )
         .route("/api/limits", get(get_limits).fallback(not_found))
         .route("/api/events", get(events_handler).fallback(not_found))
-<<<<<<< HEAD
         .route("/api/anki", get(get_anki).fallback(not_found))
         .route(
             "/api/anki/review",
@@ -202,7 +183,7 @@ fn router(state: Arc<AppState>) -> Router {
         .route(
             "/api/anki/import",
             post(post_anki_import).fallback(not_found),
-=======
+        )
         .route("/api/map", get(get_map).fallback(not_found))
         .route("/api/graph", get(get_graph).fallback(not_found))
         .route(
@@ -212,7 +193,6 @@ fn router(state: Arc<AppState>) -> Router {
         .route(
             "/api/graph/nodes/{id}/delete",
             post(delete_graph_node).fallback(not_found),
->>>>>>> c67b96d (feat: serve map, graph, positions and node-delete from Rust, wave 4 (#5))
         )
         .route("/api/", any(not_found))
         .route("/api/{*rest}", any(not_found))
