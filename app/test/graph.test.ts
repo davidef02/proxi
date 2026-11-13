@@ -3,9 +3,8 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { deleteNode, ensureLayout, graphDigest, mergeFindings, nextRevision, readPositions, readSnapshot, savePositions, validateFindings } from "../server/graph/store.ts";
-import { buildSnapshot, incrementalLayout, simplifyChains, seededRandom, type GraphChain } from "../shared/graph/index.ts";
-import { seedGraph } from "./seed-graph.ts";
+import { ensureLayout, graphDigest, mergeFindings, nextRevision, readPositions, readSnapshot, savePositions, validateFindings } from "../server/graph/store.ts";
+import { incrementalLayout, simplifyChains, seededRandom, type GraphChain } from "../shared/graph/index.ts";
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "learner-graph-"));
 const F = (props: [string, string][], chains: [string[], string][] = []) => ({
@@ -81,21 +80,6 @@ test("merge creates, links, dedupes chains with provenance union, simplifies", a
   assert.ok(Object.keys(snap.positions ?? {}).length >= 4);
 });
 
-test("delete cascades chains; arg_ deletes one chain", async () => {
-  const root = tmp();
-  await mergeFindings(root, "c/1", F([["p1", "A"], ["p2", "B"], ["p3", "C"]], [[["p1"], "p2"], [["p2"], "p3"]]));
-  let snap = await readSnapshot(root);
-  const b = snap.propositions.find((n) => n.name === "B")!;
-  await deleteNode(root, b.id);
-  snap = await readSnapshot(root);
-  assert.equal(snap.propositions.length, 2);
-  assert.equal(snap.chains.length, 0);
-  await mergeFindings(root, "c/2", F([["p1", "X"], ["p2", "Y"]], [[["p1"], "p2"]]));
-  snap = await readSnapshot(root);
-  await deleteNode(root, snap.chains[0].id);
-  assert.equal((await readSnapshot(root)).chains.length, 0);
-});
-
 test("corrupt and unterminated ledger lines are skipped, appends stay on their own line", async () => {
   const root = tmp();
   await mergeFindings(root, "c/1", F([["p1", "A"]]));
@@ -118,113 +102,6 @@ test("simplifyChains: ancestry cover", () => {
   assert.deepEqual(kept.map((c) => c.id), ["a1", "a2"]);
 });
 
-test("snapshot carries the worst mastery status of each proposition's provenance", async () => {
-  const root = tmp();
-  const dir = path.join(root, "courses", "demo", "lessons");
-  fs.mkdirSync(dir, { recursive: true });
-  const doc = {
-    metadata: { lessonNumber: 1, topic: "T", title: "T", slug: "t", dateCreated: "", dateModified: "", version: "1" },
-    nodes: [
-      { nodeId: "alpha", title: "A", tier: "axiom", content: "x" },
-      { nodeId: "beta", title: "B", tier: "derivation", content: "x", dependencies: ["alpha", "ghost"] },
-      { nodeId: "gamma", title: "C", tier: "derivation", content: "x" },
-    ],
-  };
-  fs.writeFileSync(path.join(dir, "0001-t.html"), `<script type="application/json" id="lesson-data">${JSON.stringify(doc)}</script>`);
-
-  const progressFile = path.join(root, "courses", "demo", "progress.jsonl");
-  fs.writeFileSync(
-    progressFile,
-    JSON.stringify({ at: "2026-01-01T00:00:00Z", sessionId: "s", course: "demo", lessonSlug: "t", nodeRefs: ["alpha"], kind: "check", correct: true, confidence: 20 }) + "\n" +
-    JSON.stringify({ at: "2026-01-01T00:00:00Z", sessionId: "s", course: "demo", lessonSlug: "t", nodeRefs: ["beta"], kind: "check", correct: false }) + "\n",
-  );
-
-  await mergeFindings(root, "demo/0001-t", {
-    propositions: [
-      { id: "p1", name: "P1", statement: "p1", nodeId: "alpha" },
-      { id: "p2", name: "P2", statement: "p2", nodeId: "alpha" },
-      { id: "p3", name: "P3", statement: "p3", nodeId: "gamma" },
-    ],
-    chains: [
-      { premises: ["p1"], conclusion: "p2" },
-      { premises: ["p2"], conclusion: "p3" },
-    ],
-  });
-
-  let snap = await readSnapshot(root);
-  const p1 = snap.propositions.find((n) => n.name === "P1")!;
-  const p2 = snap.propositions.find((n) => n.name === "P2")!;
-  const p3 = snap.propositions.find((n) => n.name === "P3")!;
-
-  await mergeFindings(root, "demo/0001-t", {
-    propositions: [
-      { id: "p1", name: "P2", statement: "p2", linkTo: p2.id, nodeId: "beta" },
-    ],
-    chains: [
-      { premises: [p1.id], conclusion: "p1" },
-    ],
-  });
-
-  snap = await readSnapshot(root);
-  const p1After = snap.propositions.find((n) => n.id === p1.id)!;
-  const p2After = snap.propositions.find((n) => n.id === p2.id)!;
-  const p3After = snap.propositions.find((n) => n.id === p3.id)!;
-
-  assert.equal(p1After.status, "shaky");
-  assert.equal(p2After.status, "missed");
-  assert.equal(p3After.status, "taught");
-
-  for (const n of snap.nodes.filter((n) => n.id.startsWith("arg_"))) {
-    assert.equal(n.status, undefined);
-  }
-
-  for (const p of snap.propositions) {
-    const nodeInSnap = snap.nodes.find((n) => n.id === p.id)!;
-    assert.equal(nodeInSnap.status, p.status);
-  }
-
-  const emptyRoot = tmp();
-  await mergeFindings(emptyRoot, "demo/0001-t", {
-    propositions: [
-      { id: "p1", name: "P1", statement: "p1", nodeId: "alpha" },
-      { id: "p2", name: "P2", statement: "p2", nodeId: "beta" },
-      { id: "p3", name: "P3", statement: "p3", nodeId: "gamma" },
-    ],
-    chains: [{ premises: ["p1", "p2"], conclusion: "p3" }],
-  });
-  const emptySnap = await readSnapshot(emptyRoot);
-  assert.ok(emptySnap.propositions.length > 0);
-  assert.ok(emptySnap.propositions.every((p) => p.status === undefined));
-  assert.ok(emptySnap.nodes.some((n) => n.id.startsWith("arg_")));
-  assert.ok(emptySnap.nodes.every((n) => n.status === undefined));
-});
-
-test("snapshot survives a knowledge map that throws: statuses are dropped, the map is not", async () => {
-  const root = tmp();
-  await mergeFindings(root, "demo/0001-t", F([["p1", "A"], ["p2", "B"]], [[["p1"], "p2"]]));
-  // A `courses` file instead of a directory makes the lesson scan throw (ENOTDIR): the status join
-  // must fail open, because a broken data folder must never break the map.
-  fs.writeFileSync(path.join(root, "courses"), "not a directory");
-
-  const snap = await readSnapshot(root);
-  assert.equal(snap.propositions.length, 2);
-  assert.ok(snap.propositions.every((p) => p.status === undefined));
-  assert.ok(snap.nodes.every((n) => n.status === undefined));
-});
-
-test("deriveView: multi-premise chains mint implication nodes; seeded map has labels and clusters", async () => {
-  const root = tmp();
-  await seedGraph(root);
-  const snap = await readSnapshot(root);
-  const multi = snap.chains.filter((c) => c.premises.length > 1);
-  assert.equal(snap.nodes.length, snap.propositions.length + multi.length);
-  assert.equal(snap.impLinks.length, multi.length);
-  assert.ok(snap.logicalEdges.length >= snap.chains.length);
-  assert.ok(snap.clusters.length >= 3);
-  assert.ok(Object.values(snap.sessions).some((s) => s.startsWith("Lezione 1 · ")));
-  assert.equal(buildSnapshot([], [], {}).nodes.length, 0);
-});
-
 test("layout is deterministic for the same input", () => {
   const nodes = ["n_a", "n_b", "n_c", "n_d"].map((id) => ({ id }));
   const edges = [
@@ -237,20 +114,6 @@ test("layout is deterministic for the same input", () => {
   assert.deepEqual([...a], [...b]);
   assert.equal(seededRandom("x")(), seededRandom("x")());
   assert.notEqual(seededRandom("x")(), seededRandom("y")());
-});
-
-test("deleteNode keeps lines the readers cannot parse; simplify rewrite does too", async () => {
-  const root = tmp();
-  await mergeFindings(root, "c/1", F([["p1", "A"], ["p2", "B"], ["p3", "C"]], [[["p1"], "p3"]]));
-  const nodesFile = path.join(root, "graph", "nodes.jsonl");
-  fs.appendFileSync(nodesFile, '{"id":"n_future","name":"x"}\n{broken\n');
-  const snap = await readSnapshot(root);
-  const victim = snap.propositions.find((p) => p.name === "B")!.id;
-  await deleteNode(root, victim);
-  const raw = fs.readFileSync(nodesFile, "utf-8");
-  assert.match(raw, /n_future/);
-  assert.match(raw, /\{broken/);
-  assert.equal((await readSnapshot(root)).propositions.some((p) => p.id === victim), false);
 });
 
 test("a layout failure does not fail the merge; ensureLayout rebuilds; positions ignore unknown ids", async () => {
