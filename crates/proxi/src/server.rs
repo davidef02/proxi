@@ -1,4 +1,4 @@
-//! The local HTTP server: settings, limits, events and the built UI.
+//! The local HTTP server: settings, limits, events, transcription, updates and the built UI.
 
 use std::convert::Infallible;
 use std::path::PathBuf;
@@ -6,12 +6,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Bytes;
-use axum::extract::{Request, State};
+use axum::extract::multipart::MultipartRejection;
+use axum::extract::{DefaultBodyLimit, Multipart, Request, State};
 use axum::http::{header, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{any, get};
+use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use futures_util::stream::Stream;
 use serde_json::{json, Value};
@@ -21,13 +22,18 @@ use tower_http::services::{ServeDir, ServeFile};
 use crate::data_root::{self, DATA_ROOT_ENV};
 use crate::events::{self, EventBus};
 use crate::limits::{self, LimitsCache};
-use crate::protocol::{GlobalEvent, LearnerSettings, SettingsResponse, DEFAULT_PORT};
+use crate::protocol::{
+    GlobalEvent, LearnerSettings, SettingsResponse, UpdateStatusResponse, DEFAULT_PORT,
+};
 use crate::settings::{self, SettingsError};
+use crate::stt;
+use crate::update::{self, ActiveWork, NoActiveWork, UpdateConfig, UpdateManager};
 
 /// Shown instead of the SPA when `app/web/dist` has not been built (main.ts:536-537).
 const MISSING_UI: &str = "Proxi: la UI non è stata compilata. Esegui `npm run app:build` e riapri questa pagina.";
 
-/// Base URLs for tests; `None` = the real service. Stored now, honoured by the issues that port each client.
+/// Base URLs for tests; `None` = the real service. Each client honours its own (the
+/// transcription route uses `transcription`; the rest are wired up by later issues).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Endpoints {
     pub anki: Option<String>,
@@ -44,6 +50,7 @@ pub struct EngineBins {
     pub opencode: Option<PathBuf>,
     pub git: Option<PathBuf>,
     pub npm: Option<PathBuf>,
+    pub cargo: Option<PathBuf>,
 }
 
 pub struct ServerOptions {
@@ -55,6 +62,10 @@ pub struct ServerOptions {
     pub endpoints: Endpoints,
     pub bins: EngineBins,
     pub memory_secrets: bool,
+    /// None = no relaunch signal (library and tests).
+    pub relaunch: Option<Arc<dyn Fn() + Send + Sync>>,
+    pub active_work: Arc<dyn ActiveWork>,
+    pub check_update_on_start: bool,
 }
 
 impl ServerOptions {
@@ -68,6 +79,9 @@ impl ServerOptions {
             endpoints: Endpoints::default(),
             bins: EngineBins::default(),
             memory_secrets: false,
+            relaunch: None,
+            active_work: Arc::new(NoActiveWork),
+            check_update_on_start: false,
         }
     }
 }
@@ -100,6 +114,9 @@ struct AppState {
     events: EventBus,
     keep_alive: Duration,
     limits: LimitsCache,
+    update: Arc<UpdateManager>,
+    transcription: Option<String>,
+    http: reqwest::Client,
 }
 
 pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
@@ -116,10 +133,27 @@ pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
     let dist = opts
         .dist_dir
         .unwrap_or_else(|| repo_root.join("app").join("web").join("dist"));
+    let transcription = opts.endpoints.transcription.clone();
+
+    // A previous build may have left its exe aside; it is not the running process anymore.
+    update::remove_leftover(&repo_root);
 
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", opts.port)).await?;
     let port = listener.local_addr()?.port();
     let events = EventBus::new();
+    let update = Arc::new(UpdateManager::new(UpdateConfig {
+        repo_root: repo_root.clone(),
+        git: opts.bins.git.clone().unwrap_or_else(|| PathBuf::from("git")),
+        cargo: opts
+            .bins
+            .cargo
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("cargo")),
+        events: events.clone(),
+        active_work: opts.active_work,
+        relaunch: opts.relaunch,
+    }));
+    let check_update_on_start = opts.check_update_on_start;
     let state = Arc::new(AppState {
         repo_str: repo_root.display().to_string(),
         data_str: data_root.display().to_string(),
@@ -130,12 +164,21 @@ pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
         keep_alive: opts.keep_alive,
         // One cache per server: Node keys it by repo root, and a server serves one repo.
         limits: LimitsCache::new(),
+        update: update.clone(),
+        transcription,
+        http: reqwest::Client::new(),
     });
 
     let app = router(state);
     let task = tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     });
+
+    if check_update_on_start {
+        tokio::spawn(async move {
+            let _ = update.check().await;
+        });
+    }
 
     Ok(RunningServer {
         port,
@@ -153,6 +196,16 @@ fn router(state: Arc<AppState>) -> Router {
         )
         .route("/api/limits", get(get_limits).fallback(not_found))
         .route("/api/events", get(events_handler).fallback(not_found))
+        .route(
+            "/api/transcribe",
+            post(transcribe)
+                // axum's 2 MB default would reject long dictations; Node has no limit.
+                .layer(DefaultBodyLimit::max(100 * 1024 * 1024))
+                .fallback(not_found),
+        )
+        .route("/api/update", get(get_update).fallback(not_found))
+        .route("/api/update/check", post(post_update_check).fallback(not_found))
+        .route("/api/update/apply", post(post_update_apply).fallback(not_found))
         .route("/api/", any(not_found))
         .route("/api/{*rest}", any(not_found))
         .fallback_service(
@@ -292,6 +345,76 @@ async fn events_handler(
     )
 }
 
+/// Node takes the first `audio` file field; anything else is ignored.
+async fn transcribe(
+    State(state): State<Arc<AppState>>,
+    multipart: Result<Multipart, MultipartRejection>,
+) -> Response {
+    let Ok(mut multipart) = multipart else {
+        return json_error(StatusCode::BAD_REQUEST, "Errore di trascrizione");
+    };
+    let audio = loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(field)) => field,
+            Ok(None) => return json_error(StatusCode::BAD_REQUEST, "File audio mancante"),
+            Err(_) => return json_error(StatusCode::BAD_REQUEST, "Errore di trascrizione"),
+        };
+        if field.name() != Some("audio") || field.file_name().is_none() {
+            continue;
+        }
+        let content_type = field.content_type().map(str::to_string);
+        match field.bytes().await {
+            Ok(bytes) => break stt::Audio { bytes, content_type },
+            Err(_) => return json_error(StatusCode::BAD_REQUEST, "Errore di trascrizione"),
+        }
+    };
+
+    let settings = settings::read_settings(&state.repo_root);
+    match stt::transcribe(
+        &state.http,
+        state.transcription.as_deref(),
+        &settings,
+        audio,
+        |key| std::env::var(key).ok(),
+    )
+    .await
+    {
+        Ok(text) => Json(json!({ "text": text })).into_response(),
+        Err(message) => json_error(StatusCode::BAD_REQUEST, &message),
+    }
+}
+
+fn update_response(update: &UpdateManager) -> Json<UpdateStatusResponse> {
+    Json(UpdateStatusResponse {
+        status: update.status(),
+        active_sessions: update.active_sessions(),
+    })
+}
+
+async fn get_update(State(state): State<Arc<AppState>>) -> Json<UpdateStatusResponse> {
+    update_response(&state.update)
+}
+
+async fn post_update_check(State(state): State<Arc<AppState>>) -> Json<UpdateStatusResponse> {
+    state.update.check().await;
+    update_response(&state.update)
+}
+
+async fn post_update_apply(State(state): State<Arc<AppState>>, body: Bytes) -> Response {
+    match state.update.apply(update::force_from_body(&body)).await {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => {
+            let status =
+                StatusCode::from_u16(error.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            let mut payload = json!({ "error": error.message });
+            if let Some(code) = error.code {
+                payload["code"] = Value::String(code.to_string());
+            }
+            (status, Json(payload)).into_response()
+        }
+    }
+}
+
 /// Mirrors `Number(env.LEARNER_PORT) || DEFAULT_PORT` followed by `listen` (main.ts:628,549-560).
 ///
 /// Two documented divergences from JS `Number`: `0x`/`0o`/`0b` literals and `Infinity` are
@@ -347,6 +470,9 @@ pub struct ServeArgs {
     /// npm executable (tests: a fake)
     #[arg(long, value_name = "PATH")]
     pub npm_bin: Option<PathBuf>,
+    /// cargo executable for the update build (tests: a fake)
+    #[arg(long, value_name = "PATH")]
+    pub cargo_bin: Option<PathBuf>,
     /// AnkiConnect base URL (tests: a local fake)
     #[arg(long, value_name = "URL")]
     pub anki_url: Option<String>,
@@ -365,6 +491,9 @@ pub struct ServeArgs {
     /// Keep secrets in memory instead of the OS store (tests)
     #[arg(long)]
     pub memory_secrets: bool,
+    /// Skip the update check at startup (tests)
+    #[arg(long)]
+    pub no_update_check: bool,
 }
 
 impl ServeArgs {
@@ -391,8 +520,10 @@ impl ServeArgs {
             opencode: self.opencode_bin,
             git: self.git_bin,
             npm: self.npm_bin,
+            cargo: self.cargo_bin,
         };
         options.memory_secrets = self.memory_secrets;
+        options.check_update_on_start = !self.no_update_check;
         Ok(options)
     }
 }
@@ -415,10 +546,18 @@ pub fn serve_cli(args: ServeArgs) -> i32 {
     };
 
     runtime.block_on(async move {
+        let notify = Arc::new(tokio::sync::Notify::new());
+        let mut opts = opts;
+        let signal = notify.clone();
+        opts.relaunch = Some(Arc::new(move || signal.notify_one()));
         match start(opts).await {
             Ok(server) => {
                 println!("Proxi: {}", server.url);
-                let _ = tokio::signal::ctrl_c().await;
+                // The shell restarts the app after this exit (D9).
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = notify.notified() => {}
+                }
                 server.close();
                 0
             }
@@ -488,6 +627,8 @@ mod tests {
             "g",
             "--npm-bin",
             "n",
+            "--cargo-bin",
+            "b",
             "--anki-url",
             "http://anki",
             "--github-url",
@@ -499,6 +640,7 @@ mod tests {
             "--transcription-url",
             "http://stt",
             "--memory-secrets",
+            "--no-update-check",
         ])
         .expect("parse full flags");
         let opts = args.into_options(None).expect("into options");
@@ -524,9 +666,17 @@ mod tests {
                 opencode: Some(PathBuf::from("o")),
                 git: Some(PathBuf::from("g")),
                 npm: Some(PathBuf::from("n")),
+                cargo: Some(PathBuf::from("b")),
             }
         );
         assert!(opts.memory_secrets);
+        assert!(!opts.check_update_on_start);
+    }
+
+    #[test]
+    fn serve_args_check_update_by_default() {
+        let args = parse_serve_args(&[]).expect("parse without flags");
+        assert!(args.into_options(None).unwrap().check_update_on_start);
     }
 
     #[test]

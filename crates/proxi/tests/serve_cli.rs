@@ -23,12 +23,14 @@ const FLAGS: &[&str] = &[
     "--opencode-bin",
     "--git-bin",
     "--npm-bin",
+    "--cargo-bin",
     "--anki-url",
     "--github-url",
     "--google-url",
     "--huggingface-url",
     "--transcription-url",
     "--memory-secrets",
+    "--no-update-check",
 ];
 
 /// A spawned server, killed on drop so a failing test never leaks a process.
