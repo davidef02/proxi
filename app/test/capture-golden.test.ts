@@ -7,7 +7,7 @@ import { after, describe, it } from "node:test";
 import { captureGolden, GOLDEN_DIR, ISO_RE, normalise, rootVariants } from "./capture-golden.ts";
 import { REPO_ROOT } from "./harness.ts";
 
-const ROUTES = ["settings", "limits", "events", "graph"];
+const ROUTES = ["settings", "limits", "events", "graph", "sync"];
 
 const dirs: string[] = [];
 function tempDir(prefix: string): string {
@@ -111,6 +111,30 @@ it("graph golden holds the graph event and JS-shaped positions", () => {
   assert.match(goldenText("graph"), /"dataSeed"/);
 });
 
+it("sync golden records one commit with the normalised host", () => {
+  const file = JSON.parse(goldenText("sync")) as {
+    cases: Array<{ name: string; remote?: { method: string; path: string; body: unknown }[] }>;
+  };
+  const first = file.cases.find((c) => c.name === "run-first");
+  const again = file.cases.find((c) => c.name === "run-again");
+  assert.ok(first?.remote, "run-first has no remote log");
+  const base = "/repos/tester/proxi-data";
+  assert.deepEqual(
+    first.remote.map((r) => `${r.method} ${r.path}`),
+    [
+      `POST ${base}/git/blobs`,
+      `POST ${base}/git/blobs`,
+      `POST ${base}/git/blobs`,
+      `POST ${base}/git/trees`,
+      `POST ${base}/git/commits`,
+      `PATCH ${base}/git/refs/heads/main`,
+    ],
+  );
+  const commit = first.remote.find((r) => r.path === `${base}/git/commits`);
+  assert.equal((commit?.body as { message?: string } | undefined)?.message, "sync: 3 sent, 0 deleted (<host>)");
+  assert.deepEqual(again?.remote, []);
+});
+
 it("golden fixtures hold no raw timestamps", () => {
   // Only the captured cases: the seed is the replay's input and keeps its fixed literal timestamp.
   for (const route of ROUTES) {
@@ -123,12 +147,14 @@ it("golden fixtures hold no raw timestamps", () => {
 it("golden fixtures hold no key-like or personal data", () => {
   const keyLike = new RegExp("(?<![A-Za-z0-9_-])" + "sk" + "-");
   const personal = [os.tmpdir(), fs.realpathSync.native(os.tmpdir()), REPO_ROOT];
+  const host = `(${os.hostname()})`;
   for (const route of ROUTES) {
     const text = goldenText(route);
     assert.doesNotMatch(text, keyLike, route);
     // Walk the parsed values: JSON's escaping of Windows backslashes would hide a path in the raw text.
     walkStrings(JSON.parse(text), (s) => {
       for (const needle of personal) assert.equal(s.includes(needle), false, `${route}: ${s} contains ${needle}`);
+      assert.equal(s.includes(host), false, `${route}: ${s} contains the hostname`);
     });
   }
   assert.match(goldenText("settings"), /"<repoRoot>"/);

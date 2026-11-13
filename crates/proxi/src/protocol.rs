@@ -100,6 +100,7 @@ pub enum GlobalEvent {
     Limits { limits: serde_json::Value },
     Settings { settings: SettingsResponse },
     Graph { revision: u64 },
+    Sync { status: SyncStatus },
 }
 
 /// A number as JS prints it: `JSON.stringify(4)` is `4`, serde prints `4.0` for an f64.
@@ -195,6 +196,100 @@ pub struct AnkiReviewRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub interval: Option<serde_json::Value>,
     pub correct: bool,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingDeletions {
+    pub count: u64,
+    pub total: u64,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubPending {
+    pub user_code: String,
+    pub verification_uri: String,
+    pub expires_at: String,
+}
+
+/// The loose `...last` spread of Node's status: state first, the counters only when a pass set them.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncLast {
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pushed: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pulled: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deleted: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conflicts: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_deletions: Option<PendingDeletions>,
+}
+
+impl Default for SyncLast {
+    fn default() -> Self {
+        Self {
+            state: "idle".to_string(),
+            at: None,
+            pushed: None,
+            pulled: None,
+            deleted: None,
+            conflicts: None,
+            error: None,
+            pending_deletions: None,
+        }
+    }
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubStatus {
+    pub connected: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub login: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending: Option<GithubPending>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GdriveStatus {
+    pub connected: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    pub pending: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncStatus {
+    #[serde(flatten)]
+    pub last: SyncLast,
+    pub provider: String,
+    pub data_root: String,
+    pub data_root_from_env: bool,
+    pub needs_data: bool,
+    pub encrypted: bool,
+    pub github: GithubStatus,
+    pub gdrive: GdriveStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub restart_required: Option<bool>,
+    pub conflict_count: u64,
+    pub trash_count: u64,
 }
 
 #[cfg(test)]
@@ -369,6 +464,62 @@ mod tests {
         assert!(
             !serde_json::to_string(&without_lapses).unwrap().contains("lapses"),
             "None must be dropped like undefined"
+        );
+    }
+
+    #[test]
+    fn sync_status_json_matches_node() {
+        let status = SyncStatus {
+            last: SyncLast::default(),
+            provider: "local".to_string(),
+            data_root: "D".to_string(),
+            data_root_from_env: false,
+            needs_data: true,
+            encrypted: false,
+            github: GithubStatus::default(),
+            gdrive: GdriveStatus::default(),
+            restart_required: None,
+            conflict_count: 0,
+            trash_count: 0,
+        };
+        assert_eq!(
+            serde_json::to_string(&status).unwrap(),
+            r#"{"state":"idle","provider":"local","dataRoot":"D","dataRootFromEnv":false,"needsData":true,"encrypted":false,"github":{"connected":false},"gdrive":{"connected":false,"pending":false},"conflictCount":0,"trashCount":0}"#
+        );
+    }
+
+    #[test]
+    fn sync_status_last_fields_come_first() {
+        let status = SyncStatus {
+            last: SyncLast {
+                state: "error".to_string(),
+                at: Some("A".to_string()),
+                error: Some("E".to_string()),
+                ..SyncLast::default()
+            },
+            provider: "github".to_string(),
+            data_root: "D".to_string(),
+            ..SyncStatus::default()
+        };
+        let json = serde_json::to_string(&status).unwrap();
+        assert!(
+            json.starts_with(r#"{"state":"error","at":"A","error":"E","provider":"github","#),
+            "{json}"
+        );
+    }
+
+    #[test]
+    fn sync_event_serialises_type_first() {
+        let event = GlobalEvent::Sync {
+            status: SyncStatus {
+                provider: "local".to_string(),
+                ..SyncStatus::default()
+            },
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(
+            json.starts_with(r#"{"type":"sync","status":{"state":"#),
+            "{json}"
         );
     }
 }

@@ -1,4 +1,4 @@
-//! The local HTTP server: settings, limits, events, Anki status, the map routes and the built UI.
+//! The local HTTP server: settings, limits, events, Anki status, the map routes, sync and the built UI.
 
 use std::convert::Infallible;
 use std::path::PathBuf;
@@ -23,13 +23,17 @@ use crate::anki_client::{self, AnkiClient};
 use crate::anki_import::ImportRegistry;
 use crate::anki_status::{start_review, status_all, status_for_course, ReviewStart};
 use crate::course_data::{course_deck_name_for, valid_course};
-use crate::data_root::{self, DATA_ROOT_ENV};
+use crate::data_root::{self, DataRootSource, DATA_ROOT_ENV};
 use crate::events::{self, EventBus};
 use crate::graph::store::GraphStore;
 use crate::knowledge;
 use crate::limits::{self, LimitsCache};
-use crate::protocol::{GlobalEvent, LearnerSettings, SettingsResponse, DEFAULT_PORT};
+use crate::protocol::{GlobalEvent, LearnerSettings, SettingsResponse, SyncStatus, DEFAULT_PORT};
 use crate::settings::{self, SettingsError};
+use crate::sync::github::{GithubEndpoints, real_sleeper};
+use crate::sync::routes::spawn_auto;
+use crate::sync::secrets::{ElectronDecryptor, KeychainStore, MemoryStore, SecretStore};
+use crate::sync::service::{SyncConfig, SyncService};
 
 /// Shown instead of the SPA when `app/web/dist` has not been built (main.ts:536-537).
 const MISSING_UI: &str = "Proxi: la UI non è stata compilata. Esegui `npm run app:build` e riapri questa pagina.";
@@ -84,18 +88,36 @@ pub struct RunningServer {
     pub port: u16,
     pub url: String,
     pub events: EventBus,
+    sync: SyncService,
+    auto: JoinHandle<()>,
     task: JoinHandle<()>,
 }
 
 impl RunningServer {
     pub fn close(self) {
         self.task.abort();
+        self.auto.abort();
+    }
+
+    /// One last auto pass, bounded so quitting cannot hang, then stop serving.
+    pub async fn shutdown(self) {
+        self.auto.abort();
+        if self.sync.auto_enabled() {
+            let sync = self.sync.clone();
+            let _ = tokio::time::timeout(
+                Duration::from_secs(15),
+                tokio::task::spawn_blocking(move || sync.run(false)),
+            )
+            .await;
+        }
+        self.close();
     }
 }
 
 impl Drop for RunningServer {
     fn drop(&mut self) {
         self.task.abort();
+        self.auto.abort();
     }
 }
 
@@ -116,14 +138,17 @@ struct AppState {
 
 pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
     let repo_root = data_root::resolve_path(&opts.repo_root);
-    let data_root = match opts.data_root {
-        Some(path) => data_root::resolve_path(&path),
-        None => data_root::resolve_data_root(
-            &repo_root,
-            std::env::var(DATA_ROOT_ENV).ok().as_deref(),
-            &data_root::home_dir(),
-        )
-        .data_root,
+    let (data_root, data_root_from_env) = match &opts.data_root {
+        Some(path) => (data_root::resolve_path(path), false),
+        None => {
+            let resolved = data_root::resolve_data_root(
+                &repo_root,
+                std::env::var(DATA_ROOT_ENV).ok().as_deref(),
+                &data_root::home_dir(),
+            );
+            let from_env = resolved.source == DataRootSource::Env;
+            (resolved.data_root, from_env)
+        }
     };
     let dist = opts
         .dist_dir
@@ -135,9 +160,41 @@ pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
     );
     let anki = AnkiClient::new(anki_url).map_err(std::io::Error::other)?;
 
+    let events = EventBus::new();
+    let store: Arc<dyn SecretStore> = if opts.memory_secrets {
+        Arc::new(MemoryStore::default())
+    } else {
+        Arc::new(KeychainStore::new())
+    };
+    let status_events = events.clone();
+    let pulled_events = events.clone();
+    let sync_cfg = SyncConfig {
+        repo_root: repo_root.clone(),
+        data_root: data_root.clone(),
+        data_root_from_env,
+        github: GithubEndpoints::from_override(opts.endpoints.github.as_deref()),
+        sleep: real_sleeper(),
+        store,
+        decryptor: Arc::new(ElectronDecryptor {
+            profiles: ElectronDecryptor::default_profiles(),
+        }),
+        make_provider: None,
+        on_status: Arc::new(move |status: &SyncStatus| {
+            status_events.emit(&GlobalEvent::Sync {
+                status: status.clone(),
+            });
+        }),
+        on_pulled: Arc::new(move || {
+            pulled_events.emit(&json!({ "type": "courses" }));
+        }),
+    };
+    // The keychain and the legacy migration are blocking: off the worker threads.
+    let sync = tokio::task::spawn_blocking(move || SyncService::new(sync_cfg))
+        .await
+        .map_err(std::io::Error::other)?;
+
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", opts.port)).await?;
     let port = listener.local_addr()?.port();
-    let events = EventBus::new();
     let state = Arc::new(AppState {
         repo_str: repo_root.display().to_string(),
         data_str: data_root.display().to_string(),
@@ -154,7 +211,8 @@ pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
         graph: Arc::new(GraphStore::new(data_root)),
     });
 
-    let app = router(state);
+    let app = router(state, sync.clone());
+    let auto = spawn_auto(sync.clone(), events.clone());
     let task = tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     });
@@ -163,11 +221,13 @@ pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
         port,
         url: format!("http://127.0.0.1:{port}"),
         events,
+        sync,
+        auto,
         task,
     })
 }
 
-fn router(state: Arc<AppState>) -> Router {
+fn router(state: Arc<AppState>, sync: SyncService) -> Router {
     Router::new()
         .route(
             "/api/settings",
@@ -196,6 +256,8 @@ fn router(state: Arc<AppState>) -> Router {
         )
         .route("/api/", any(not_found))
         .route("/api/{*rest}", any(not_found))
+        // Merged before the layer so the host/CSRF guards still cover it.
+        .merge(crate::sync::routes::router(sync))
         .fallback_service(
             ServeDir::new(&state.dist).fallback(ServeFile::new(state.dist.join("index.html"))),
         )
@@ -640,12 +702,12 @@ pub fn serve_cli(args: ServeArgs) -> i32 {
         }
     };
 
-    runtime.block_on(async move {
+    let code = runtime.block_on(async move {
         match start(opts).await {
             Ok(server) => {
                 println!("Proxi: {}", server.url);
                 let _ = tokio::signal::ctrl_c().await;
-                server.close();
+                server.shutdown().await;
                 0
             }
             Err(error) => {
@@ -653,7 +715,10 @@ pub fn serve_cli(args: ServeArgs) -> i32 {
                 1
             }
         }
-    })
+    });
+    // Do not wait for the blocking pool: a pass stuck on GitHub would keep quitting for minutes.
+    runtime.shutdown_timeout(Duration::from_secs(1));
+    code
 }
 
 #[cfg(test)]
