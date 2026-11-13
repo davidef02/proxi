@@ -1,4 +1,4 @@
-//! The local HTTP server: settings, limits, events, Anki status and the built UI.
+//! The local HTTP server: settings, limits, events, Anki status, the map routes and the built UI.
 
 use std::convert::Infallible;
 use std::path::PathBuf;
@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use axum::body::Bytes;
 use axum::extract::rejection::QueryRejection;
-use axum::extract::{Query, Request, State};
+use axum::extract::{Path, Query, Request, State};
 use axum::http::{header, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -25,6 +25,8 @@ use crate::anki_status::{start_review, status_all, status_for_course, ReviewStar
 use crate::course_data::{course_deck_name_for, valid_course};
 use crate::data_root::{self, DATA_ROOT_ENV};
 use crate::events::{self, EventBus};
+use crate::graph::store::GraphStore;
+use crate::knowledge;
 use crate::limits::{self, LimitsCache};
 use crate::protocol::{GlobalEvent, LearnerSettings, SettingsResponse, DEFAULT_PORT};
 use crate::settings::{self, SettingsError};
@@ -109,6 +111,7 @@ struct AppState {
     limits: LimitsCache,
     anki: AnkiClient,
     imports: ImportRegistry,
+    graph: Arc<GraphStore>,
 }
 
 pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
@@ -139,7 +142,7 @@ pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
         repo_str: repo_root.display().to_string(),
         data_str: data_root.display().to_string(),
         repo_root,
-        data_root,
+        data_root: data_root.clone(),
         port,
         dist,
         events: events.clone(),
@@ -148,6 +151,7 @@ pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
         limits: LimitsCache::new(),
         anki,
         imports: ImportRegistry::new(),
+        graph: Arc::new(GraphStore::new(data_root)),
     });
 
     let app = router(state);
@@ -179,6 +183,16 @@ fn router(state: Arc<AppState>) -> Router {
         .route(
             "/api/anki/import",
             post(post_anki_import).fallback(not_found),
+        )
+        .route("/api/map", get(get_map).fallback(not_found))
+        .route("/api/graph", get(get_graph).fallback(not_found))
+        .route(
+            "/api/graph/positions",
+            post(post_positions).fallback(not_found),
+        )
+        .route(
+            "/api/graph/nodes/{id}/delete",
+            post(delete_graph_node).fallback(not_found),
         )
         .route("/api/", any(not_found))
         .route("/api/{*rest}", any(not_found))
@@ -424,6 +438,84 @@ async fn events_handler(
             .interval(state.keep_alive)
             .text("keep-alive"),
     )
+}
+
+/// `GET /api/map`: scan the lessons and the progress ledger, derive the knowledge map.
+async fn get_map(State(state): State<Arc<AppState>>) -> Response {
+    let data_root = state.data_root.clone();
+    match tokio::task::spawn_blocking(move || knowledge::build_knowledge_map(&data_root)).await {
+        Ok(Ok(map)) => Json(map.to_json()).into_response(),
+        Ok(Err(message)) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &message),
+        Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"),
+    }
+}
+
+/// `GET /api/graph`: lay out whatever has no position yet, then the snapshot.
+async fn get_graph(State(state): State<Arc<AppState>>) -> Response {
+    let store = state.graph.clone();
+    let snapshot = tokio::task::spawn_blocking(move || {
+        store.ensure_layout();
+        store.read_snapshot().to_json()
+    })
+    .await;
+    match snapshot {
+        Ok(value) => Json(value).into_response(),
+        Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"),
+    }
+}
+
+async fn post_positions(State(state): State<Arc<AppState>>, body: Bytes) -> Response {
+    // Raw bytes on purpose: the Node server ignores the content-type (c.req.json()).
+    let parsed: Value = match serde_json::from_slice(&body) {
+        Ok(value) => value,
+        Err(_) => return json_error(StatusCode::BAD_REQUEST, "positions mancante"),
+    };
+    let Some(positions) = parsed.get("positions") else {
+        return json_error(StatusCode::BAD_REQUEST, "positions mancante");
+    };
+    if !positions.is_object() && !positions.is_array() {
+        return json_error(StatusCode::BAD_REQUEST, "positions mancante");
+    }
+    let update = positions.clone();
+    let store = state.graph.clone();
+    match tokio::task::spawn_blocking(move || store.save_positions(&update)).await {
+        Ok(Ok(())) => Json(json!({ "ok": true })).into_response(),
+        Ok(Err(error)) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
+        Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"),
+    }
+}
+
+/// `^(n|arg)_[\w-]+$`, hand-rolled: the crate has no regex.
+fn valid_graph_id(id: &str) -> bool {
+    let rest = id
+        .strip_prefix("arg_")
+        .or_else(|| id.strip_prefix("n_"));
+    rest.is_some_and(|rest| {
+        !rest.is_empty()
+            && rest
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    })
+}
+
+async fn delete_graph_node(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Response {
+    if !valid_graph_id(&id) {
+        return json_error(StatusCode::BAD_REQUEST, "id non valido");
+    }
+    let store = state.graph.clone();
+    match tokio::task::spawn_blocking(move || store.delete_node(&id)).await {
+        Ok(Ok(_)) => {
+            state.events.emit(&GlobalEvent::Graph {
+                revision: state.graph.next_revision(),
+            });
+            Json(json!({ "ok": true })).into_response()
+        }
+        Ok(Err(error)) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
+        Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"),
+    }
 }
 
 /// Mirrors `Number(env.LEARNER_PORT) || DEFAULT_PORT` followed by `listen` (main.ts:628,549-560).

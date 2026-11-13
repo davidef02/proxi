@@ -1,4 +1,4 @@
-//! Wire protocol shared with the web UI: settings, limits and events.
+//! Wire protocol shared with the web UI: settings, limits, graph and events.
 
 use serde::{Deserialize, Serialize};
 
@@ -99,6 +99,7 @@ pub struct SettingsResponse {
 pub enum GlobalEvent {
     Limits { limits: serde_json::Value },
     Settings { settings: SettingsResponse },
+    Graph { revision: u64 },
 }
 
 /// A number as JS prints it: `JSON.stringify(4)` is `4`, serde prints `4.0` for an f64.
@@ -244,6 +245,11 @@ mod tests {
             "{json}"
         );
         assert!(json.ends_with(",\"repoRoot\":\"R\",\"dataRoot\":\"D\"}}"), "{json}");
+
+        assert_eq!(
+            serde_json::to_string(&GlobalEvent::Graph { revision: 1 }).unwrap(),
+            r#"{"type":"graph","revision":1}"#
+        );
     }
 
     #[test]

@@ -59,6 +59,10 @@ describe("RUST_PORTED", () => {
   it("runs the Anki routes against the spawned binary", () => {
     assert.ok(RUST_PORTED.includes("app/test/api-anki.test.ts"));
   });
+
+  it("includes the graph API test ported to Rust", () => {
+    assert.ok(RUST_PORTED.includes("app/test/graph-api.test.ts"));
+  });
 });
 
 describe("missingFiles", () => {

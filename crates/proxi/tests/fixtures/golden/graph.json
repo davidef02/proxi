@@ -1,0 +1,1747 @@
+{
+  "route": "graph",
+  "seed": {},
+  "dataSeed": {
+    "curriculum.json": "{\"chapters\":[{\"title\":\"Corso Demo\",\"slug\":\"demo\",\"lessons\":[]}]}",
+    "courses/demo/lessons/0001-t.html": "<html><body><script type=\"application/json\" id=\"lesson-data\">{\"metadata\":{\"lessonNumber\":1,\"topic\":\"T\",\"title\":\"Tema\",\"slug\":\"t\",\"dateCreated\":\"\",\"dateModified\":\"\",\"version\":\"1\"},\"nodes\":[{\"nodeId\":\"alpha\",\"title\":\"Alfa\",\"tier\":\"axiom\",\"content\":\"x\"},{\"nodeId\":\"beta\",\"title\":\"Beta\",\"tier\":\"derivation\",\"content\":\"x\",\"dependencies\":[\"alpha\",\"ghost\"]},{\"nodeId\":\"gamma\",\"title\":\"Gamma\",\"tier\":\"derivation\",\"content\":\"x\",\"dependencies\":[\"beta\"]}]}</script></body></html>",
+    "courses/demo/lessons/0002-u.html": "<html><body><script type=\"application/json\" id=\"lesson-data\">{\"metadata\":{\"lessonNumber\":2,\"topic\":\"Topic U\",\"title\":\"\",\"slug\":\"u\",\"dateCreated\":\"\",\"dateModified\":\"\",\"version\":\"1\"},\"nodes\":[{\"nodeId\":\"delta\",\"title\":\"Delta\",\"tier\":\"axiom\",\"content\":\"x\"}]}</script></body></html>",
+    "courses/demo/lessons/notes.html": "<html><body>appunti</body></html>",
+    "courses/demo/progress.jsonl": "{\"at\":\"2026-01-02T00:00:00Z\",\"sessionId\":\"s\",\"course\":\"demo\",\"lessonSlug\":\"t\",\"nodeRefs\":[\"alpha\"],\"kind\":\"check\",\"correct\":true,\"confidence\":20}\n{\"at\":\"2026-01-02T00:00:00Z\",\"sessionId\":\"s\",\"course\":\"demo\",\"lessonSlug\":\"t\",\"nodeRefs\":[\"beta\"],\"kind\":\"check\",\"correct\":false}\n{\"at\":\"2026-01-02T00:00:00Z\",\"sessionId\":\"s\",\"course\":\"demo\",\"lessonSlug\":\"u\",\"nodeRefs\":[\"N1\"],\"kind\":\"check\",\"correct\":true,\"confidence\":90}\n{\"kind\":\"review\",\"source\":\"anki\",\"sessionId\":\"anki\",\"course\":\"demo\",\"lessonSlug\":\"t\",\"nodeRefs\":[\"demo/t#gamma\"],\"cardId\":7,\"reviewId\":100,\"ease\":3,\"interval\":30,\"lapses\":0,\"at\":\"2026-01-03T00:00:00Z\"}\nnot json\n",
+    "graph/nodes.jsonl": "{\"id\":\"n_a\",\"name\":\"A\",\"statement\":\"A vale.\",\"aliases\":[],\"createdAt\":\"2026-01-01T00:00:00.000Z\",\"provenance\":[{\"chatId\":\"demo/0001-t\",\"messageId\":\"alpha\"}]}\n{\"id\":\"n_b\",\"name\":\"B\",\"statement\":\"B vale.\",\"aliases\":[],\"createdAt\":\"2026-01-01T00:00:00.000Z\",\"provenance\":[{\"chatId\":\"demo/0001-t\",\"messageId\":\"beta\"}]}\n{\"id\":\"n_c\",\"name\":\"C\",\"statement\":\"C vale.\",\"aliases\":[],\"createdAt\":\"2026-01-01T00:00:00.000Z\",\"provenance\":[{\"chatId\":\"demo/0001-t\",\"messageId\":\"gamma\"}]}\n{\"id\":\"n_g\",\"name\":\"G\",\"statement\":\"G vale.\",\"aliases\":[],\"createdAt\":\"2026-01-01T00:00:00.000Z\",\"provenance\":[{\"chatId\":\"demo/0001-t\",\"messageId\":\"alpha\"}],\"note\":\"kept\"}\n{\"id\":\"n_d\",\"name\":\"D\",\"statement\":\"D vale.\",\"aliases\":[],\"createdAt\":\"2026-01-01T00:00:00.000Z\",\"provenance\":[{\"chatId\":\"demo/0002-u\",\"messageId\":\"delta\"}]}\n{\"id\":\"n_e\",\"name\":\"E\",\"statement\":\"E vale.\",\"aliases\":[],\"createdAt\":\"2026-01-01T00:00:00.000Z\",\"provenance\":[{\"chatId\":\"other/0001-x\",\"messageId\":\"\"}]}\n{\"id\":\"n_f\",\"name\":\"F\",\"statement\":\"F vale.\",\"aliases\":[],\"createdAt\":\"2026-01-01T00:00:00.000Z\",\"provenance\":[{\"chatId\":\"other/0001-x\",\"messageId\":\"\"}]}\n{\"id\":\"n_a\",\"name\":\"A bis\",\"statement\":\"A riformulato\",\"aliases\":[\"A2\"],\"createdAt\":\"2026-01-01T00:00:00.000Z\",\"provenance\":[{\"chatId\":\"demo/0002-u\",\"messageId\":\"delta\"}]}\n{not json\n{\"id\":\"n_bad\",\"name\":\"x\"}\n",
+    "graph/chains.jsonl": "{\"id\":\"arg_abc\",\"premises\":[\"n_a\",\"n_b\"],\"conclusion\":\"n_c\",\"createdAt\":\"2026-01-01T00:00:00.000Z\",\"provenance\":[{\"chatId\":\"demo/0001-t\",\"messageId\":\"\"}]}\n{\"id\":\"arg_cd\",\"premises\":[\"n_c\"],\"conclusion\":\"n_d\",\"createdAt\":\"2026-01-01T00:00:00.000Z\",\"provenance\":[{\"chatId\":\"demo/0002-u\",\"messageId\":\"\"}]}\n{\"id\":\"arg_dup\",\"premises\":[\"n_b\",\"n_a\"],\"conclusion\":\"n_c\",\"createdAt\":\"2026-01-01T00:00:00.000Z\",\"provenance\":[{\"chatId\":\"other/0001-x\",\"messageId\":\"\"}]}\n{\"id\":\"arg_ef\",\"premises\":[\"n_e\"],\"conclusion\":\"n_f\",\"createdAt\":\"2026-01-01T00:00:00.000Z\",\"provenance\":[{\"chatId\":\"other/0001-x\",\"messageId\":\"\"}]}\n{\"id\":\"arg_dangling\",\"premises\":[\"n_missing\"],\"conclusion\":\"n_a\",\"createdAt\":\"2026-01-01T00:00:00.000Z\",\"provenance\":[{\"chatId\":\"other/0001-x\",\"messageId\":\"\"}]}\n{\"id\":\"arg_gad\",\"premises\":[\"n_g\",\"n_a\"],\"conclusion\":\"n_d\",\"createdAt\":\"2026-01-01T00:00:00.000Z\",\"provenance\":[{\"chatId\":\"demo/0002-u\",\"messageId\":\"\"}]}\n{\"id\":\"arg_cut\",\"premises\":[\"n_a\"]",
+    "graph/positions.json": "{\"n_a\":{\"x\":1,\"y\":1}}"
+  },
+  "cases": [
+    {
+      "name": "get-map",
+      "request": {
+        "method": "GET",
+        "path": "/api/map"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "nodes": [
+            {
+              "key": "demo/t#alpha",
+              "course": "demo",
+              "lessonSlug": "t",
+              "lessonTitle": "Tema",
+              "lessonNumber": 1,
+              "lessonPath": "courses/demo/lessons/0001-t.html",
+              "nodeId": "alpha",
+              "title": "Alfa",
+              "tier": "axiom",
+              "status": "shaky",
+              "attempts": 1,
+              "lastAt": "<iso>"
+            },
+            {
+              "key": "demo/t#beta",
+              "course": "demo",
+              "lessonSlug": "t",
+              "lessonTitle": "Tema",
+              "lessonNumber": 1,
+              "lessonPath": "courses/demo/lessons/0001-t.html",
+              "nodeId": "beta",
+              "title": "Beta",
+              "tier": "derivation",
+              "status": "missed",
+              "attempts": 1,
+              "lastAt": "<iso>"
+            },
+            {
+              "key": "demo/t#gamma",
+              "course": "demo",
+              "lessonSlug": "t",
+              "lessonTitle": "Tema",
+              "lessonNumber": 1,
+              "lessonPath": "courses/demo/lessons/0001-t.html",
+              "nodeId": "gamma",
+              "title": "Gamma",
+              "tier": "derivation",
+              "status": "solid",
+              "attempts": 1,
+              "lastAt": "<iso>"
+            },
+            {
+              "key": "demo/u#delta",
+              "course": "demo",
+              "lessonSlug": "u",
+              "lessonTitle": "Topic U",
+              "lessonNumber": 2,
+              "lessonPath": "courses/demo/lessons/0002-u.html",
+              "nodeId": "delta",
+              "title": "Delta",
+              "tier": "axiom",
+              "status": "solid",
+              "attempts": 1,
+              "lastAt": "<iso>"
+            }
+          ],
+          "edges": [
+            {
+              "from": "demo/t#alpha",
+              "to": "demo/t#beta"
+            },
+            {
+              "from": "demo/t#beta",
+              "to": "demo/t#gamma"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "get-graph",
+      "request": {
+        "method": "GET",
+        "path": "/api/graph"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "nodes": [
+            {
+              "id": "n_a",
+              "name": "A",
+              "statement": "A vale.",
+              "aliases": [
+                "A riformulato",
+                "A2"
+              ],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0001-t",
+                  "messageId": "alpha"
+                },
+                {
+                  "chatId": "demo/0002-u",
+                  "messageId": "delta"
+                }
+              ],
+              "status": "shaky"
+            },
+            {
+              "id": "n_b",
+              "name": "B",
+              "statement": "B vale.",
+              "aliases": [],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0001-t",
+                  "messageId": "beta"
+                }
+              ],
+              "status": "missed"
+            },
+            {
+              "id": "n_c",
+              "name": "C",
+              "statement": "C vale.",
+              "aliases": [],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0001-t",
+                  "messageId": "gamma"
+                }
+              ],
+              "status": "solid"
+            },
+            {
+              "id": "n_g",
+              "name": "G",
+              "statement": "G vale.",
+              "aliases": [],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0001-t",
+                  "messageId": "alpha"
+                }
+              ],
+              "note": "kept",
+              "status": "shaky"
+            },
+            {
+              "id": "n_d",
+              "name": "D",
+              "statement": "D vale.",
+              "aliases": [],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0002-u",
+                  "messageId": "delta"
+                }
+              ],
+              "status": "solid"
+            },
+            {
+              "id": "n_e",
+              "name": "E",
+              "statement": "E vale.",
+              "aliases": [],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "other/0001-x",
+                  "messageId": ""
+                }
+              ]
+            },
+            {
+              "id": "n_f",
+              "name": "F",
+              "statement": "F vale.",
+              "aliases": [],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "other/0001-x",
+                  "messageId": ""
+                }
+              ]
+            },
+            {
+              "id": "arg_abc",
+              "name": "⟹",
+              "statement": "A, B → C",
+              "aliases": [],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0001-t",
+                  "messageId": ""
+                },
+                {
+                  "chatId": "other/0001-x",
+                  "messageId": ""
+                }
+              ]
+            },
+            {
+              "id": "arg_gad",
+              "name": "⟹",
+              "statement": "A, G → D",
+              "aliases": [],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0002-u",
+                  "messageId": ""
+                }
+              ]
+            }
+          ],
+          "propositions": [
+            {
+              "id": "n_a",
+              "name": "A",
+              "statement": "A vale.",
+              "aliases": [
+                "A riformulato",
+                "A2"
+              ],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0001-t",
+                  "messageId": "alpha"
+                },
+                {
+                  "chatId": "demo/0002-u",
+                  "messageId": "delta"
+                }
+              ],
+              "status": "shaky"
+            },
+            {
+              "id": "n_b",
+              "name": "B",
+              "statement": "B vale.",
+              "aliases": [],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0001-t",
+                  "messageId": "beta"
+                }
+              ],
+              "status": "missed"
+            },
+            {
+              "id": "n_c",
+              "name": "C",
+              "statement": "C vale.",
+              "aliases": [],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0001-t",
+                  "messageId": "gamma"
+                }
+              ],
+              "status": "solid"
+            },
+            {
+              "id": "n_g",
+              "name": "G",
+              "statement": "G vale.",
+              "aliases": [],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0001-t",
+                  "messageId": "alpha"
+                }
+              ],
+              "note": "kept",
+              "status": "shaky"
+            },
+            {
+              "id": "n_d",
+              "name": "D",
+              "statement": "D vale.",
+              "aliases": [],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0002-u",
+                  "messageId": "delta"
+                }
+              ],
+              "status": "solid"
+            },
+            {
+              "id": "n_e",
+              "name": "E",
+              "statement": "E vale.",
+              "aliases": [],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "other/0001-x",
+                  "messageId": ""
+                }
+              ]
+            },
+            {
+              "id": "n_f",
+              "name": "F",
+              "statement": "F vale.",
+              "aliases": [],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "other/0001-x",
+                  "messageId": ""
+                }
+              ]
+            }
+          ],
+          "edges": [
+            {
+              "from": "n_a",
+              "to": "arg_abc"
+            },
+            {
+              "from": "n_b",
+              "to": "arg_abc"
+            },
+            {
+              "from": "arg_abc",
+              "to": "n_c"
+            },
+            {
+              "from": "n_c",
+              "to": "n_d"
+            },
+            {
+              "from": "n_e",
+              "to": "n_f"
+            },
+            {
+              "from": "n_g",
+              "to": "arg_gad"
+            },
+            {
+              "from": "n_a",
+              "to": "arg_gad"
+            },
+            {
+              "from": "arg_gad",
+              "to": "n_d"
+            }
+          ],
+          "logicalEdges": [
+            {
+              "from": "n_a",
+              "to": "n_c"
+            },
+            {
+              "from": "n_b",
+              "to": "n_c"
+            },
+            {
+              "from": "n_c",
+              "to": "n_d"
+            },
+            {
+              "from": "n_e",
+              "to": "n_f"
+            },
+            {
+              "from": "n_g",
+              "to": "n_d"
+            },
+            {
+              "from": "n_a",
+              "to": "n_d"
+            }
+          ],
+          "impLinks": [
+            {
+              "id": "arg_abc",
+              "premises": [
+                "n_a",
+                "n_b"
+              ],
+              "conclusion": "n_c"
+            },
+            {
+              "id": "arg_gad",
+              "premises": [
+                "n_g",
+                "n_a"
+              ],
+              "conclusion": "n_d"
+            }
+          ],
+          "chains": [
+            {
+              "id": "arg_abc",
+              "premises": [
+                "n_a",
+                "n_b"
+              ],
+              "conclusion": "n_c",
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0001-t",
+                  "messageId": ""
+                },
+                {
+                  "chatId": "other/0001-x",
+                  "messageId": ""
+                }
+              ]
+            },
+            {
+              "id": "arg_cd",
+              "premises": [
+                "n_c"
+              ],
+              "conclusion": "n_d",
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0002-u",
+                  "messageId": ""
+                }
+              ]
+            },
+            {
+              "id": "arg_ef",
+              "premises": [
+                "n_e"
+              ],
+              "conclusion": "n_f",
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "other/0001-x",
+                  "messageId": ""
+                }
+              ]
+            },
+            {
+              "id": "arg_dangling",
+              "premises": [
+                "n_missing"
+              ],
+              "conclusion": "n_a",
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "other/0001-x",
+                  "messageId": ""
+                }
+              ]
+            },
+            {
+              "id": "arg_gad",
+              "premises": [
+                "n_g",
+                "n_a"
+              ],
+              "conclusion": "n_d",
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0002-u",
+                  "messageId": ""
+                }
+              ]
+            }
+          ],
+          "sessions": {
+            "demo/0001-t": "Lezione 1 · Tema",
+            "demo/0002-u": "Lezione 2 · Topic U",
+            "other/0001-x": "other/0001-x"
+          },
+          "nodeSessions": {
+            "n_a": [
+              "demo/0001-t",
+              "demo/0002-u"
+            ],
+            "n_b": [
+              "demo/0001-t"
+            ],
+            "n_c": [
+              "demo/0001-t"
+            ],
+            "n_g": [
+              "demo/0001-t"
+            ],
+            "n_d": [
+              "demo/0002-u"
+            ],
+            "n_e": [
+              "other/0001-x"
+            ],
+            "n_f": [
+              "other/0001-x"
+            ],
+            "arg_abc": [
+              "demo/0001-t",
+              "other/0001-x"
+            ],
+            "arg_gad": [
+              "demo/0002-u"
+            ]
+          },
+          "clusters": [
+            {
+              "id": "demo/0001-t",
+              "label": "Lezione 1 · Tema",
+              "members": [
+                "arg_abc",
+                "arg_gad",
+                "n_a",
+                "n_b",
+                "n_c",
+                "n_g"
+              ]
+            }
+          ],
+          "courses": [
+            {
+              "id": "demo",
+              "label": "Corso Demo",
+              "members": [
+                "arg_abc",
+                "arg_gad",
+                "n_a",
+                "n_b",
+                "n_c",
+                "n_d",
+                "n_g"
+              ]
+            },
+            {
+              "id": "other",
+              "label": "other",
+              "members": [
+                "n_e",
+                "n_f"
+              ]
+            }
+          ],
+          "positions": {
+            "n_a": {
+              "x": 0,
+              "y": 0
+            },
+            "n_b": {
+              "x": 64,
+              "y": 0
+            },
+            "n_g": {
+              "x": 128,
+              "y": 0
+            },
+            "n_c": {
+              "x": 64,
+              "y": -80
+            },
+            "n_d": {
+              "x": 248,
+              "y": -160
+            },
+            "n_e": {
+              "x": 512,
+              "y": 0
+            },
+            "n_f": {
+              "x": 512,
+              "y": -80
+            },
+            "arg_abc": {
+              "x": 48,
+              "y": -40
+            },
+            "arg_gad": {
+              "x": 156,
+              "y": -80
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "post-positions",
+      "request": {
+        "method": "POST",
+        "path": "/api/graph/positions",
+        "body": {
+          "positions": {
+            "n_a": {
+              "x": 5,
+              "y": 6.5
+            },
+            "arg_ef": {
+              "x": 1,
+              "y": 2
+            },
+            "ghost": {
+              "x": 1,
+              "y": 2
+            },
+            "n_c": {
+              "x": "7",
+              "y": 1
+            }
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true
+        }
+      }
+    },
+    {
+      "name": "get-graph-after-positions",
+      "request": {
+        "method": "GET",
+        "path": "/api/graph"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "nodes": [
+            {
+              "id": "n_a",
+              "name": "A",
+              "statement": "A vale.",
+              "aliases": [
+                "A riformulato",
+                "A2"
+              ],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0001-t",
+                  "messageId": "alpha"
+                },
+                {
+                  "chatId": "demo/0002-u",
+                  "messageId": "delta"
+                }
+              ],
+              "status": "shaky"
+            },
+            {
+              "id": "n_b",
+              "name": "B",
+              "statement": "B vale.",
+              "aliases": [],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0001-t",
+                  "messageId": "beta"
+                }
+              ],
+              "status": "missed"
+            },
+            {
+              "id": "n_c",
+              "name": "C",
+              "statement": "C vale.",
+              "aliases": [],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0001-t",
+                  "messageId": "gamma"
+                }
+              ],
+              "status": "solid"
+            },
+            {
+              "id": "n_g",
+              "name": "G",
+              "statement": "G vale.",
+              "aliases": [],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0001-t",
+                  "messageId": "alpha"
+                }
+              ],
+              "note": "kept",
+              "status": "shaky"
+            },
+            {
+              "id": "n_d",
+              "name": "D",
+              "statement": "D vale.",
+              "aliases": [],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0002-u",
+                  "messageId": "delta"
+                }
+              ],
+              "status": "solid"
+            },
+            {
+              "id": "n_e",
+              "name": "E",
+              "statement": "E vale.",
+              "aliases": [],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "other/0001-x",
+                  "messageId": ""
+                }
+              ]
+            },
+            {
+              "id": "n_f",
+              "name": "F",
+              "statement": "F vale.",
+              "aliases": [],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "other/0001-x",
+                  "messageId": ""
+                }
+              ]
+            },
+            {
+              "id": "arg_abc",
+              "name": "⟹",
+              "statement": "A, B → C",
+              "aliases": [],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0001-t",
+                  "messageId": ""
+                },
+                {
+                  "chatId": "other/0001-x",
+                  "messageId": ""
+                }
+              ]
+            },
+            {
+              "id": "arg_gad",
+              "name": "⟹",
+              "statement": "A, G → D",
+              "aliases": [],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0002-u",
+                  "messageId": ""
+                }
+              ]
+            }
+          ],
+          "propositions": [
+            {
+              "id": "n_a",
+              "name": "A",
+              "statement": "A vale.",
+              "aliases": [
+                "A riformulato",
+                "A2"
+              ],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0001-t",
+                  "messageId": "alpha"
+                },
+                {
+                  "chatId": "demo/0002-u",
+                  "messageId": "delta"
+                }
+              ],
+              "status": "shaky"
+            },
+            {
+              "id": "n_b",
+              "name": "B",
+              "statement": "B vale.",
+              "aliases": [],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0001-t",
+                  "messageId": "beta"
+                }
+              ],
+              "status": "missed"
+            },
+            {
+              "id": "n_c",
+              "name": "C",
+              "statement": "C vale.",
+              "aliases": [],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0001-t",
+                  "messageId": "gamma"
+                }
+              ],
+              "status": "solid"
+            },
+            {
+              "id": "n_g",
+              "name": "G",
+              "statement": "G vale.",
+              "aliases": [],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0001-t",
+                  "messageId": "alpha"
+                }
+              ],
+              "note": "kept",
+              "status": "shaky"
+            },
+            {
+              "id": "n_d",
+              "name": "D",
+              "statement": "D vale.",
+              "aliases": [],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0002-u",
+                  "messageId": "delta"
+                }
+              ],
+              "status": "solid"
+            },
+            {
+              "id": "n_e",
+              "name": "E",
+              "statement": "E vale.",
+              "aliases": [],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "other/0001-x",
+                  "messageId": ""
+                }
+              ]
+            },
+            {
+              "id": "n_f",
+              "name": "F",
+              "statement": "F vale.",
+              "aliases": [],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "other/0001-x",
+                  "messageId": ""
+                }
+              ]
+            }
+          ],
+          "edges": [
+            {
+              "from": "n_a",
+              "to": "arg_abc"
+            },
+            {
+              "from": "n_b",
+              "to": "arg_abc"
+            },
+            {
+              "from": "arg_abc",
+              "to": "n_c"
+            },
+            {
+              "from": "n_c",
+              "to": "n_d"
+            },
+            {
+              "from": "n_e",
+              "to": "n_f"
+            },
+            {
+              "from": "n_g",
+              "to": "arg_gad"
+            },
+            {
+              "from": "n_a",
+              "to": "arg_gad"
+            },
+            {
+              "from": "arg_gad",
+              "to": "n_d"
+            }
+          ],
+          "logicalEdges": [
+            {
+              "from": "n_a",
+              "to": "n_c"
+            },
+            {
+              "from": "n_b",
+              "to": "n_c"
+            },
+            {
+              "from": "n_c",
+              "to": "n_d"
+            },
+            {
+              "from": "n_e",
+              "to": "n_f"
+            },
+            {
+              "from": "n_g",
+              "to": "n_d"
+            },
+            {
+              "from": "n_a",
+              "to": "n_d"
+            }
+          ],
+          "impLinks": [
+            {
+              "id": "arg_abc",
+              "premises": [
+                "n_a",
+                "n_b"
+              ],
+              "conclusion": "n_c"
+            },
+            {
+              "id": "arg_gad",
+              "premises": [
+                "n_g",
+                "n_a"
+              ],
+              "conclusion": "n_d"
+            }
+          ],
+          "chains": [
+            {
+              "id": "arg_abc",
+              "premises": [
+                "n_a",
+                "n_b"
+              ],
+              "conclusion": "n_c",
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0001-t",
+                  "messageId": ""
+                },
+                {
+                  "chatId": "other/0001-x",
+                  "messageId": ""
+                }
+              ]
+            },
+            {
+              "id": "arg_cd",
+              "premises": [
+                "n_c"
+              ],
+              "conclusion": "n_d",
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0002-u",
+                  "messageId": ""
+                }
+              ]
+            },
+            {
+              "id": "arg_ef",
+              "premises": [
+                "n_e"
+              ],
+              "conclusion": "n_f",
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "other/0001-x",
+                  "messageId": ""
+                }
+              ]
+            },
+            {
+              "id": "arg_dangling",
+              "premises": [
+                "n_missing"
+              ],
+              "conclusion": "n_a",
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "other/0001-x",
+                  "messageId": ""
+                }
+              ]
+            },
+            {
+              "id": "arg_gad",
+              "premises": [
+                "n_g",
+                "n_a"
+              ],
+              "conclusion": "n_d",
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0002-u",
+                  "messageId": ""
+                }
+              ]
+            }
+          ],
+          "sessions": {
+            "demo/0001-t": "Lezione 1 · Tema",
+            "demo/0002-u": "Lezione 2 · Topic U",
+            "other/0001-x": "other/0001-x"
+          },
+          "nodeSessions": {
+            "n_a": [
+              "demo/0001-t",
+              "demo/0002-u"
+            ],
+            "n_b": [
+              "demo/0001-t"
+            ],
+            "n_c": [
+              "demo/0001-t"
+            ],
+            "n_g": [
+              "demo/0001-t"
+            ],
+            "n_d": [
+              "demo/0002-u"
+            ],
+            "n_e": [
+              "other/0001-x"
+            ],
+            "n_f": [
+              "other/0001-x"
+            ],
+            "arg_abc": [
+              "demo/0001-t",
+              "other/0001-x"
+            ],
+            "arg_gad": [
+              "demo/0002-u"
+            ]
+          },
+          "clusters": [
+            {
+              "id": "demo/0001-t",
+              "label": "Lezione 1 · Tema",
+              "members": [
+                "arg_abc",
+                "arg_gad",
+                "n_a",
+                "n_b",
+                "n_c",
+                "n_g"
+              ]
+            }
+          ],
+          "courses": [
+            {
+              "id": "demo",
+              "label": "Corso Demo",
+              "members": [
+                "arg_abc",
+                "arg_gad",
+                "n_a",
+                "n_b",
+                "n_c",
+                "n_d",
+                "n_g"
+              ]
+            },
+            {
+              "id": "other",
+              "label": "other",
+              "members": [
+                "n_e",
+                "n_f"
+              ]
+            }
+          ],
+          "positions": {
+            "n_a": {
+              "x": 5,
+              "y": 6.5
+            },
+            "n_b": {
+              "x": 64,
+              "y": 0
+            },
+            "n_g": {
+              "x": 128,
+              "y": 0
+            },
+            "n_c": {
+              "x": 64,
+              "y": -80
+            },
+            "n_d": {
+              "x": 248,
+              "y": -160
+            },
+            "n_e": {
+              "x": 512,
+              "y": 0
+            },
+            "n_f": {
+              "x": 512,
+              "y": -80
+            },
+            "arg_abc": {
+              "x": 48,
+              "y": -40
+            },
+            "arg_gad": {
+              "x": 156,
+              "y": -80
+            },
+            "arg_ef": {
+              "x": 1,
+              "y": 2
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "post-positions-missing",
+      "request": {
+        "method": "POST",
+        "path": "/api/graph/positions",
+        "body": {}
+      },
+      "response": {
+        "status": 400,
+        "body": {
+          "error": "positions mancante"
+        }
+      }
+    },
+    {
+      "name": "post-positions-invalid-json",
+      "request": {
+        "method": "POST",
+        "path": "/api/graph/positions",
+        "rawBody": "{"
+      },
+      "response": {
+        "status": 400,
+        "body": {
+          "error": "positions mancante"
+        }
+      }
+    },
+    {
+      "name": "delete-node",
+      "request": {
+        "method": "POST",
+        "path": "/api/graph/nodes/n_b/delete",
+        "body": {}
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true
+        }
+      },
+      "firstEvent": {
+        "type": "graph",
+        "revision": 1
+      }
+    },
+    {
+      "name": "get-graph-after-delete",
+      "request": {
+        "method": "GET",
+        "path": "/api/graph"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "nodes": [
+            {
+              "id": "n_a",
+              "name": "A",
+              "statement": "A vale.",
+              "aliases": [
+                "A riformulato",
+                "A2"
+              ],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0001-t",
+                  "messageId": "alpha"
+                },
+                {
+                  "chatId": "demo/0002-u",
+                  "messageId": "delta"
+                }
+              ],
+              "status": "shaky"
+            },
+            {
+              "id": "n_c",
+              "name": "C",
+              "statement": "C vale.",
+              "aliases": [],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0001-t",
+                  "messageId": "gamma"
+                }
+              ],
+              "status": "solid"
+            },
+            {
+              "id": "n_g",
+              "name": "G",
+              "statement": "G vale.",
+              "aliases": [],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0001-t",
+                  "messageId": "alpha"
+                }
+              ],
+              "note": "kept",
+              "status": "shaky"
+            },
+            {
+              "id": "n_d",
+              "name": "D",
+              "statement": "D vale.",
+              "aliases": [],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0002-u",
+                  "messageId": "delta"
+                }
+              ],
+              "status": "solid"
+            },
+            {
+              "id": "n_e",
+              "name": "E",
+              "statement": "E vale.",
+              "aliases": [],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "other/0001-x",
+                  "messageId": ""
+                }
+              ]
+            },
+            {
+              "id": "n_f",
+              "name": "F",
+              "statement": "F vale.",
+              "aliases": [],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "other/0001-x",
+                  "messageId": ""
+                }
+              ]
+            },
+            {
+              "id": "arg_gad",
+              "name": "⟹",
+              "statement": "A, G → D",
+              "aliases": [],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0002-u",
+                  "messageId": ""
+                }
+              ]
+            }
+          ],
+          "propositions": [
+            {
+              "id": "n_a",
+              "name": "A",
+              "statement": "A vale.",
+              "aliases": [
+                "A riformulato",
+                "A2"
+              ],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0001-t",
+                  "messageId": "alpha"
+                },
+                {
+                  "chatId": "demo/0002-u",
+                  "messageId": "delta"
+                }
+              ],
+              "status": "shaky"
+            },
+            {
+              "id": "n_c",
+              "name": "C",
+              "statement": "C vale.",
+              "aliases": [],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0001-t",
+                  "messageId": "gamma"
+                }
+              ],
+              "status": "solid"
+            },
+            {
+              "id": "n_g",
+              "name": "G",
+              "statement": "G vale.",
+              "aliases": [],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0001-t",
+                  "messageId": "alpha"
+                }
+              ],
+              "note": "kept",
+              "status": "shaky"
+            },
+            {
+              "id": "n_d",
+              "name": "D",
+              "statement": "D vale.",
+              "aliases": [],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0002-u",
+                  "messageId": "delta"
+                }
+              ],
+              "status": "solid"
+            },
+            {
+              "id": "n_e",
+              "name": "E",
+              "statement": "E vale.",
+              "aliases": [],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "other/0001-x",
+                  "messageId": ""
+                }
+              ]
+            },
+            {
+              "id": "n_f",
+              "name": "F",
+              "statement": "F vale.",
+              "aliases": [],
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "other/0001-x",
+                  "messageId": ""
+                }
+              ]
+            }
+          ],
+          "edges": [
+            {
+              "from": "n_c",
+              "to": "n_d"
+            },
+            {
+              "from": "n_e",
+              "to": "n_f"
+            },
+            {
+              "from": "n_g",
+              "to": "arg_gad"
+            },
+            {
+              "from": "n_a",
+              "to": "arg_gad"
+            },
+            {
+              "from": "arg_gad",
+              "to": "n_d"
+            }
+          ],
+          "logicalEdges": [
+            {
+              "from": "n_c",
+              "to": "n_d"
+            },
+            {
+              "from": "n_e",
+              "to": "n_f"
+            },
+            {
+              "from": "n_g",
+              "to": "n_d"
+            },
+            {
+              "from": "n_a",
+              "to": "n_d"
+            }
+          ],
+          "impLinks": [
+            {
+              "id": "arg_gad",
+              "premises": [
+                "n_g",
+                "n_a"
+              ],
+              "conclusion": "n_d"
+            }
+          ],
+          "chains": [
+            {
+              "id": "arg_cd",
+              "premises": [
+                "n_c"
+              ],
+              "conclusion": "n_d",
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0002-u",
+                  "messageId": ""
+                }
+              ]
+            },
+            {
+              "id": "arg_ef",
+              "premises": [
+                "n_e"
+              ],
+              "conclusion": "n_f",
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "other/0001-x",
+                  "messageId": ""
+                }
+              ]
+            },
+            {
+              "id": "arg_dangling",
+              "premises": [
+                "n_missing"
+              ],
+              "conclusion": "n_a",
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "other/0001-x",
+                  "messageId": ""
+                }
+              ]
+            },
+            {
+              "id": "arg_gad",
+              "premises": [
+                "n_g",
+                "n_a"
+              ],
+              "conclusion": "n_d",
+              "createdAt": "<iso>",
+              "provenance": [
+                {
+                  "chatId": "demo/0002-u",
+                  "messageId": ""
+                }
+              ]
+            }
+          ],
+          "sessions": {
+            "demo/0001-t": "Lezione 1 · Tema",
+            "demo/0002-u": "Lezione 2 · Topic U",
+            "other/0001-x": "other/0001-x"
+          },
+          "nodeSessions": {
+            "n_a": [
+              "demo/0001-t",
+              "demo/0002-u"
+            ],
+            "n_c": [
+              "demo/0001-t"
+            ],
+            "n_g": [
+              "demo/0001-t"
+            ],
+            "n_d": [
+              "demo/0002-u"
+            ],
+            "n_e": [
+              "other/0001-x"
+            ],
+            "n_f": [
+              "other/0001-x"
+            ],
+            "arg_gad": [
+              "demo/0002-u"
+            ]
+          },
+          "clusters": [
+            {
+              "id": "demo/0001-t",
+              "label": "Lezione 1 · Tema",
+              "members": [
+                "arg_gad",
+                "n_a",
+                "n_c",
+                "n_g"
+              ]
+            }
+          ],
+          "courses": [
+            {
+              "id": "demo",
+              "label": "Corso Demo",
+              "members": [
+                "arg_gad",
+                "n_a",
+                "n_c",
+                "n_d",
+                "n_g"
+              ]
+            },
+            {
+              "id": "other",
+              "label": "other",
+              "members": [
+                "n_e",
+                "n_f"
+              ]
+            }
+          ],
+          "positions": {
+            "n_a": {
+              "x": 5,
+              "y": 6.5
+            },
+            "n_g": {
+              "x": 128,
+              "y": 0
+            },
+            "n_c": {
+              "x": 64,
+              "y": -80
+            },
+            "n_d": {
+              "x": 248,
+              "y": -160
+            },
+            "n_e": {
+              "x": 512,
+              "y": 0
+            },
+            "n_f": {
+              "x": 512,
+              "y": -80
+            },
+            "arg_abc": {
+              "x": 48,
+              "y": -40
+            },
+            "arg_gad": {
+              "x": 156,
+              "y": -80
+            },
+            "arg_ef": {
+              "x": 1,
+              "y": 2
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "delete-chain",
+      "request": {
+        "method": "POST",
+        "path": "/api/graph/nodes/arg_gad/delete",
+        "body": {}
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true
+        }
+      }
+    },
+    {
+      "name": "delete-invalid-id",
+      "request": {
+        "method": "POST",
+        "path": "/api/graph/nodes/x_1/delete",
+        "body": {}
+      },
+      "response": {
+        "status": 400,
+        "body": {
+          "error": "id non valido"
+        }
+      }
+    },
+    {
+      "name": "get-map-after",
+      "request": {
+        "method": "GET",
+        "path": "/api/map"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "nodes": [
+            {
+              "key": "demo/t#alpha",
+              "course": "demo",
+              "lessonSlug": "t",
+              "lessonTitle": "Tema",
+              "lessonNumber": 1,
+              "lessonPath": "courses/demo/lessons/0001-t.html",
+              "nodeId": "alpha",
+              "title": "Alfa",
+              "tier": "axiom",
+              "status": "shaky",
+              "attempts": 1,
+              "lastAt": "<iso>"
+            },
+            {
+              "key": "demo/t#beta",
+              "course": "demo",
+              "lessonSlug": "t",
+              "lessonTitle": "Tema",
+              "lessonNumber": 1,
+              "lessonPath": "courses/demo/lessons/0001-t.html",
+              "nodeId": "beta",
+              "title": "Beta",
+              "tier": "derivation",
+              "status": "missed",
+              "attempts": 1,
+              "lastAt": "<iso>"
+            },
+            {
+              "key": "demo/t#gamma",
+              "course": "demo",
+              "lessonSlug": "t",
+              "lessonTitle": "Tema",
+              "lessonNumber": 1,
+              "lessonPath": "courses/demo/lessons/0001-t.html",
+              "nodeId": "gamma",
+              "title": "Gamma",
+              "tier": "derivation",
+              "status": "solid",
+              "attempts": 1,
+              "lastAt": "<iso>"
+            },
+            {
+              "key": "demo/u#delta",
+              "course": "demo",
+              "lessonSlug": "u",
+              "lessonTitle": "Topic U",
+              "lessonNumber": 2,
+              "lessonPath": "courses/demo/lessons/0002-u.html",
+              "nodeId": "delta",
+              "title": "Delta",
+              "tier": "axiom",
+              "status": "solid",
+              "attempts": 1,
+              "lastAt": "<iso>"
+            }
+          ],
+          "edges": [
+            {
+              "from": "demo/t#alpha",
+              "to": "demo/t#beta"
+            },
+            {
+              "from": "demo/t#beta",
+              "to": "demo/t#gamma"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -1,10 +1,13 @@
 #![allow(dead_code)]
 
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub mod anki_seed;
 pub mod fake_anki;
@@ -71,4 +74,57 @@ pub fn proxi_bin() -> PathBuf {
 /// Fixtures are assembled at runtime: the pre-flight scans source files for key prefixes.
 pub fn fake_key(rest: &str) -> String {
     ["sk", rest].concat()
+}
+
+/// The real Node server, killed on drop so a failing test never leaks a process.
+pub struct NodeServer {
+    child: Child,
+    port: u16,
+}
+
+impl NodeServer {
+    pub fn url(&self) -> String {
+        format!("http://127.0.0.1:{}", self.port)
+    }
+}
+
+impl Drop for NodeServer {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+pub fn start_node(repo: &Path) -> NodeServer {
+    let repo_arg = repo.display().to_string();
+    let child = node(&["crates/proxi/tests/node/serve.ts", &repo_arg])
+        .env_remove("LEARNER_DATA_ROOT")
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("spawn Node server");
+    let mut server = NodeServer { child, port: 0 };
+
+    let stdout = server.child.stdout.take().expect("stdout pipe");
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            let Ok(line) = line else { break };
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        assert!(!remaining.is_zero(), "Node server did not print PORT in 60 s");
+        let line = rx
+            .recv_timeout(remaining)
+            .expect("Node server exited before printing PORT");
+        if let Some(raw) = line.trim().strip_prefix("PORT ") {
+            server.port = raw.trim().parse().expect("PORT line has a number");
+            return server;
+        }
+    }
 }
