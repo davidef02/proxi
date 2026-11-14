@@ -6,8 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-// Duplicated from app/shared/identity.mjs: renaming it orphans every synced deck.
-pub const DECK_ROOT: &str = "Proxi";
+pub use crate::identity::DECK_ROOT;
 pub const STANDALONE_COURSE_SLUG: &str = "lezioni-singole";
 pub const STANDALONE_COURSE_TITLE: &str = "Lezioni singole";
 
