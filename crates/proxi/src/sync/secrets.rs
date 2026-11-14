@@ -31,6 +31,15 @@ pub struct GithubSecret {
     pub branch: String,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GdriveSecret {
+    pub refresh_token: String,
+    pub folder_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+}
+
 /// Where a provider secret lives. `Err` is a message safe to show the learner.
 pub trait SecretStore: Send + Sync {
     fn get(&self, account: &str) -> Result<Option<String>, String>;
@@ -143,13 +152,18 @@ pub fn set_github(store: &dyn SecretStore, s: &GithubSecret) -> Result<(), Strin
     store.set(GITHUB_ACCOUNT, &raw)
 }
 
-pub fn get_gdrive(store: &dyn SecretStore) -> Result<Option<Value>, String> {
+pub fn get_gdrive(store: &dyn SecretStore) -> Result<Option<GdriveSecret>, String> {
     let Some(raw) = store.get(GDRIVE_ACCOUNT)? else {
         return Ok(None);
     };
     serde_json::from_str(&raw)
         .map(Some)
         .map_err(|_| UNREADABLE_ERROR.to_string())
+}
+
+pub fn set_gdrive(store: &dyn SecretStore, s: &GdriveSecret) -> Result<(), String> {
+    let raw = serde_json::to_string(s).map_err(|e| e.to_string())?;
+    store.set(GDRIVE_ACCOUNT, &raw)
 }
 
 pub fn legacy_file(repo_root: &Path) -> PathBuf {

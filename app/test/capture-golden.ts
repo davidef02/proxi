@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { driveBody, installFakeDrive, type FakeDriveSeed } from "./fake-drive.ts";
 import type { FakeGithubSeed } from "./fake-github.ts";
 import { installFakeGithub } from "./fake-github.ts";
 import { FakeHttpServer, type RecordedRequest } from "./fake-servers.ts";
@@ -30,6 +31,7 @@ export interface GoldenFile {
   /** Raw file contents written verbatim under the data folder (lessons, JSONL ledgers): the replay's input, never normalised. */
   dataSeed?: Record<string, string>;
   github?: FakeGithubSeed;
+  drive?: FakeDriveSeed;
   cases: GoldenCase[];
 }
 
@@ -83,6 +85,8 @@ export interface Script {
   dataSeed?: Record<string, string>;
   /** Start a fake GitHub with this seed and point the server at it. */
   github?: FakeGithubSeed;
+  /** Start a fake Google Drive with this seed and point the server at it. */
+  drive?: FakeDriveSeed;
   cases: ScriptedCase[];
 }
 
@@ -97,21 +101,29 @@ function parseBody(text: string): unknown {
   }
 }
 
-/** Non-GET requests with their JSON body, the commit hostname swapped for `<host>` so the fixture is portable. */
-function remoteRequests(requests: RecordedRequest[]): { method: string; path: string; body: unknown }[] {
+/** Non-GET requests with their body, mapped by the fake that received them. */
+function remoteRequests(
+  requests: RecordedRequest[],
+  body: (r: RecordedRequest) => unknown,
+): { method: string; path: string; body: unknown }[] {
   return requests
     .filter((r) => r.method !== "GET")
-    .map((r) => {
-      const body = parseBody(r.body);
-      if (body && typeof body === "object" && "message" in body) {
-        const { message } = body as { message?: unknown };
-        if (typeof message === "string" && message.endsWith(HOST_SUFFIX)) {
-          (body as { message: string }).message = message.slice(0, -HOST_SUFFIX.length) + "(<host>)";
-        }
-      }
-      return { method: r.method, path: r.path, body };
-    });
+    .map((r) => ({ method: r.method, path: r.path, body: body(r) }));
 }
+
+/** A JSON body, with the commit hostname swapped for `<host>` so the fixture is portable. */
+function githubBody(r: RecordedRequest): unknown {
+  const body = parseBody(r.body);
+  if (body && typeof body === "object" && "message" in body) {
+    const { message } = body as { message?: unknown };
+    if (typeof message === "string" && message.endsWith(HOST_SUFFIX)) {
+      (body as { message: string }).message = message.slice(0, -HOST_SUFFIX.length) + "(<host>)";
+    }
+  }
+  return body;
+}
+
+type RemoteLog = { server: FakeHttpServer; body: (r: RecordedRequest) => unknown };
 
 // Low entropy and no `sk` prefix: neither gitleaks nor the JSON fixtures may read it as a key (L12/L13).
 const KEY = "x".repeat(16) + "abcd";
@@ -271,6 +283,41 @@ export const SCRIPTS: Script[] = [
       { name: "disconnect", request: { method: "POST", path: "/api/sync/disconnect", body: { provider: "github" } } },
     ],
   },
+  {
+    route: "sync-gdrive",
+    // "local" on purpose: the 1 s start pass of startAuto then does nothing, and POST /api/settings emits no event.
+    seed: {
+      ".learner/settings.json": { syncProvider: "local" },
+      ".learner/secrets.json": {
+        v: 1,
+        encrypted: false,
+        data: JSON.stringify({
+          gdrive: { refreshToken: "rt-1", folderId: "folder-1", email: "tester@example.com" },
+        }),
+      },
+    },
+    dataSeed: {
+      "curriculum.json": "{\"chapters\":[]}\n",
+      "courses/algebra/notes.md": "# algebra\n",
+      "courses/algebra/lessons/0001-intro.html": "<p>locale</p>\n",
+      "graph/nodes.jsonl": "{\"id\":\"n1\"}\n",
+    },
+    drive: {
+      folderId: "folder-1",
+      files: {
+        "courses/algebra/lessons/0001-intro.html": "<p>remoto</p>\n",
+        "decks/algebra.tsv": "q\ta\n",
+      },
+    },
+    cases: [
+      { name: "status-connected", request: { method: "GET", path: "/api/sync" } },
+      { name: "provider-gdrive", request: { method: "POST", path: "/api/settings", body: { syncProvider: "gdrive" } } },
+      { name: "run-first", request: { method: "POST", path: "/api/sync/run", body: {} }, remote: true },
+      { name: "run-again", request: { method: "POST", path: "/api/sync/run", body: {} }, remote: true },
+      // No remote log: a late auto pass could add a token request.
+      { name: "disconnect", request: { method: "POST", path: "/api/sync/disconnect", body: { provider: "gdrive" } } },
+    ],
+  },
 ];
 
 /** Writes `<outDir>/<route>.json` for every scripted route and returns the file paths. Always Node mode. */
@@ -305,22 +352,32 @@ export async function captureScript(script: Script, mode: ServerMode = "node"): 
   }
   const roots = { repoRoot: rootVariants(repo), dataRoot: rootVariants(data) };
   const github = script.github;
+  const drive = script.drive;
   const fake = github ? new FakeHttpServer("github") : undefined;
+  const google = drive ? new FakeHttpServer("google") : undefined;
   try {
     if (fake && github) {
       await fake.start();
       installFakeGithub(fake, github);
     }
-    const server = await startServer({ repoRoot: repo, dataRoot: data, mode, fakes: fake ? { github: fake.url } : undefined });
+    if (google && drive) {
+      await google.start();
+      installFakeDrive(google, drive);
+    }
+    const fakes = { ...(fake ? { github: fake.url } : {}), ...(google ? { google: google.url } : {}) };
+    const server = await startServer({ repoRoot: repo, dataRoot: data, mode, fakes: fake || google ? fakes : undefined });
+    const remote: RemoteLog | undefined =
+      fake && github ? { server: fake, body: githubBody } : google && drive ? { server: google, body: driveBody } : undefined;
     try {
       const cases: GoldenCase[] = [];
-      for (const c of script.cases) cases.push(await captureCase(server.url, c, roots, fake));
+      for (const c of script.cases) cases.push(await captureCase(server.url, c, roots, remote));
       // The seed and the data files are the replay's input, so they stay raw; only the captured output is normalised.
       return {
         route: script.route,
         seed: script.seed,
         ...(script.dataSeed ? { dataSeed: script.dataSeed } : {}),
         ...(github ? { github } : {}),
+        ...(drive ? { drive } : {}),
         cases,
       };
     } finally {
@@ -328,13 +385,14 @@ export async function captureScript(script: Script, mode: ServerMode = "node"): 
     }
   } finally {
     await fake?.close();
+    await google?.close();
     fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
   }
 }
 
-async function captureCase(base: string, c: ScriptedCase, roots: Roots, fake?: FakeHttpServer): Promise<GoldenCase> {
+async function captureCase(base: string, c: ScriptedCase, roots: Roots, remote?: RemoteLog): Promise<GoldenCase> {
   const events = c.awaitEvent ? openEvents(base) : undefined;
-  const seen = c.remote && fake ? fake.requests.length : 0;
+  const seen = c.remote && remote ? remote.server.requests.length : 0;
   try {
     if (events) await events.ready;
     const res = await send(base, c.request);
@@ -343,7 +401,7 @@ async function captureCase(base: string, c: ScriptedCase, roots: Roots, fake?: F
     // Node stamps the event with the current time: normalise it like any other field (app/server/main.ts:293).
     if (events) out.firstEvent = normalise(await events.first(5000), roots);
     // Read the log only after the response: the run has committed by then.
-    if (c.remote && fake) out.remote = normalise(remoteRequests(fake.requests.slice(seen)), roots) as GoldenCase["remote"];
+    if (c.remote && remote) out.remote = normalise(remoteRequests(remote.server.requests.slice(seen), remote.body), roots) as GoldenCase["remote"];
     return out;
   } finally {
     events?.close();

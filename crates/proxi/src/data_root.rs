@@ -8,6 +8,11 @@ pub const DATA_ROOT_ENV: &str = "LEARNER_DATA_ROOT";
 pub const REPO_ROOT_ENV: &str = "LEARNER_REPO_ROOT";
 pub const DATA_DIR_NAME: &str = "proxi-data";
 
+/// Verbatim from `extensions/data-root.ts`.
+pub const DATA_ROOT_RELATIVE: &str = "La cartella dei dati deve essere un percorso assoluto.";
+pub const DATA_ROOT_IN_REPO: &str =
+    "La cartella dei dati non può stare dentro il codice di Proxi (né contenerlo).";
+
 /// Verbatim from `extensions/data-root.ts` (same output, same help text).
 pub const USAGE: &str = "Usage: npm run data -- <command>
 
@@ -86,6 +91,65 @@ pub fn read_data_root_pointer(repo_root: &Path) -> Option<PathBuf> {
         return None;
     }
     Some(resolve_path(Path::new(data_root)))
+}
+
+/// Merges `{dataRoot}` into `.learner/config.json`, keeping the other keys. Atomic, like `write_settings`.
+pub fn write_data_root_pointer(repo_root: &Path, data_root: &Path) -> std::io::Result<()> {
+    let file = repo_root.join(".learner").join("config.json");
+    std::fs::create_dir_all(file.parent().expect("config file has a parent"))?;
+    // Missing, invalid, array or scalar: start over, like Node's `parsed && typeof parsed === "object"`.
+    let mut current = match std::fs::read_to_string(&file)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+    {
+        Some(serde_json::Value::Object(map)) => map,
+        _ => serde_json::Map::new(),
+    };
+    // An existing key keeps its position (`preserve_order`).
+    current.insert(
+        "dataRoot".to_string(),
+        serde_json::Value::String(resolve_path(data_root).display().to_string()),
+    );
+    let mut body = serde_json::to_string_pretty(&current)?;
+    body.push('\n');
+    let mut tmp = file.clone().into_os_string();
+    tmp.push(format!(".{}.tmp", std::process::id()));
+    let tmp = PathBuf::from(tmp);
+    if std::fs::write(&tmp, &body)
+        .and_then(|_| std::fs::rename(&tmp, &file))
+        .is_err()
+    {
+        // Windows: rename over a file another process holds open can fail with EPERM/EBUSY,
+        // so fall back to writing in place like Node does.
+        let _ = std::fs::remove_file(&tmp);
+        std::fs::write(&file, &body)?;
+    }
+    Ok(())
+}
+
+/// Why `dir` cannot be the data folder, or `None`.
+pub fn data_root_problem(repo_root: &Path, dir: &str) -> Option<&'static str> {
+    if !is_node_absolute(Path::new(dir)) {
+        return Some(DATA_ROOT_RELATIVE);
+    }
+    // The trailing separator makes `/repo` and `/repo-other` siblings, not a parent/child pair.
+    let a = format!(
+        "{}{}",
+        resolve_path(repo_root).display().to_string().to_lowercase(),
+        std::path::MAIN_SEPARATOR
+    );
+    let b = format!(
+        "{}{}",
+        resolve_path(Path::new(dir))
+            .display()
+            .to_string()
+            .to_lowercase(),
+        std::path::MAIN_SEPARATOR
+    );
+    if a.starts_with(b.as_str()) || b.starts_with(a.as_str()) {
+        return Some(DATA_ROOT_IN_REPO);
+    }
+    None
 }
 
 pub fn resolve_data_root(
@@ -432,6 +496,112 @@ mod tests {
         let resolved = resolve_data_root(&repo, None, &t.0.join("home"));
         assert_eq!(resolved.source, DataRootSource::Config);
         assert_eq!(resolved.data_root, t.0.join("a").join("data"));
+    }
+
+    #[test]
+    fn write_pointer_into_an_empty_repo_writes_the_exact_json() {
+        let t = temp_dir("write-pointer-empty");
+        let repo = t.0.join("repo");
+        let data = t.0.join("data");
+        fs::create_dir_all(&repo).expect("create repo");
+
+        write_data_root_pointer(&repo, &data).expect("write pointer");
+
+        let abs = resolve_path(&data);
+        let expected = format!(
+            "{{\n  \"dataRoot\": {}\n}}\n",
+            serde_json::to_string(&abs.display().to_string()).expect("quote path")
+        );
+        assert_eq!(
+            fs::read_to_string(repo.join(".learner").join("config.json")).unwrap(),
+            expected
+        );
+        assert_eq!(read_data_root_pointer(&repo), Some(abs));
+    }
+
+    #[test]
+    fn write_pointer_keeps_other_keys_and_an_existing_data_root_in_place() {
+        let t = temp_dir("write-pointer-merge");
+        let repo = t.0.join("repo");
+        write_config(&repo, r#"{"zeta": 1, "dataRoot": "/old", "alpha": true}"#);
+
+        let data = resolve_path(&t.0.join("data"));
+        write_data_root_pointer(&repo, &data).expect("write pointer");
+
+        let text = fs::read_to_string(repo.join(".learner").join("config.json")).unwrap();
+        let zeta = text.find("\"zeta\"").expect("zeta kept");
+        let root = text.find("\"dataRoot\"").expect("dataRoot present");
+        let alpha = text.find("\"alpha\"").expect("alpha kept");
+        assert!(zeta < root && root < alpha, "{text}");
+        assert!(text.contains("\"alpha\": true"), "{text}");
+        assert_eq!(read_data_root_pointer(&repo), Some(data));
+    }
+
+    #[test]
+    fn write_pointer_replaces_invalid_json_arrays_and_scalars() {
+        let t = temp_dir("write-pointer-replace");
+        let repo = t.0.join("repo");
+        let data = resolve_path(&t.0.join("data"));
+        let expected = format!(
+            "{{\n  \"dataRoot\": {}\n}}\n",
+            serde_json::to_string(&data.display().to_string()).expect("quote path")
+        );
+
+        for body in ["{not json", r#"["C:/somewhere"]"#, "42"] {
+            write_config(&repo, body);
+            write_data_root_pointer(&repo, &data).expect("write pointer");
+            assert_eq!(
+                fs::read_to_string(repo.join(".learner").join("config.json")).unwrap(),
+                expected,
+                "{body}"
+            );
+        }
+    }
+
+    #[test]
+    fn write_pointer_resolves_a_relative_argument() {
+        let t = temp_dir("write-pointer-relative");
+        let repo = t.0.join("repo");
+        let relative = Path::new("rel/dir");
+
+        write_data_root_pointer(&repo, relative).expect("write pointer");
+
+        assert_eq!(read_data_root_pointer(&repo), Some(resolve_path(relative)));
+    }
+
+    #[test]
+    fn data_root_problem_rejects_relative_inside_and_containing_paths() {
+        let t = temp_dir("data-root-problem");
+        let repo = t.0.join("repo");
+        let dir = |p: &Path| p.display().to_string();
+
+        assert_eq!(
+            data_root_problem(&repo, "rel/dir"),
+            Some(DATA_ROOT_RELATIVE)
+        );
+        assert_eq!(
+            data_root_problem(&repo, &dir(&repo.join("data"))),
+            Some(DATA_ROOT_IN_REPO)
+        );
+        assert_eq!(
+            data_root_problem(&repo, &dir(&repo)),
+            Some(DATA_ROOT_IN_REPO)
+        );
+        assert_eq!(
+            data_root_problem(&repo, &dir(&t.0)),
+            Some(DATA_ROOT_IN_REPO)
+        );
+        // Windows paths are case-insensitive, so a re-cased repo still counts.
+        assert_eq!(
+            data_root_problem(&repo, &dir(&repo).to_uppercase()),
+            Some(DATA_ROOT_IN_REPO)
+        );
+        // A sibling whose name only shares the prefix is fine.
+        assert_eq!(
+            data_root_problem(&repo, &dir(&t.0.join("repo-other"))),
+            None
+        );
+        assert_eq!(data_root_problem(&repo, &dir(&t.0.join("elsewhere"))), None);
     }
 
     #[test]

@@ -11,6 +11,7 @@ obvious and one click away: **Continua** (next lesson) and **Ripasso** (Anki rev
 
 - Before developing this project (code, tests, docs), read [`docs/agents/development.md`](docs/agents/development.md).
 - Before creating, editing or closing an issue or milestone, or editing `docs/ROADMAP.md`, read [`docs/agents/issues.md`](docs/agents/issues.md).
+- When planning or reviewing code, read `docs/agents/rules.md`.
 
 Everything below is for teaching.
 
