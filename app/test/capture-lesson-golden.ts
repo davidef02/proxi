@@ -9,7 +9,10 @@ import { REPO_ROOT } from "./harness.ts";
 
 export const LESSON_GOLDEN = "lesson-cli";
 
-/** Files Node's refreshBoard writes at the data root: excluded from snapshots because D11 drops the board refresh. */
+/**
+ * Files Node's refreshBoard writes at the data root: excluded from snapshots because homepage
+ * generation is #7's (the Rust seam is a no-op until then).
+ */
 export const BOARD_FILES = ["index.html"];
 
 export interface LessonCase {
@@ -98,6 +101,9 @@ const SEED: Record<string, string> = {
   "payloads/node-file.json": NODE_FILE_JSON,
   "payloads/extra.html": "<html></html>",
   "courses/demo/lessons/0003-preesistente.html": "<html></html>",
+  "courses/demo/learning-records/0004-sessione.md":
+    "# Sessione\n\n## Evidence\n- Nodo 1: confonde rete e trasporto\n* Node n-file: sbaglia il <pre> & co\n\n## Prossimi passi\nRipassare.\n",
+  "payloads/record.md": "## Evidence\nHa risposto bene al primo quiz. Poi confonde la legge con il caso! Nessun altro dubbio.\n",
 };
 
 const L = "courses/demo/lessons/0004-il-modello-osi.html";
@@ -169,6 +175,64 @@ export const CASES: LessonCase[] = [
   { name: "list-missing", args: ["list", "--dir", "nope"], expectExit: 0 },
   { name: "usage-unknown", args: ["frobnicate"], expectExit: 0 },
   { name: "usage-none", args: [], expectExit: 0 },
+  {
+    name: "append-for-reference",
+    args: [
+      "append",
+      "--lesson",
+      L,
+      "--data",
+      JSON.stringify({
+        nodeId: "m1",
+        title: "Formula <chiave>",
+        tier: "axiom",
+        math: ["E = mc^2", "$$\\frac{a}{b}$$"],
+        content: "<p>Prima frase. Seconda frase! Terza.</p>",
+      }),
+    ],
+    expectExit: 0,
+  },
+  { name: "rebuild-lesson", args: ["rebuild", "--lesson", L], expectExit: 0 },
+  { name: "rebuild-slug-default-dir", args: ["rebuild", "--slug", "probabilita-e-davvero-50-ca-va"], expectExit: 0 },
+  { name: "rebuild-dir-slug", args: ["rebuild", "--dir", "courses/demo/lessons", "--slug", "il-modello-osi"], expectExit: 0 },
+  {
+    name: "rebuild-out-dir-wins",
+    args: ["rebuild", "--out-dir", "courses/demo/lessons", "--dir", "nope", "--slug", "il-modello-osi"],
+    expectExit: 0,
+  },
+  { name: "rebuild-missing-lesson", args: ["rebuild", "--lesson", "courses/demo/lessons/9999-nope.html"], expectExit: 1 },
+  { name: "rebuild-slug-miss", args: ["rebuild", "--slug", "nope"], expectExit: 1 },
+  { name: "rebuild-no-target", args: ["rebuild"], expectExit: 1 },
+  { name: "rebuild-corrupted", args: ["rebuild", "--lesson", "courses/demo/lessons/0003-preesistente.html"], expectExit: 1 },
+  { name: "compile-ref-default", args: ["compile-ref", "--lesson", L], expectExit: 0 },
+  {
+    name: "reference-alias-record",
+    args: [
+      "reference",
+      "--slug",
+      "probabilita-e-davvero-50-ca-va",
+      "--out-dir",
+      "courses/demo/reference",
+      "--record",
+      "payloads/record.md",
+    ],
+    expectExit: 0,
+  },
+  {
+    name: "compile-ref-base-dir-record-fallback",
+    args: ["compile-ref", "--file", L, "--base-dir", "courses/demo", "--record", "payloads/missing.md"],
+    expectExit: 0,
+  },
+  { name: "compile-ref-empty-lesson", args: ["compile-ref", "--slug", "base", "--base-dir", "courses/base"], expectExit: 0 },
+  {
+    name: "compile-ref-missing-lesson",
+    args: ["compile-ref", "--lesson", "courses/demo/lessons/9999-nope.html"],
+    expectExit: 1,
+  },
+  { name: "compile-ref-slug-miss", args: ["compile-ref", "--slug", "nope"], expectExit: 1 },
+  { name: "compile-ref-corrupted", args: ["reference", "--lesson", "courses/demo/lessons/0003-preesistente.html"], expectExit: 1 },
+  { name: "rebuild-base-dir-slug", args: ["rebuild", "--slug", "base", "--base-dir", "courses/base"], expectExit: 0 },
+  { name: "rebuild-file-alias", args: ["rebuild", "--file", L], expectExit: 0 },
 ];
 
 /** Every file under `data` as `<dir>/<name>` → text, board files at the root excluded. */
@@ -209,7 +273,8 @@ export async function captureLessonGolden(outDir: string = GOLDEN_DIR): Promise<
         encoding: "utf-8",
       });
       if (run.error) throw run.error;
-      // Node appends `[home] ...` after a successful write; D11 drops the board refresh, so the golden must not pin it.
+      // Node appends `[home] ...` after a successful write; homepage generation is #7's (the Rust seam
+      // is a no-op until then), so the golden must not pin it.
       const stderr = run.stderr.split("\n").filter((line) => !line.startsWith("[home] ")).join("\n");
       if (run.status !== c.expectExit) {
         throw new Error(`${c.name}: exit ${run.status}, expected ${c.expectExit}\nstdout: ${run.stdout}\nstderr: ${run.stderr}`);

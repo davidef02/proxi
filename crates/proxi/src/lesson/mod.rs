@@ -6,6 +6,7 @@ pub mod cli;
 pub mod doc;
 pub mod js;
 pub mod node_path;
+pub mod refresh;
 pub mod render;
 
 pub use artifact::{

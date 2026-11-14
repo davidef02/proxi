@@ -389,6 +389,148 @@ pub fn append_node(o: AppendOptions) -> Result<AppendResult, String> {
     })
 }
 
+#[derive(Debug, Clone)]
+pub struct RebuildOptions {
+    pub lesson_path: Option<String>,
+    pub slug: Option<String>,
+    pub base_dir: Option<String>,
+    pub lessons_dir: Option<String>,
+    pub repo_root: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RebuildResult {
+    pub file_path: String,
+    pub node_count: usize,
+}
+
+impl RebuildResult {
+    pub fn to_json(&self) -> Value {
+        let mut map = Map::new();
+        map.insert(
+            "filePath".to_string(),
+            Value::String(self.file_path.clone()),
+        );
+        map.insert("nodeCount".to_string(), Value::from(self.node_count));
+        Value::Object(map)
+    }
+}
+
+/// Port of `renderFullLesson`: the template filled from the island, nodes included.
+pub fn render_full_lesson(doc: &Value, template: &str) -> Result<String, String> {
+    let member = |key: &str| doc.get("metadata").and_then(|metadata| metadata.get(key));
+    let title = or_truthy(member("title"), member("topic"));
+    let goal = or_truthy(member("description"), member("targetGoal"));
+    let date = match member("dateCreated") {
+        Some(value) if js::js_truthy(Some(value)) => js::js_to_string(value),
+        _ => iso_now(),
+    };
+    let date: String = date.chars().take(10).collect();
+    let dag = match member("initialDag") {
+        Some(value) if js::js_truthy(Some(value)) => js::js_to_string(value),
+        _ => String::new(),
+    };
+
+    let dag_section = if dag.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<section class=\"diagram-container\" id=\"dagContainer\">\n      <div class=\"diagram-title\">Curriculum Dependency Graph</div>\n      <pre class=\"mermaid\">\n{dag}\n</pre>\n    </section>"
+        )
+    };
+
+    let nodes = doc
+        .get("nodes")
+        .and_then(Value::as_array)
+        .ok_or("Malformed #lesson-data island: expected metadata and nodes")?;
+    let nodes_html = nodes
+        .iter()
+        .enumerate()
+        .map(|(index, node)| render::render_node_html(node, index))
+        .collect::<Result<Vec<_>, String>>()?
+        .join("\n      ");
+
+    let lesson_number = js::js_concat(member("lessonNumber"));
+    let pad = 4usize.saturating_sub(lesson_number.chars().count());
+    let lesson_number = format!("{}{lesson_number}", "0".repeat(pad));
+
+    Ok(template
+        .replace("<!-- LESSON_TITLE_SLOT -->", &esc(title))
+        .replace("<!-- APP_NAME_SLOT -->", APP_NAME)
+        .replace("<!-- LESSON_GOAL_SLOT -->", &esc(goal))
+        .replace("<!-- LESSON_DATE_SLOT -->", &format!("Generated: {date}"))
+        .replace("<!-- LESSON_NUMBER_SLOT -->", &lesson_number)
+        .replace("<!-- DAG_CONTAINER_SLOT -->", &dag_section)
+        .replace(
+            INJECTION_POINT,
+            &format!("{nodes_html}\n      {INJECTION_POINT}"),
+        )
+        .replace("<!-- DATA_ISLAND_SLOT -->", &js::render_data_island(doc)))
+}
+
+/// Port of `rebuildLesson`: re-renders an artifact from its island, in place.
+pub fn rebuild_lesson(o: &RebuildOptions) -> Result<RebuildResult, String> {
+    let base = base_dir(&o.base_dir)?;
+    let lessons_dir = match truthy(&o.lessons_dir) {
+        Some(dir) => dir.to_string(),
+        None => resolve_string(&Path::new(&base).join("lessons")),
+    };
+
+    let mut file_path = truthy(&o.lesson_path).map(str::to_owned);
+    if file_path.is_none()
+        && let Some(slug) = truthy(&o.slug)
+    {
+        file_path = find_lesson_by_slug(&lessons_dir, slug);
+    }
+    let found = file_path
+        .as_deref()
+        .is_some_and(|path| Path::new(path).exists());
+    if !found {
+        // `filePath || options.slug`, same as append: an empty --slug prints as nothing.
+        let target = file_path.as_deref().or(o.slug.as_deref());
+        return Err(format!(
+            "Lesson not found: {}",
+            target.unwrap_or("undefined")
+        ));
+    }
+    let file_path = file_path.expect("checked above");
+
+    let raw = read_text(Path::new(&file_path))?;
+    let doc = parse_lesson_document(&raw)?
+        .filter(|doc| js::js_truthy(Some(doc)))
+        .ok_or_else(|| {
+            format!("Corrupted lesson file: missing #lesson-data island in {file_path}")
+        })?;
+    if !doc.get("metadata").is_some_and(Value::is_object)
+        || !doc.get("nodes").is_some_and(Value::is_array)
+    {
+        return Err("Malformed #lesson-data island: expected metadata and nodes".to_string());
+    }
+
+    let template = load_template(&base, &o.repo_root)?;
+    let html = render_full_lesson(&doc, &template)?;
+    // The island is re-rendered as parsed: Node does not touch dateModified here.
+    fs::write(Path::new(&file_path), html).map_err(|e| e.to_string())?;
+
+    Ok(RebuildResult {
+        file_path,
+        node_count: doc["nodes"].as_array().expect("validated nodes").len(),
+    })
+}
+
+/// JS `a || b`.
+fn or_truthy<'a>(a: Option<&'a Value>, b: Option<&'a Value>) -> Option<&'a Value> {
+    if js::js_truthy(a) { a } else { b }
+}
+
+/// Node's `escapeHtml`: falsy values render as nothing.
+fn esc(v: Option<&Value>) -> String {
+    match v {
+        Some(value) if js::js_truthy(Some(value)) => render::escape_html(&js::js_to_string(value)),
+        _ => String::new(),
+    }
+}
+
 /// Node replaces the first island in the page; without one the HTML stays as it is.
 fn replace_island(html: &str, island: &str) -> String {
     let Some(open) = html.find(ISLAND_OPEN) else {
@@ -419,18 +561,18 @@ fn strict_eq(a: Option<&Value>, b: Option<&Value>) -> bool {
 }
 
 /// JS truthiness for the CLI's optional strings: present and non-empty.
-fn truthy(value: &Option<String>) -> Option<&str> {
+pub(crate) fn truthy(value: &Option<String>) -> Option<&str> {
     value.as_deref().filter(|text| !text.is_empty())
 }
 
-fn base_dir(value: &Option<String>) -> Result<String, String> {
+pub(crate) fn base_dir(value: &Option<String>) -> Result<String, String> {
     match truthy(value) {
         Some(dir) => Ok(dir.to_string()),
         None => Ok(as_string(&env::current_dir().map_err(|e| e.to_string())?)),
     }
 }
 
-fn resolve_string(path: &Path) -> String {
+pub(crate) fn resolve_string(path: &Path) -> String {
     as_string(&resolve_path(path))
 }
 
@@ -438,7 +580,7 @@ fn as_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
-fn read_text(path: &Path) -> Result<String, String> {
+pub(crate) fn read_text(path: &Path) -> Result<String, String> {
     fs::read(path)
         .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
         .map_err(|e| e.to_string())
@@ -498,6 +640,16 @@ mod tests {
             slug: None,
             node,
             base_dir: Some(as_string(dir)),
+        }
+    }
+
+    fn rebuild_options(dir: &Path, lesson_path: Option<&str>) -> RebuildOptions {
+        RebuildOptions {
+            lesson_path: lesson_path.map(str::to_owned),
+            slug: None,
+            base_dir: Some(as_string(dir)),
+            lessons_dir: None,
+            repo_root: repo_root(),
         }
     }
 
@@ -982,5 +1134,158 @@ mod tests {
             assert_eq!(err, "Invalid node payload: expected a JSON object");
         }
         assert_eq!(fs::read(&init.file_path).expect("read after"), before);
+    }
+
+    #[test]
+    fn rebuild_keeps_proxi_title_and_fills_app_name_slot() {
+        let tmp = temp_dir("rebuild-title");
+        let init = init_lesson(&init_options(&tmp.0, "Reti", "Il modello OSI")).expect("init");
+
+        let result =
+            rebuild_lesson(&rebuild_options(&tmp.0, Some(&init.file_path))).expect("rebuild");
+        assert_eq!(result.file_path, init.file_path);
+        assert_eq!(result.node_count, 0);
+
+        let html = fs::read_to_string(&init.file_path).expect("read lesson");
+        assert!(
+            html.contains("<title>Il modello OSI | Proxi</title>"),
+            "got {html}"
+        );
+        assert!(!html.contains("APP_NAME_SLOT"));
+    }
+
+    #[test]
+    fn render_full_lesson_adds_marker_newline_without_nodes() {
+        let doc = json!({"metadata": {}, "nodes": []});
+        let html = render_full_lesson(&doc, "A<!-- NODES_INJECTION_POINT -->B").expect("render");
+        assert_eq!(html, "A\n      <!-- NODES_INJECTION_POINT -->B");
+    }
+
+    #[test]
+    fn render_full_lesson_fills_slots_and_multiline_dag() {
+        let template = "<!-- LESSON_TITLE_SLOT -->|<!-- APP_NAME_SLOT -->|<!-- LESSON_GOAL_SLOT -->|<!-- LESSON_DATE_SLOT -->|<!-- LESSON_NUMBER_SLOT -->|<!-- DAG_CONTAINER_SLOT -->|<!-- NODES_INJECTION_POINT -->|<!-- DATA_ISLAND_SLOT -->";
+        let doc = json!({
+            "metadata": {
+                "lessonNumber": 7,
+                "title": "",
+                "topic": "T <x>",
+                "description": "",
+                "targetGoal": "G",
+                "dateCreated": "2026-01-02T03:04:05.000Z",
+                "initialDag": "flowchart TD"
+            },
+            "nodes": []
+        });
+
+        let html = render_full_lesson(&doc, template).expect("render");
+
+        assert!(html.contains("T &lt;x&gt;"), "got {html}");
+        assert!(html.contains("|Proxi|"), "got {html}");
+        assert!(html.contains("|G|"), "got {html}");
+        assert!(html.contains("Generated: 2026-01-02"), "got {html}");
+        assert!(html.contains("|0007|"), "got {html}");
+        let dag_section = "<section class=\"diagram-container\" id=\"dagContainer\">\n      <div class=\"diagram-title\">Curriculum Dependency Graph</div>\n      <pre class=\"mermaid\">\nflowchart TD\n</pre>\n    </section>";
+        assert!(html.contains(dag_section), "got {html}");
+        assert!(
+            html.contains("<script type=\"application/json\" id=\"lesson-data\">"),
+            "got {html}"
+        );
+    }
+
+    #[test]
+    fn rebuild_rerenders_appended_nodes_from_the_island() {
+        let tmp = temp_dir("rebuild-nodes");
+        let init = init_lesson(&init_options(&tmp.0, "Calcolo", "Derivate")).expect("init");
+        append_node(append_options(
+            &tmp.0,
+            &init.file_path,
+            json!({"nodeId": "n1", "title": "Primo", "tier": "axiom", "content": "uno"}),
+        ))
+        .expect("append 1");
+        append_node(append_options(
+            &tmp.0,
+            &init.file_path,
+            json!({"nodeId": "n2", "title": "Secondo", "tier": "derivation", "content": "due"}),
+        ))
+        .expect("append 2");
+        let before = fs::read_to_string(&init.file_path).expect("read before");
+
+        let result =
+            rebuild_lesson(&rebuild_options(&tmp.0, Some(&init.file_path))).expect("rebuild");
+        assert_eq!(result.node_count, 2);
+
+        let html = fs::read_to_string(&init.file_path).expect("read after");
+        let first = html
+            .find("<article class=\"cognitive-node\" id=\"node-n1\"")
+            .expect("n1 article");
+        let second = html
+            .find("<article class=\"cognitive-node\" id=\"node-n2\"")
+            .expect("n2 article");
+        let marker = html.find(INJECTION_POINT).expect("injection point");
+        assert!(first < second && second < marker);
+        assert_eq!(
+            parse_lesson_document(&html).expect("island parses"),
+            parse_lesson_document(&before).expect("island parses")
+        );
+
+        rebuild_lesson(&rebuild_options(&tmp.0, Some(&init.file_path))).expect("rebuild again");
+        assert_eq!(
+            fs::read_to_string(&init.file_path).expect("read twice"),
+            html
+        );
+    }
+
+    #[test]
+    fn rebuild_errors_match_node() {
+        let tmp = temp_dir("rebuild-errors");
+        fs::create_dir_all(tmp.0.join("lessons")).expect("lessons dir");
+
+        let err = rebuild_lesson(&rebuild_options(&tmp.0, None)).expect_err("no target");
+        assert_eq!(err, "Lesson not found: undefined");
+
+        let err = rebuild_lesson(&RebuildOptions {
+            slug: Some("nope".to_string()),
+            ..rebuild_options(&tmp.0, None)
+        })
+        .expect_err("unknown slug");
+        assert_eq!(err, "Lesson not found: nope");
+
+        let missing = tmp.0.join("lessons").join("9999-nope.html");
+        let missing_path = as_string(&missing);
+        let err = rebuild_lesson(&rebuild_options(&tmp.0, Some(&missing_path)))
+            .expect_err("missing lesson");
+        assert_eq!(err, format!("Lesson not found: {missing_path}"));
+
+        let handmade = tmp.0.join("handmade.html");
+        fs::write(&handmade, "<html></html>").expect("handmade lesson");
+        let handmade_path = as_string(&handmade);
+        let err =
+            rebuild_lesson(&rebuild_options(&tmp.0, Some(&handmade_path))).expect_err("no island");
+        assert_eq!(
+            err,
+            format!("Corrupted lesson file: missing #lesson-data island in {handmade_path}")
+        );
+
+        let null_island = tmp.0.join("null-island.html");
+        fs::write(&null_island, format!("{ISLAND_OPEN}\nnull\n{SCRIPT_CLOSE}"))
+            .expect("null island");
+        let null_path = as_string(&null_island);
+        let err =
+            rebuild_lesson(&rebuild_options(&tmp.0, Some(&null_path))).expect_err("falsy island");
+        assert_eq!(
+            err,
+            format!("Corrupted lesson file: missing #lesson-data island in {null_path}")
+        );
+
+        let broken = tmp.0.join("broken.html");
+        fs::write(&broken, format!("{ISLAND_OPEN}\n{{\n{SCRIPT_CLOSE}")).expect("broken island");
+        let before = fs::read(&broken).expect("read before");
+        let err = rebuild_lesson(&rebuild_options(&tmp.0, Some(&as_string(&broken))))
+            .expect_err("malformed island");
+        assert!(
+            err.starts_with("Malformed #lesson-data island: "),
+            "got {err}"
+        );
+        assert_eq!(fs::read(&broken).expect("read after"), before);
     }
 }
