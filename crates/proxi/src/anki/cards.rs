@@ -377,6 +377,8 @@ pub struct ExportOptions {
     pub lesson_path: Option<String>,
     pub topic: Option<Value>,
     pub slug: Option<Value>,
+    /// Node's `options.deckName`: wins over the lesson's chapter deck.
+    pub deck_name: Option<Value>,
     pub out_file: Option<String>,
     pub base_dir: Option<String>,
 }
@@ -461,14 +463,18 @@ pub fn export_deck_tsv(options: &ExportOptions) -> Result<ExportResult, String> 
         slug = slugify_topic_value(topic.as_ref())?;
     }
 
-    let deck_name = match lesson_deck {
-        Some(deck) => deck,
-        None => {
-            let Some(topic_text) = topic.as_ref().and_then(Value::as_str) else {
-                return Err("TypeError: topic.replace is not a function".to_string());
-            };
-            format_default_deck_name(topic_text)
-        }
+    let deck_name = match options.deck_name.as_ref() {
+        // An explicit deck short-circuits the topic fallback, like Node's `||`.
+        Some(value) if js_truthy(Some(value)) => js_to_string(value),
+        _ => match lesson_deck {
+            Some(deck) => deck,
+            None => {
+                let Some(topic_text) = topic.as_ref().and_then(Value::as_str) else {
+                    return Err("TypeError: topic.replace is not a function".to_string());
+                };
+                format_default_deck_name(topic_text)
+            }
+        },
     };
 
     let tsv_content = cards_to_tsv(&cards, Some(&deck_name))?;
@@ -974,6 +980,165 @@ mod tests {
         assert_eq!(result.card_count, 0);
         assert_eq!(result.basic_count, 0);
         assert_eq!(result.cloze_count, 0);
+    }
+
+    #[test]
+    fn export_deck_name_overrides_topic() {
+        let t = temp_dir("export-deck-name");
+        let cards = json!([{
+            "type": "basic",
+            "front": "F",
+            "back": "B",
+            "tags": ["learn-forme"]
+        }]);
+        let result = export_deck_tsv(&ExportOptions {
+            cards: Some(cards),
+            topic: Some(json!("Vue")),
+            deck_name: Some(json!("Proxi::Personale")),
+            base_dir: Some(display(&t.0)),
+            ..ExportOptions::default()
+        })
+        .unwrap();
+
+        assert_eq!(result.deck_name, "Proxi::Personale");
+        let content = fs::read_to_string(&result.file_path).unwrap();
+        assert!(content.contains("#deck:Proxi::Personale\n"), "{content}");
+        assert_eq!(
+            Path::new(&result.file_path),
+            t.0.join("decks").join(format!("{}.tsv", result.slug))
+        );
+        assert!(Path::new(&result.file_path).exists());
+    }
+
+    #[test]
+    fn export_deck_name_wins_over_course_deck() {
+        let t = temp_dir("export-deck-course");
+        fs::write(
+            t.0.join("curriculum.json"),
+            json!({ "chapters": [{ "title": "Vue.js & Vetrine", "slug": "vue-vetrine", "lessons": [] }] })
+                .to_string(),
+        )
+        .unwrap();
+        let path = write_lesson(
+            &t.0,
+            "courses/vue-vetrine/lessons/0001-reattivita.html",
+            &json!({
+                "metadata": {
+                    "topic": "Reattività di Vue 3",
+                    "title": "Reattività",
+                    "slug": "l1"
+                },
+                "nodes": [{
+                    "nodeId": "a",
+                    "tier": "unconditional-truth",
+                    "ankiParams": { "suggestedCloze": "Il ref {{c1::traccia}} chi lo legge." }
+                }]
+            }),
+        );
+
+        let result = export_deck_tsv(&ExportOptions {
+            lesson_path: Some(display(&path)),
+            deck_name: Some(json!("Proxi::Personale")),
+            base_dir: Some(display(&t.0)),
+            ..ExportOptions::default()
+        })
+        .unwrap();
+
+        assert_eq!(result.deck_name, "Proxi::Personale");
+        let content = fs::read_to_string(&result.file_path).unwrap();
+        assert!(content.contains("#deck:Proxi::Personale\n"), "{content}");
+        assert_eq!(
+            Path::new(&result.file_path),
+            t.0.join("decks").join(format!("{}.tsv", result.slug))
+        );
+        assert!(Path::new(&result.file_path).exists());
+    }
+
+    #[test]
+    fn export_empty_deck_name_falls_back_to_topic() {
+        let t = temp_dir("export-deck-empty");
+        let cards = json!([{
+            "type": "basic",
+            "front": "F",
+            "back": "B",
+            "tags": ["learn-forme"]
+        }]);
+        let result = export_deck_tsv(&ExportOptions {
+            cards: Some(cards),
+            topic: Some(json!("Vue")),
+            deck_name: Some(json!("")),
+            base_dir: Some(display(&t.0)),
+            ..ExportOptions::default()
+        })
+        .unwrap();
+
+        assert_eq!(result.deck_name, "Proxi::Vue");
+        let content = fs::read_to_string(&result.file_path).unwrap();
+        assert!(content.contains("#deck:Proxi::Vue\n"), "{content}");
+        assert_eq!(
+            Path::new(&result.file_path),
+            t.0.join("decks").join(format!("{}.tsv", result.slug))
+        );
+        assert!(Path::new(&result.file_path).exists());
+    }
+
+    #[test]
+    fn export_numeric_deck_name_is_js_string() {
+        let t = temp_dir("export-deck-number");
+        let cards = json!([{
+            "type": "basic",
+            "front": "F",
+            "back": "B",
+            "tags": ["learn-forme"]
+        }]);
+        let result = export_deck_tsv(&ExportOptions {
+            cards: Some(cards),
+            topic: Some(json!("Vue")),
+            deck_name: Some(json!(7)),
+            base_dir: Some(display(&t.0)),
+            ..ExportOptions::default()
+        })
+        .unwrap();
+
+        assert_eq!(result.deck_name, "7");
+        let content = fs::read_to_string(&result.file_path).unwrap();
+        assert!(content.contains("#deck:7\n"), "{content}");
+        assert_eq!(
+            Path::new(&result.file_path),
+            t.0.join("decks").join(format!("{}.tsv", result.slug))
+        );
+        assert!(Path::new(&result.file_path).exists());
+    }
+
+    #[test]
+    fn export_deck_name_skips_the_topic_fallback() {
+        let t = temp_dir("export-deck-topic-number");
+        let result = export_deck_tsv(&ExportOptions {
+            topic: Some(json!(5)),
+            slug: Some(json!("s")),
+            deck_name: Some(json!("D")),
+            base_dir: Some(display(&t.0)),
+            ..ExportOptions::default()
+        })
+        .unwrap();
+
+        assert_eq!(result.deck_name, "D");
+        assert_eq!(result.slug, "s");
+        assert_eq!(
+            Path::new(&result.file_path),
+            t.0.join("decks").join(format!("{}.tsv", result.slug))
+        );
+        assert!(Path::new(&result.file_path).exists());
+
+        let err = export_deck_tsv(&ExportOptions {
+            topic: Some(json!(5)),
+            slug: Some(json!("s")),
+            base_dir: Some(display(&t.0)),
+            ..ExportOptions::default()
+        })
+        .err()
+        .expect("a non-string topic has no deck fallback");
+        assert_eq!(err, "TypeError: topic.replace is not a function");
     }
 
     #[test]

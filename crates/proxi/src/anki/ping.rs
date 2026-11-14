@@ -9,7 +9,7 @@ use crate::lesson::js::{is_js_space, js_to_string, js_trim, js_truthy};
 pub const DEFAULT_URL: &str = "http://127.0.0.1:8765";
 
 /// The maximum `setTimeout` delay: Node clamps anything above it to 1ms.
-const MAX_TIMER_MS: u128 = 2_147_483_647;
+const MAX_TIMER_MS: i128 = 2_147_483_647;
 
 #[derive(Debug, Clone)]
 pub struct PingResult {
@@ -19,8 +19,8 @@ pub struct PingResult {
     pub response_time_ms: u128,
 }
 
-/// JS `parseInt(raw || "2000", 10)` followed by `setTimeout` clamping.
-pub fn parse_timeout(raw: Option<&str>) -> u64 {
+/// JS `parseInt(raw || "2000", 10)`: `None` is NaN.
+pub fn parse_int_timeout(raw: Option<&str>) -> Option<i128> {
     let raw = match raw {
         Some(text) if !text.is_empty() => text,
         _ => "2000",
@@ -40,7 +40,7 @@ pub fn parse_timeout(raw: Option<&str>) -> u64 {
         }
         _ => false,
     };
-    let mut value: u128 = 0;
+    let mut value: i128 = 0;
     let mut any = false;
     while let Some(c) = chars.peek().copied() {
         if !c.is_ascii_digit() {
@@ -49,14 +49,30 @@ pub fn parse_timeout(raw: Option<&str>) -> u64 {
         any = true;
         value = value
             .saturating_mul(10)
-            .saturating_add(u128::from(c as u8 - b'0'));
+            .saturating_add(i128::from(c as u8 - b'0'));
         chars.next();
     }
-    if !any || negative || value == 0 || value > MAX_TIMER_MS {
-        1
-    } else {
-        value as u64
+    if !any {
+        return None;
     }
+    Some(if negative {
+        value.saturating_neg()
+    } else {
+        value
+    })
+}
+
+/// Node's `setTimeout` delay: NaN, below 1 or above the 32-bit cap becomes 1ms.
+pub fn clamp_timer(ms: Option<i128>) -> u64 {
+    match ms {
+        Some(value) if (1..=MAX_TIMER_MS).contains(&value) => value as u64,
+        _ => 1,
+    }
+}
+
+/// JS `parseInt(raw || "2000", 10)` followed by `setTimeout` clamping.
+pub fn parse_timeout(raw: Option<&str>) -> u64 {
+    clamp_timer(parse_int_timeout(raw))
 }
 
 /// Node's `res.json()` + AnkiConnect envelope: Ok is the version text, Err the error text.
@@ -163,6 +179,43 @@ pub fn ping_line(url: &str, result: &PingResult) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_int_timeout_matches_parse_int() {
+        assert_eq!(parse_int_timeout(None), Some(2000));
+        assert_eq!(parse_int_timeout(Some("")), Some(2000));
+        assert_eq!(parse_int_timeout(Some(" 150ms")), Some(150));
+        assert_eq!(parse_int_timeout(Some("abc")), None);
+        assert_eq!(parse_int_timeout(Some("-5")), Some(-5));
+        assert_eq!(parse_int_timeout(Some("99999999999")), Some(99999999999));
+    }
+
+    #[test]
+    fn clamp_timer_matches_set_timeout() {
+        assert_eq!(clamp_timer(None), 1);
+        assert_eq!(clamp_timer(Some(0)), 1);
+        assert_eq!(clamp_timer(Some(-10)), 1);
+        assert_eq!(clamp_timer(Some(300)), 300);
+        assert_eq!(clamp_timer(Some(2_147_483_647)), 2_147_483_647);
+        assert_eq!(clamp_timer(Some(2_147_483_648)), 1);
+    }
+
+    #[test]
+    fn doubled_timeout_is_clamped_after_doubling() {
+        assert_eq!(
+            clamp_timer(parse_int_timeout(Some("abc")).map(|v| v * 2)),
+            1
+        );
+        assert_eq!(clamp_timer(parse_int_timeout(Some("1")).map(|v| v * 2)), 2);
+        assert_eq!(
+            clamp_timer(parse_int_timeout(Some("1500000000")).map(|v| v * 2)),
+            1
+        );
+        assert_eq!(
+            clamp_timer(parse_int_timeout(Some("200")).map(|v| v * 2)),
+            400
+        );
+    }
 
     #[test]
     fn parse_timeout_matches_parse_int() {

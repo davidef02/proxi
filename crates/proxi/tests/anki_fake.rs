@@ -1,8 +1,16 @@
-//! The Rust fake AnkiConnect answers the calls the Anki routes make.
+//! The Rust fake AnkiConnect: `fake_anki` answers the calls the Anki routes make, `mock_anki` the
+//! ones `proxi anki sync` makes.
 
 mod common;
 
+#[path = "common/fake_http.rs"]
+mod fake_http;
+
+#[path = "common/mock_anki.rs"]
+mod mock_anki;
+
 use common::fake_anki::{card, FakeAnki, FakeState};
+use mock_anki::{MockAnki, MockAnkiState};
 use reqwest::header::CONTENT_TYPE;
 use reqwest::Client;
 use serde_json::{json, Value};
@@ -48,4 +56,134 @@ async fn find_cards_matches_the_deck_prefix_and_unsupported_actions_are_reported
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[0]["params"]["query"], "deck:\"Proxi::Demo\"");
     assert!(requests[1].get("params").is_none());
+}
+
+/// A basic note as the sync sends it, `options` included.
+const NOTE: &str = r#"{"deckName":"Proxi::Demo","modelName":"Basic","fields":{"Front":"Q","Back":"A"},"options":{"allowDuplicate":false,"duplicateScope":"deck"}}"#;
+
+fn add_notes(notes: &str) -> String {
+    format!(r#"{{"action":"addNotes","version":6,"params":{{"notes":[{notes}]}}}}"#)
+}
+
+fn post(url: &str, body: &str) -> Value {
+    let text = reqwest::blocking::Client::builder()
+        .no_proxy()
+        .build()
+        .expect("blocking client")
+        .post(url)
+        .header(CONTENT_TYPE, "application/json; charset=utf-8")
+        .body(body.to_string())
+        .send()
+        .expect("post mock anki")
+        .text()
+        .expect("mock anki body");
+    serde_json::from_str(&text).unwrap_or_else(|error| panic!("mock anki sent {text:?}: {error}"))
+}
+
+#[test]
+fn version_and_create_deck_answer_the_sync_sequence() {
+    let fake = MockAnki::start(false, None);
+
+    assert_eq!(
+        post(fake.url(), r#"{"action":"version","version":6}"#),
+        json!({"result": 6, "error": null})
+    );
+    assert_eq!(
+        post(
+            fake.url(),
+            r#"{"action":"createDeck","version":6,"params":{"deck":"Proxi::Demo"}}"#
+        ),
+        json!({"result": 1725128400000i64, "error": null})
+    );
+    assert_eq!(fake.actions(), ["version", "createDeck"]);
+    assert_eq!(fake.requests()[1]["params"]["deck"], "Proxi::Demo");
+}
+
+#[test]
+fn reject_duplicates_answers_null_unless_allow_duplicate() {
+    let fake = MockAnki::start(true, None);
+
+    assert_eq!(post(fake.url(), &add_notes(NOTE))["result"], json!([2001]));
+    assert_eq!(post(fake.url(), &add_notes(NOTE))["result"], json!([null]));
+
+    let allowed = NOTE.replace("\"allowDuplicate\":false", "\"allowDuplicate\":true");
+    assert_eq!(post(fake.url(), &add_notes(&allowed))["result"], json!([2002]));
+
+    assert_eq!(fake.added_notes().len(), 2);
+}
+
+#[test]
+fn the_same_note_twice_in_one_batch_keeps_only_the_first() {
+    let fake = MockAnki::start(true, None);
+
+    let batch = format!("{NOTE},{NOTE}");
+    assert_eq!(post(fake.url(), &add_notes(&batch))["result"], json!([2001, null]));
+    assert_eq!(fake.added_notes().len(), 1);
+}
+
+#[test]
+fn without_rejection_every_note_gets_a_fresh_id() {
+    let fake = MockAnki::start(false, None);
+
+    assert_eq!(post(fake.url(), &add_notes(NOTE))["result"], json!([2001]));
+    assert_eq!(post(fake.url(), &add_notes(NOTE))["result"], json!([2002]));
+    assert_eq!(fake.added_notes().len(), 2);
+}
+
+#[test]
+fn model_names_and_fields_follow_the_profile() {
+    let fake = MockAnki::start(
+        false,
+        Some(&[
+            ("Basilare", ["Fronte", "Retro"]),
+            ("Testo da completare", ["Testo", "Extra"]),
+        ]),
+    );
+
+    assert_eq!(
+        post(fake.url(), r#"{"action":"modelNames","version":6,"params":{}}"#),
+        json!({"result": ["Basilare", "Testo da completare"], "error": null})
+    );
+    assert_eq!(
+        post(
+            fake.url(),
+            r#"{"action":"modelFieldNames","version":6,"params":{"modelName":"Basilare"}}"#
+        ),
+        json!({"result": ["Fronte", "Retro"], "error": null})
+    );
+    assert_eq!(
+        post(
+            fake.url(),
+            r#"{"action":"modelFieldNames","version":6,"params":{"modelName":"Nope"}}"#
+        ),
+        json!({"result": null, "error": null})
+    );
+}
+
+#[test]
+fn unsupported_actions_are_reported() {
+    let fake = MockAnki::start(false, None);
+
+    assert_eq!(
+        post(fake.url(), r#"{"action":"modelNames","version":6,"params":{}}"#),
+        json!({"result": null, "error": "Unsupported action modelNames"})
+    );
+    assert_eq!(
+        post(fake.url(), ""),
+        json!({"result": null, "error": "Unsupported action undefined"})
+    );
+}
+
+#[test]
+fn invalid_json_is_a_400() {
+    let mut state = MockAnkiState::new();
+    let (status, answer) = state.answer("{");
+
+    assert_eq!(status, 400);
+    assert_eq!(answer["result"], Value::Null);
+    assert!(
+        answer["error"]
+            .as_str()
+            .is_some_and(|error| !error.is_empty())
+    );
 }

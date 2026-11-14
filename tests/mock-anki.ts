@@ -20,6 +20,8 @@ export class MockAnki {
   responseError: string | null = null;
   /** Note types the mock Anki profile has; null = answer "Unsupported action" */
   models: Record<string, string[]> | null = null;
+  /** Reject a note whose deck, model and first field value match an accepted note, like Anki with allowDuplicate false and duplicateScope deck */
+  rejectDuplicates: boolean = false;
   deckStats: Record<string, any> | null = null;
   deckNamesAndIds: Record<string, number> | null = null;
   guiDeckReviewError: string | null = null;
@@ -36,6 +38,7 @@ export class MockAnki {
     this.responseError = null;
     this.cards = [];
     this.models = null;
+    this.rejectDuplicates = false;
     this.deckStats = null;
     this.deckNamesAndIds = null;
     this.guiDeckReviewError = null;
@@ -152,6 +155,24 @@ export class MockAnki {
               res.end(JSON.stringify({ result: 1725128400000, error: null }));
             } else if (action === "addNotes") {
               const notes = Array.isArray(params?.notes) ? params.notes : [];
+              if (this.rejectDuplicates) {
+                const firstField = (note: any) => Object.values(note?.fields ?? {})[0];
+                const ids = notes.map((note: any) => {
+                  const duplicate =
+                    note?.options?.allowDuplicate !== true &&
+                    this.addedNotes.some(
+                      (added: any) =>
+                        added?.deckName === note?.deckName &&
+                        added?.modelName === note?.modelName &&
+                        firstField(added) === firstField(note),
+                    );
+                  if (duplicate) return null;
+                  this.addedNotes.push(note);
+                  return this.nextNoteId++;
+                });
+                res.end(JSON.stringify({ result: ids, error: null }));
+                return;
+              }
               this.addedNotes.push(...notes);
               const ids = notes.map(() => this.nextNoteId++);
               res.end(JSON.stringify({ result: ids, error: null }));

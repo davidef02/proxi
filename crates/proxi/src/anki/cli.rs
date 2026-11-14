@@ -134,6 +134,7 @@ fn run_export(
             .or_else(|| payload.and_then(|value| value.get("topic")).cloned()),
         slug: flag_string(args, "--slug")
             .or_else(|| payload.and_then(|value| value.get("slug")).cloned()),
+        deck_name: None,
         out_file: get_flag(args, "--out").map(str::to_string),
         base_dir: get_flag(args, "--base-dir").map(str::to_string),
     };
