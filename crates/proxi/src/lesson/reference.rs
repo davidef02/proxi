@@ -162,13 +162,13 @@ pub fn render_reference_html(doc: &Value, sintesi: &Value) -> String {
 
     let mut html = String::new();
     html.push_str(PAGE_OPEN);
-    html.push_str(&esc(title));
+    html.push_str(&doc::esc(title));
     html.push_str(" | ");
     html.push_str(APP_NAME);
     html.push_str(PAGE_HEAD);
     html.push_str(&js::stringify_compact(sintesi));
     html.push_str(PAGE_MAIN);
-    html.push_str(&esc(title));
+    html.push_str(&doc::esc(title));
     html.push_str(PAGE_NODES);
     html.push_str(&nodes_html);
     html.push_str("\n    </section>\n\n");
@@ -206,11 +206,11 @@ fn node_card(node: &Value) -> String {
     if js::js_truthy(node.get("keyCode")) {
         let code = &node["keyCode"];
         snippet.push_str("<div class=\"code-card\"><pre><code>");
-        snippet.push_str(&esc(code.get("code")));
+        snippet.push_str(&doc::esc(code.get("code")));
         snippet.push_str("</code></pre>");
         if js::js_truthy(code.get("caption")) {
             snippet.push_str("<small class=\"code-caption\">");
-            snippet.push_str(&esc(code.get("caption")));
+            snippet.push_str(&doc::esc(code.get("caption")));
             snippet.push_str("</small>");
         }
         snippet.push_str("</div>");
@@ -218,7 +218,7 @@ fn node_card(node: &Value) -> String {
 
     format!(
         "<div class=\"node-card tier-{tier}\">\n  <div class=\"node-card-header\">\n    <div class=\"node-card-title-group\">\n      <span class=\"node-card-num\">Nodo {number}</span>\n      <h3 class=\"node-card-title\">{title}</h3>\n    </div>\n    {badge}\n  </div>\n  <div class=\"node-card-claim\">{claim}</div>\n  {snippet}\n</div>",
-        title = esc(node.get("title")),
+        title = doc::esc(node.get("title")),
         badge = tier_badge(&tier),
         claim = render::parse_markdown_prose(js::text(node.get("summary"))),
     )
@@ -228,17 +228,17 @@ fn formula_card(formula: &Value) -> String {
     format!(
         "<div class=\"formula-card\">\n  <div>{}</div>\n  <small style=\"color: #64748b;\">Fonte: {}</small>\n</div>",
         display_math(&js::js_concat(formula.get("math"))),
-        esc(formula.get("sourceNode"))
+        doc::esc(formula.get("sourceNode"))
     )
 }
 
 fn misconception_item(item: &Value) -> String {
     let source = if js::js_truthy(item.get("sourceNode")) {
-        format!("<strong>{}: </strong>", esc(item.get("sourceNode")))
+        format!("<strong>{}: </strong>", doc::esc(item.get("sourceNode")))
     } else {
         String::new()
     };
-    format!("<li>{source}{}</li>", esc(item.get("description")))
+    format!("<li>{source}{}</li>", doc::esc(item.get("description")))
 }
 
 fn tier_badge(tier: &str) -> &'static str {
@@ -256,14 +256,6 @@ fn display_math(math: &str) -> String {
         math.to_string()
     } else {
         format!("$$ {math} $$")
-    }
-}
-
-/// Node's `escapeHtml`: falsy values render as nothing.
-fn esc(v: Option<&Value>) -> String {
-    match v {
-        Some(value) if js::js_truthy(Some(value)) => render::escape_html(&js::js_to_string(value)),
-        _ => String::new(),
     }
 }
 

@@ -524,7 +524,7 @@ fn or_truthy<'a>(a: Option<&'a Value>, b: Option<&'a Value>) -> Option<&'a Value
 }
 
 /// Node's `escapeHtml`: falsy values render as nothing.
-fn esc(v: Option<&Value>) -> String {
+pub(crate) fn esc(v: Option<&Value>) -> String {
     match v {
         Some(value) if js::js_truthy(Some(value)) => render::escape_html(&js::js_to_string(value)),
         _ => String::new(),
