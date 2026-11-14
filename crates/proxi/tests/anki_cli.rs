@@ -345,10 +345,6 @@ fn deck_tsv(data: &Path) -> std::path::PathBuf {
     data.join("decks").join("reattivita.tsv")
 }
 
-fn actions_of(fake: &MockAnki) -> Vec<String> {
-    fake.actions()
-}
-
 fn note_tags(note: &serde_json::Value) -> Vec<String> {
     note["tags"]
         .as_array()
@@ -707,7 +703,7 @@ fn localized_note_types() {
     );
 
     assert_eq!(
-        actions_of(&fake).join(","),
+        fake.actions().join(","),
         "version,createDeck,modelNames,modelFieldNames,modelFieldNames,addNotes"
     );
     let notes = fake.added_notes();
@@ -1080,10 +1076,7 @@ fn cards_not_array_is_fatal_when_online() {
         "stderr: {}",
         run.stderr
     );
-    assert_eq!(
-        actions_of(&fake).join(","),
-        "version,createDeck,modelNames"
-    );
+    assert_eq!(fake.actions().join(","), "version,createDeck,modelNames");
 }
 
 #[test]

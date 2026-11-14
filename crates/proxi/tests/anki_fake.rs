@@ -113,6 +113,22 @@ fn reject_duplicates_answers_null_unless_allow_duplicate() {
 }
 
 #[test]
+fn duplicate_detection_reads_the_first_field_in_js_order() {
+    let fake = MockAnki::start(true, None);
+
+    let first = NOTE.replace(
+        r#""fields":{"Front":"Q","Back":"A"}"#,
+        r#""fields":{"2":"Q","1":"A"}"#,
+    );
+    let second = NOTE.replace(
+        r#""fields":{"Front":"Q","Back":"A"}"#,
+        r#""fields":{"1":"A","2":"R"}"#,
+    );
+    assert_eq!(post(fake.url(), &add_notes(&first))["result"], json!([2001]));
+    assert_eq!(post(fake.url(), &add_notes(&second))["result"], json!([null]));
+}
+
+#[test]
 fn the_same_note_twice_in_one_batch_keeps_only_the_first() {
     let fake = MockAnki::start(true, None);
 

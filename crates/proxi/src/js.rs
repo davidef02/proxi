@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde_json::{Number, Value};
+use serde_json::{Map, Number, Value};
 
 /// 2^53, the largest integer a JS number holds exactly.
 const MAX_SAFE: f64 = 9007199254740992.0;
@@ -255,6 +255,33 @@ pub fn parse_json(text: &str) -> Result<Value, String> {
     serde_json::from_str(text)
         .map(normalise_numbers)
         .map_err(|e| e.to_string())
+}
+
+/// A key JS `Object` enumerates as an array index: digits, no leading zero, below 2^32 - 1.
+pub fn array_index(key: &str) -> Option<u64> {
+    if key.is_empty()
+        || !key.bytes().all(|byte| byte.is_ascii_digit())
+        || (key.len() > 1 && key.starts_with('0'))
+    {
+        return None;
+    }
+    let index: u64 = key.parse().ok()?;
+    (index < 4_294_967_295).then_some(index)
+}
+
+/// JS `Object.values(map)[0]`: array-index keys enumerate first, smallest index first.
+pub fn first_value(map: &Map<String, Value>) -> Option<&Value> {
+    let mut first: Option<(u64, &Value)> = None;
+    for (key, value) in map {
+        if let Some(index) = array_index(key) {
+            if first.is_none_or(|(smallest, _)| index < smallest) {
+                first = Some((index, value));
+            }
+        }
+    }
+    first
+        .map(|(_, value)| value)
+        .or_else(|| map.values().next())
 }
 
 fn hex_val(b: u8) -> Option<u8> {
@@ -575,6 +602,22 @@ mod tests {
             "{\"b\":1,\"a\":[200,0,0.5]}"
         );
         assert!(parse_json("{nope").is_err());
+    }
+
+    #[test]
+    fn object_keys_enumerate_array_indices_first() {
+        assert_eq!(array_index("0"), Some(0));
+        assert_eq!(array_index("01"), None);
+        assert_eq!(array_index("4294967294"), Some(4_294_967_294));
+        assert_eq!(array_index("4294967295"), None);
+        assert_eq!(array_index(""), None);
+        assert_eq!(array_index("1.5"), None);
+        assert_eq!(array_index("-1"), None);
+
+        let map = parse_json(r#"{"2":"b","1":"a","x":"c"}"#).expect("json");
+        assert_eq!(first_value(map.as_object().unwrap()), Some(&json!("a")));
+        let map = parse_json(r#"{"x":"c","y":"d"}"#).expect("json");
+        assert_eq!(first_value(map.as_object().unwrap()), Some(&json!("c")));
     }
 
     #[test]

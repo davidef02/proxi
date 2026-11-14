@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 
-use proxi::js::{js_string, truthy};
+use proxi::js::{first_value, js_string, truthy};
 
 use crate::fake_http::{FakeHttp, Reply};
 
@@ -129,10 +129,11 @@ impl Default for MockAnkiState {
     }
 }
 
-/// First value of the `fields` object, insertion order kept: Anki's `sortField` stand-in.
+/// First value of the `fields` object as JS sees it (`Object.values(fields)[0]`): array-index keys
+/// enumerate first, ascending, then the rest in insertion order. Anki's `sortField` stand-in.
 fn first_field(note: &Value) -> Option<&Value> {
     match note.get("fields") {
-        Some(Value::Object(fields)) => fields.values().next(),
+        Some(Value::Object(fields)) => first_value(fields),
         _ => None,
     }
 }

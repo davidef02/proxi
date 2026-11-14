@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use serde_json::{json, Map, Value};
 
-use crate::js::parse_json;
+use crate::js::{array_index, parse_json};
 use crate::lesson::js::{js_concat, js_to_string, js_trim, js_truthy, stringify_compact};
 
 use super::cards::{self, ExportOptions};
@@ -277,24 +277,24 @@ fn build_notes(
             }
         };
 
-        let mut fields = Map::new();
+        let mut field_entries = Vec::with_capacity(2);
         if model.fields[0] == model.fields[1] {
             if let Some(value) = second {
-                fields.insert(model.fields[0].clone(), value);
+                field_entries.push((model.fields[0].clone(), value));
             }
         } else {
             if let Some(value) = first {
-                fields.insert(model.fields[0].clone(), value);
+                field_entries.push((model.fields[0].clone(), value));
             }
             if let Some(value) = second {
-                fields.insert(model.fields[1].clone(), value);
+                field_entries.push((model.fields[1].clone(), value));
             }
         }
 
         let mut note = Map::new();
         note.insert("deckName".to_string(), deck.clone());
         note.insert("modelName".to_string(), model.name.clone());
-        note.insert("fields".to_string(), Value::Object(fields));
+        note.insert("fields".to_string(), fields_object(field_entries));
         if let Some(tags) = card.get("tags") {
             note.insert("tags".to_string(), tags.clone());
         }
@@ -305,6 +305,16 @@ fn build_notes(
         notes.push(Value::Object(note));
     }
     Ok(notes)
+}
+
+/// The `fields` object Node writes as `{[f0]: v0, [f1]: v1}`: V8 enumerates array-index keys first,
+/// ascending, then the rest in insertion order, and `JSON.stringify` follows that order.
+fn fields_object(mut entries: Vec<(String, Value)>) -> Value {
+    entries.sort_by_key(|(key, _)| match array_index(key) {
+        Some(index) => (0, index),
+        None => (1, 0),
+    });
+    Value::Object(entries.into_iter().collect())
 }
 
 /// `result || []` then one added per number, one duplicate per other item.
@@ -584,6 +594,45 @@ mod tests {
         )
         .unwrap();
         assert_eq!(notes[0]["fields"], json!({ "Front": "B" }));
+    }
+
+    #[test]
+    fn integer_like_field_names_serialise_in_js_order() {
+        let models = NoteModels {
+            basic: NoteModel {
+                name: json!("Basic"),
+                fields: ["2".to_string(), "1".to_string()],
+            },
+            ..default_models()
+        };
+        let notes = notes_for(
+            json!([{"type": "basic", "front": "F", "back": "B"}]),
+            &models,
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            stringify_compact(&notes[0]),
+            r#"{"deckName":"Proxi::Demo","modelName":"Basic","fields":{"1":"B","2":"F"},"options":{"allowDuplicate":false,"duplicateScope":"deck"}}"#
+        );
+
+        let models = NoteModels {
+            basic: NoteModel {
+                name: json!("Basic"),
+                fields: ["Back".to_string(), "1".to_string()],
+            },
+            ..default_models()
+        };
+        let notes = notes_for(
+            json!([{"type": "basic", "front": "F", "back": "B"}]),
+            &models,
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            stringify_compact(&notes[0]),
+            r#"{"deckName":"Proxi::Demo","modelName":"Basic","fields":{"1":"B","Back":"F"},"options":{"allowDuplicate":false,"duplicateScope":"deck"}}"#
+        );
     }
 
     #[test]
