@@ -9,7 +9,10 @@ mod mem_provider;
 mod fake_http;
 #[path = "common/fake_github.rs"]
 mod fake_github;
+#[path = "common/fake_drive.rs"]
+mod fake_drive;
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -18,19 +21,24 @@ use std::thread;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use common::{TempDir, temp_dir};
+use fake_drive::{FakeDrive, FakeDriveOpts};
 use fake_github::{FakeGithub, FakeGithubOpts};
 use fake_http::{FakeHttp, Reply};
 use mem_provider::MemProvider;
+use proxi::data_root::{DATA_ROOT_IN_REPO, DATA_ROOT_RELATIVE, read_data_root_pointer, resolve_path};
 use proxi::protocol::{PendingDeletions, SyncStatus};
 use proxi::settings::write_settings;
 use proxi::sync::engine::now_ms;
+use proxi::sync::gdrive::{GoogleEndpoints, challenge_for};
 use proxi::sync::github::{CancelToken, GithubEndpoints, Sleeper};
 use proxi::sync::secrets::{
-    GDRIVE_ACCOUNT, GithubSecret, LOCKED_ERROR, LegacyDecryptor, LegacyState, MemoryStore,
-    SecretStore, UNREADABLE_ERROR, get_gdrive, get_github, legacy_file, set_github,
+    GDRIVE_ACCOUNT, GdriveSecret, GithubSecret, LOCKED_ERROR, LegacyDecryptor, LegacyState,
+    MemoryStore, SecretStore, UNREADABLE_ERROR, get_gdrive, get_github, legacy_file, set_gdrive,
+    set_github,
 };
 use proxi::sync::service::{
-    GDRIVE_UNAVAILABLE, MakeProvider, NOT_CONNECTED, SyncConfig, SyncService,
+    DATA_ROOT_FROM_ENV, GOOGLE_DENIED, MakeProvider, NOT_CONNECTED, ProviderSecret, SyncConfig,
+    SyncService, callback_page,
 };
 use proxi::sync::types::{ProviderError, RemoteStat, SyncProvider};
 use serde_json::{Value, json};
@@ -72,6 +80,7 @@ fn noop_sleeper() -> Sleeper {
 #[derive(Clone)]
 struct Counters {
     pulled: Arc<AtomicUsize>,
+    relaunched: Arc<AtomicUsize>,
     statuses: Arc<Mutex<Vec<SyncStatus>>>,
 }
 
@@ -79,6 +88,7 @@ impl Counters {
     fn new() -> Self {
         Self {
             pulled: Arc::new(AtomicUsize::new(0)),
+            relaunched: Arc::new(AtomicUsize::new(0)),
             statuses: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -86,27 +96,54 @@ impl Counters {
     fn pulled(&self) -> usize {
         self.pulled.load(Ordering::SeqCst)
     }
+
+    fn relaunched(&self) -> usize {
+        self.relaunched.load(Ordering::SeqCst)
+    }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn service_config(
     repo: &Path,
     data: &Path,
     store: Arc<dyn SecretStore>,
     endpoints: GithubEndpoints,
+    google: GoogleEndpoints,
     make: Option<MakeProvider>,
     counters: &Counters,
 ) -> SyncService {
+    SyncService::new(sync_config(
+        repo, data, store, endpoints, google, make, counters,
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn sync_config(
+    repo: &Path,
+    data: &Path,
+    store: Arc<dyn SecretStore>,
+    endpoints: GithubEndpoints,
+    google: GoogleEndpoints,
+    make: Option<MakeProvider>,
+    counters: &Counters,
+) -> SyncConfig {
     let pulled = Arc::clone(&counters.pulled);
+    let relaunched = Arc::clone(&counters.relaunched);
     let statuses = Arc::clone(&counters.statuses);
-    SyncService::new(SyncConfig {
+    SyncConfig {
         repo_root: repo.to_path_buf(),
         data_root: data.to_path_buf(),
         data_root_from_env: false,
         github: endpoints,
+        google,
+        port: 4321,
         sleep: noop_sleeper(),
         store,
         decryptor: Arc::new(FailingDecryptor),
         make_provider: make,
+        relaunch: Some(Arc::new(move || {
+            relaunched.fetch_add(1, Ordering::SeqCst);
+        })),
         on_status: Arc::new(move |status: &SyncStatus| {
             statuses
                 .lock()
@@ -116,7 +153,7 @@ fn service_config(
         on_pulled: Arc::new(move || {
             pulled.fetch_add(1, Ordering::SeqCst);
         }),
-    })
+    }
 }
 
 struct Harness {
@@ -155,15 +192,25 @@ impl Harness {
 
     fn service(&self) -> SyncService {
         let make = mem_make_provider(&self.provider);
-        self.service_with(GithubEndpoints::default(), Some(make))
+        self.service_with(
+            GithubEndpoints::default(),
+            GoogleEndpoints::default(),
+            Some(make),
+        )
     }
 
-    fn service_with(&self, endpoints: GithubEndpoints, make: Option<MakeProvider>) -> SyncService {
+    fn service_with(
+        &self,
+        endpoints: GithubEndpoints,
+        google: GoogleEndpoints,
+        make: Option<MakeProvider>,
+    ) -> SyncService {
         service_config(
             &self.repo,
             &self.data,
             self.store(),
             endpoints,
+            google,
             make,
             &self.counters,
         )
@@ -176,6 +223,7 @@ impl Harness {
             data,
             self.store(),
             GithubEndpoints::default(),
+            GoogleEndpoints::default(),
             Some(make),
             &self.counters,
         )
@@ -184,7 +232,7 @@ impl Harness {
 
 fn mem_make_provider(provider: &MemProvider) -> MakeProvider {
     let provider = provider.clone();
-    Arc::new(move |_secret: &GithubSecret| {
+    Arc::new(move |_secret: &ProviderSecret| {
         Ok(Box::new(provider.clone()) as Box<dyn SyncProvider>)
     })
 }
@@ -398,7 +446,11 @@ fn github_start_polls_the_device_flow_sets_up_the_repo_and_switches_the_provider
         }
     });
     let make = mem_make_provider(&t.provider);
-    let svc = t.service_with(GithubEndpoints::from_override(Some(&fake.url)), Some(make));
+    let svc = t.service_with(
+        GithubEndpoints::from_override(Some(&fake.url)),
+        GoogleEndpoints::default(),
+        Some(make),
+    );
 
     let started = svc.github_start();
     assert_eq!(
@@ -480,7 +532,11 @@ fn a_cancel_while_the_device_code_is_in_flight_leaves_no_pending_code() {
         }
     });
     let make = mem_make_provider(&t.provider);
-    let svc = t.service_with(GithubEndpoints::from_override(Some(&fake.url)), Some(make));
+    let svc = t.service_with(
+        GithubEndpoints::from_override(Some(&fake.url)),
+        GoogleEndpoints::default(),
+        Some(make),
+    );
 
     let starter = svc.clone();
     let start = thread::spawn(move || starter.github_start());
@@ -639,14 +695,18 @@ fn concurrent_run_calls_share_one_pass() {
     let entered = Arc::new(Mutex::new(false));
     let inner = t.provider.clone();
     let flag = Arc::clone(&entered);
-    let make: MakeProvider = Arc::new(move |_secret: &GithubSecret| {
+    let make: MakeProvider = Arc::new(move |_secret: &ProviderSecret| {
         Ok(Box::new(SlowList {
             inner: inner.clone(),
             entered: Arc::clone(&flag),
             delay: Duration::from_millis(300),
         }) as Box<dyn SyncProvider>)
     });
-    let svc = t.service_with(GithubEndpoints::default(), Some(make));
+    let svc = t.service_with(
+        GithubEndpoints::default(),
+        GoogleEndpoints::default(),
+        Some(make),
+    );
 
     let first = svc.clone();
     let a = thread::spawn(move || first.run(false));
@@ -877,6 +937,7 @@ fn encrypted_reflects_the_os_keychain() {
         &t.data,
         store,
         GithubEndpoints::default(),
+        GoogleEndpoints::default(),
         None,
         &t.counters,
     );
@@ -960,22 +1021,522 @@ fn a_plaintext_legacy_file_is_migrated_at_service_start() {
     assert!(!file.exists());
 }
 
+fn start_params(svc: &SyncService) -> BTreeMap<String, String> {
+    let url = svc.google_start().expect("google start");
+    let (_, query) = url.split_once('?').expect("consent URL has a query");
+    form_urlencoded::parse(query.as_bytes())
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect()
+}
+
+fn form_of(recorded: &fake_http::Recorded) -> BTreeMap<String, String> {
+    form_urlencoded::parse(&recorded.bytes)
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect()
+}
+
+fn google_service(t: &Harness, fake: &FakeDrive, make: Option<MakeProvider>) -> SyncService {
+    t.service_with(GithubEndpoints::default(), fake.endpoints(), make)
+}
+
 #[test]
-fn gdrive_provider_reports_gdrive_unavailable() {
+fn callback_page_escapes_the_five_html_characters() {
+    assert_eq!(
+        callback_page(400, "a & b < c > d \"e\" 'f'"),
+        (
+            400,
+            String::from("<!doctype html><html lang=\"it\"><head><meta charset=\"utf-8\"><title>Proxi</title></head><body><h1>Proxi</h1><p>a &#38; b &#60; c &#62; d &#34;e&#34; &#39;f&#39;</p></body></html>")
+        )
+    );
+    assert_eq!(callback_page(200, "x").0, 200);
+}
+
+#[test]
+fn set_data_root_refuses_relative_and_in_repo_paths_needs_no_restart_for_the_same_path_and_relaunches_for_another()
+ {
+    let t = Harness::new(&[]);
+    let svc = t.service();
+    let dir = |path: &Path| path.display().to_string();
+
+    assert_eq!(
+        svc.set_data_root("relative/dir").unwrap_err(),
+        (400, DATA_ROOT_RELATIVE.to_string())
+    );
+    assert_eq!(
+        svc.set_data_root(&dir(&t.repo.join("inside"))).unwrap_err(),
+        (400, DATA_ROOT_IN_REPO.to_string())
+    );
+
+    let same = svc.set_data_root(&dir(&t.data)).expect("same folder");
+    assert_eq!(same.restart_required, None);
+    assert!(t.data.join("courses").is_dir());
+    assert_eq!(read_data_root_pointer(&t.repo), None);
+
+    let other = t.tmp.0.join("other");
+    let s = svc.set_data_root(&dir(&other)).expect("new folder");
+    assert_eq!(s.restart_required, Some(true));
+    assert_eq!(read_data_root_pointer(&t.repo), Some(resolve_path(&other)));
+    assert!(other.join("courses").is_dir());
+    assert_eq!(t.counters.relaunched(), 0, "the relaunch waits 500 ms");
+    wait_for(|| t.counters.relaunched() == 1);
+}
+
+#[test]
+fn google_start_builds_a_pkce_url_a_bad_state_is_refused_and_a_valid_callback_stores_the_secret() {
+    let fake = FakeDrive::start(FakeDriveOpts::default());
+    let folder = fake.add_folder("proxi-data", Some("data"));
+    let t = Harness::new(&[]);
+    write_settings(&t.repo, &json!({ "googleClientId": "test-client" })).expect("client id");
+    let make = mem_make_provider(&t.provider);
+    let svc = google_service(&t, &fake, Some(make));
+
+    let params = start_params(&svc);
+    assert_eq!(
+        params.get("client_id").map(String::as_str),
+        Some("test-client")
+    );
+    assert_eq!(
+        params.get("code_challenge_method").map(String::as_str),
+        Some("S256")
+    );
+    assert_eq!(
+        params.get("redirect_uri").map(String::as_str),
+        Some("http://127.0.0.1:4321/oauth/google/callback")
+    );
+    let challenge = params.get("code_challenge").expect("challenge").clone();
+    let state = params.get("state").expect("state").clone();
+    assert_eq!(state.len(), 32);
+    assert!(svc.status().gdrive.pending, "the start shows as pending");
+
+    let bad = svc.google_callback(Some("x"), Some("not-issued"), None);
+    assert_eq!(bad.0, 400);
+    assert!(bad.1.contains("scaduta"), "{}", bad.1);
+    assert!(bad.1.contains("<title>Proxi</title>"));
+
+    let ok = svc.google_callback(Some("abc"), Some(&state), None);
+    assert_eq!(ok.0, 200, "{}", ok.1);
+    assert!(ok.1.contains("completato"));
+    assert!(ok.1.contains("<h1>Proxi</h1>"));
+    assert!(ok.1.contains("tornare a Proxi"));
+
+    let again = svc.google_callback(Some("abc"), Some(&state), None);
+    assert_eq!(again.0, 400, "a state is one-time");
+
+    // The fake received the verifier whose SHA-256 is the challenge.
+    let token = fake
+        .requests()
+        .into_iter()
+        .find(|request| request.method == "POST" && request.path == "/token")
+        .expect("token request");
+    let form = form_of(&token);
+    assert_eq!(form.get("code").map(String::as_str), Some("abc"));
+    assert_eq!(
+        form.get("client_id").map(String::as_str),
+        Some("test-client")
+    );
+    assert_eq!(
+        form.get("redirect_uri").map(String::as_str),
+        Some("http://127.0.0.1:4321/oauth/google/callback")
+    );
+    assert_eq!(
+        challenge_for(form.get("code_verifier").expect("verifier")),
+        challenge
+    );
+
+    let s = svc.status();
+    assert!(s.gdrive.connected);
+    assert_eq!(s.gdrive.email.as_deref(), Some("davide@example.com"));
+    assert_eq!(s.provider, "gdrive");
+    assert!(!s.gdrive.pending, "the pending entry was consumed");
+    assert_eq!(
+        get_gdrive(t.store.as_ref()).expect("store"),
+        Some(GdriveSecret {
+            refresh_token: "rt-1".to_string(),
+            folder_id: folder,
+            email: Some("davide@example.com".to_string()),
+        })
+    );
+}
+
+#[test]
+fn google_callback_with_a_locked_legacy_file_connects_and_keeps_the_file_byte_identical() {
+    let fake = FakeDrive::start(FakeDriveOpts::default());
+    fake.add_folder("proxi-data", Some("data"));
+    let t = Harness::new(&[]);
+    let file = write_legacy(&t.repo, json!({ "v": 1, "encrypted": true, "data": "AAAA" }));
+    let before = fs::read(&file).expect("read legacy file");
+    write_settings(&t.repo, &json!({ "googleClientId": "test-client" })).expect("client id");
+    let make = mem_make_provider(&t.provider);
+    let svc = google_service(&t, &fake, Some(make));
+    assert!(matches!(svc.legacy_state(), LegacyState::Locked(_)));
+
+    let state = start_params(&svc)["state"].clone();
+    let r = svc.google_callback(Some("abc"), Some(&state), None);
+    assert_eq!(r.0, 200, "{}", r.1);
+    assert!(r.1.contains("completato"));
+    assert_eq!(
+        fs::read(&file).expect("read legacy file"),
+        before,
+        "the locked file is untouched"
+    );
+    let s = svc.status();
+    assert!(s.gdrive.connected);
+    assert_eq!(s.provider, "gdrive");
+}
+
+#[test]
+fn a_denied_google_login_answers_the_cancelled_page_and_stores_nothing() {
+    let fake = FakeDrive::start(FakeDriveOpts::default());
+    let t = Harness::new(&[]);
+    write_settings(&t.repo, &json!({ "googleClientId": "test-client" })).expect("client id");
+    let svc = google_service(&t, &fake, None);
+    let state = start_params(&svc)["state"].clone();
+
+    let denied = svc.google_callback(None, Some(&state), Some("access_denied"));
+    assert_eq!(denied, callback_page(400, GOOGLE_DENIED));
+    assert!(
+        !fake
+            .requests()
+            .iter()
+            .any(|request| request.method == "POST" && request.path == "/token"),
+        "no token exchange"
+    );
+    let s = svc.status();
+    assert!(!s.gdrive.connected);
+    assert_eq!(s.provider, "local");
+    assert_eq!(s.gdrive.error, None);
+}
+
+#[test]
+fn a_failed_token_exchange_lands_in_gdrive_error_and_the_page() {
+    let fake = FakeDrive::start(FakeDriveOpts::default());
+    fake.set_omit_refresh(true);
+    let t = Harness::new(&[]);
+    write_settings(&t.repo, &json!({ "googleClientId": "test-client" })).expect("client id");
+    let svc = google_service(&t, &fake, None);
+    let state = start_params(&svc)["state"].clone();
+
+    let failed = svc.google_callback(Some("abc"), Some(&state), None);
+    let message = "Google non ha restituito un refresh token: riprova.";
+    assert_eq!(
+        failed,
+        callback_page(400, &format!("Accesso non riuscito: {message}"))
+    );
+    let s = svc.status();
+    assert_eq!(s.gdrive.error.as_deref(), Some(message));
+    assert!(!s.gdrive.connected);
+    assert_eq!(s.provider, "local");
+}
+
+#[test]
+fn a_conflict_keeps_both_versions_and_the_resolved_choice_reaches_the_remote() {
+    let t = Harness::new(&[("courses/c.md", "base")]);
+    let store = t.store();
+    connect_github(store.as_ref(), &t.repo);
+    let svc = t.service();
+    svc.run(false);
+
+    // Both sides edit the same file; the remote copy is newer, so it wins and the local bytes go to the conflicts.
+    fs::write(t.data.join("courses/c.md"), "local-edit").expect("local edit");
+    set_mtime(&t.data.join("courses/c.md"), now_ms() - 60_000);
+    t.provider.0.lock().unwrap().store.insert(
+        "courses/c.md".to_string(),
+        (b"remote-edit".to_vec(), now_ms() as f64),
+    );
+    let r = svc.run(false);
+    assert_eq!(r.last.conflicts, Some(1));
+    assert_eq!(r.conflict_count, 1);
+    assert_eq!(
+        fs::read_to_string(t.data.join("courses/c.md")).expect("local copy"),
+        "remote-edit"
+    );
+
+    let conflicts = svc.conflicts();
+    let conflict = &conflicts[0];
+    assert_eq!(conflict.rel, "courses/c.md");
+    assert_eq!(conflict.side, "locale");
+    assert_eq!(
+        fs::read_to_string(
+            t.repo
+                .join(".learner")
+                .join("drive-conflicts")
+                .join(&conflict.id)
+        )
+        .expect("conflict copy"),
+        "local-edit"
+    );
+
+    svc.resolve_conflict(&conflict.id, "local").expect("resolve");
+    assert_eq!(
+        fs::read_to_string(t.data.join("courses/c.md")).expect("resolved copy"),
+        "local-edit"
+    );
+    assert!(svc.conflicts().is_empty());
+    assert_eq!(svc.status().conflict_count, 0);
+
+    let next = svc.run(false);
+    assert_eq!(next.last.pushed, Some(1));
+    assert_eq!(t.provider.file("courses/c.md").as_deref(), Some("local-edit"));
+}
+
+#[test]
+fn resolve_and_restore_map_a_bad_id_or_a_missing_copy_to_an_error() {
+    let t = Harness::new(&[]);
+    let svc = t.service();
+
+    assert_eq!(
+        svc.resolve_conflict("../../x.locale-1", "local")
+            .unwrap_err(),
+        "Conflitto non valido."
+    );
+    assert_eq!(
+        svc.resolve_conflict("courses/x.md.locale-1", "local")
+            .unwrap_err(),
+        "Conflitto non trovato."
+    );
+    assert_eq!(
+        svc.restore("nope").unwrap_err(),
+        "Identificatore non valido."
+    );
+}
+
+#[test]
+fn a_remote_deletion_trashes_the_local_copy_and_restore_brings_it_back_and_the_next_pass_uploads_it() {
+    let t = Harness::new(&[
+        ("courses/a/x.md", "x"),
+        ("courses/a/k1.md", "k"),
+        ("courses/a/k2.md", "k"),
+        ("courses/a/k3.md", "k"),
+    ]);
+    let store = t.store();
+    connect_github(store.as_ref(), &t.repo);
+    let svc = t.service();
+    svc.run(false);
+
+    t.provider
+        .0
+        .lock()
+        .unwrap()
+        .store
+        .shift_remove("courses/a/x.md");
+    let r = svc.run(false);
+    assert_eq!(r.last.state, "idle");
+    assert_eq!(r.last.deleted, Some(1));
+    assert_eq!(r.trash_count, 1);
+    assert!(!t.data.join("courses/a/x.md").exists());
+
+    let trash = svc.trash();
+    let entry = &trash[0];
+    assert_eq!(entry.rel, "courses/a/x.md");
+    svc.restore(&entry.id).expect("restore");
+    assert_eq!(
+        fs::read_to_string(t.data.join("courses/a/x.md")).expect("restored copy"),
+        "x"
+    );
+    assert_eq!(svc.status().trash_count, 0);
+
+    let again = svc.run(false);
+    assert_eq!(again.last.pushed, Some(1));
+    assert_eq!(t.provider.file("courses/a/x.md").as_deref(), Some("x"));
+}
+
+#[test]
+fn disconnect_gdrive_revokes_the_refresh_token_and_keeps_github() {
+    let fake = FakeDrive::start(FakeDriveOpts::default());
     let t = Harness::new(&[]);
     let store = t.store();
-    store
-        .set(
-            GDRIVE_ACCOUNT,
-            &json!({ "refreshToken": "rt", "folderId": "f" }).to_string(),
-        )
-        .expect("store gdrive");
+    connect_github(store.as_ref(), &t.repo);
+    set_gdrive(
+        store.as_ref(),
+        &GdriveSecret {
+            refresh_token: "rt-1".to_string(),
+            folder_id: "f".to_string(),
+            email: Some("a@example.com".to_string()),
+        },
+    )
+    .expect("store gdrive");
     write_settings(&t.repo, &json!({ "syncProvider": "gdrive" })).expect("switch to gdrive");
+    let svc = google_service(&t, &fake, None);
 
-    let s = t.service().run(false);
+    let s = svc.disconnect("gdrive").expect("disconnect");
+    let revoke = fake
+        .requests()
+        .into_iter()
+        .find(|request| request.method == "POST" && request.path == "/revoke")
+        .expect("revoke request");
+    assert_eq!(revoke.body, "token=rt-1");
+    assert!(!s.gdrive.connected);
+    assert!(s.github.connected);
+    assert_eq!(s.provider, "local");
+}
+
+#[test]
+fn set_data_root_is_refused_with_409_under_learner_data_root() {
+    let t = Harness::new(&[]);
+    let mut cfg = sync_config(
+        &t.repo,
+        &t.data,
+        t.store(),
+        GithubEndpoints::default(),
+        GoogleEndpoints::default(),
+        None,
+        &Counters::new(),
+    );
+    cfg.data_root_from_env = true;
+    let svc = SyncService::new(cfg);
+
+    let other = t.tmp.0.join("other");
+    assert_eq!(
+        svc.set_data_root(&other.display().to_string()).unwrap_err(),
+        (409, DATA_ROOT_FROM_ENV.to_string())
+    );
+    assert_eq!(read_data_root_pointer(&t.repo), None);
+}
+
+#[test]
+fn resolve_and_restore_refresh_the_board() {
+    // resolveConflict
+    let t = Harness::new(&[("courses/c.md", "base")]);
+    let store = t.store();
+    connect_github(store.as_ref(), &t.repo);
+    let svc = t.service();
+    svc.run(false);
+    fs::write(t.data.join("courses/c.md"), "local-edit").expect("local edit");
+    set_mtime(&t.data.join("courses/c.md"), now_ms() - 60_000);
+    t.provider.0.lock().unwrap().store.insert(
+        "courses/c.md".to_string(),
+        (b"remote-edit".to_vec(), now_ms() as f64),
+    );
+    svc.run(false);
+    let id = svc.conflicts()[0].id.clone();
+    let before = t.counters.pulled();
+    svc.resolve_conflict(&id, "local").expect("resolve");
+    assert_eq!(t.counters.pulled(), before + 1);
+
+    // restore
+    let u = Harness::new(&[
+        ("courses/a.md", "a"),
+        ("courses/b.md", "b"),
+        ("courses/c.md", "c"),
+        ("courses/d.md", "d"),
+    ]);
+    let store = u.store();
+    connect_github(store.as_ref(), &u.repo);
+    let svc = u.service();
+    svc.run(false);
+    u.provider
+        .0
+        .lock()
+        .unwrap()
+        .store
+        .shift_remove("courses/a.md");
+    svc.run(false);
+    let id = svc.trash()[0].id.clone();
+    let before = u.counters.pulled();
+    svc.restore(&id).expect("restore");
+    assert_eq!(u.counters.pulled(), before + 1);
+    assert_eq!(
+        fs::read_to_string(u.data.join("courses/a.md")).expect("restored"),
+        "a"
+    );
+}
+
+#[test]
+fn a_gdrive_pass_against_the_fake_drive_pushes_then_is_a_no_op() {
+    let fake = FakeDrive::start(FakeDriveOpts::default());
+    let folder = fake.add_folder("proxi-data", Some("data"));
+    let t = Harness::new(&[]);
+    fs::create_dir_all(t.data.join("courses/demo")).expect("create course");
+    fs::write(t.data.join("courses/demo/MISSION.md"), "# demo\n").expect("write mission");
+    let store = t.store();
+    set_gdrive(
+        store.as_ref(),
+        &GdriveSecret {
+            refresh_token: "rt-1".to_string(),
+            folder_id: folder.clone(),
+            email: None,
+        },
+    )
+    .expect("store gdrive");
+    write_settings(&t.repo, &json!({ "syncProvider": "gdrive" })).expect("switch to gdrive");
+    let svc = google_service(&t, &fake, None);
+
+    let first = svc.run(false);
+    assert_eq!(first.last.state, "idle");
+    assert_eq!(first.last.pushed, Some(1));
+    assert_eq!(first.last.error, None);
+    assert_eq!(fake.writes_to("/upload/drive/v3/files"), 1);
+    assert_eq!(
+        fake.files_in(&folder)
+            .get("courses/demo/MISSION.md")
+            .map(Vec::as_slice),
+        Some(b"# demo\n".as_slice())
+    );
+
+    fake.http.clear();
+    let second = svc.run(false);
+    assert_eq!(
+        (
+            second.last.pushed,
+            second.last.pulled,
+            second.last.deleted
+        ),
+        (Some(0), Some(0), Some(0))
+    );
+    assert_eq!(fake.writes_to("/upload/"), 0);
+}
+
+#[test]
+fn an_invalid_grant_refresh_puts_the_reconnect_message_in_the_status() {
+    let fake = FakeDrive::start(FakeDriveOpts::default());
+    let t = Harness::new(&[]);
+    let store = t.store();
+    set_gdrive(
+        store.as_ref(),
+        &GdriveSecret {
+            refresh_token: "rt-old".to_string(),
+            folder_id: "f".to_string(),
+            email: None,
+        },
+    )
+    .expect("store gdrive");
+    write_settings(&t.repo, &json!({ "syncProvider": "gdrive" })).expect("switch to gdrive");
+    let svc = google_service(&t, &fake, None);
+
+    let s = svc.run(false);
     assert_eq!(s.last.state, "error");
-    assert_eq!(s.last.error.as_deref(), Some(GDRIVE_UNAVAILABLE));
-    assert_eq!(calls(&t.provider).lists, 0);
+    assert_eq!(
+        s.last.error.as_deref(),
+        Some("Accesso a Google scaduto o revocato: riconnetti.")
+    );
+    assert_eq!(fake.refresh_grants(), 1);
+}
+
+#[test]
+fn auto_enabled_is_true_for_a_connected_gdrive() {
+    let t = Harness::new(&[]);
+    let store = t.store();
+    let svc = t.service();
+    assert!(!svc.auto_enabled(), "local never syncs");
+
+    set_gdrive(
+        store.as_ref(),
+        &GdriveSecret {
+            refresh_token: "rt".to_string(),
+            folder_id: "f".to_string(),
+            email: None,
+        },
+    )
+    .expect("store gdrive");
+    assert!(
+        !svc.auto_enabled(),
+        "a stored secret alone does not enable a local provider"
+    );
+    write_settings(&t.repo, &json!({ "syncProvider": "gdrive" })).expect("switch to gdrive");
+    assert!(svc.auto_enabled());
+
+    store.delete(GDRIVE_ACCOUNT).expect("drop the secret");
+    assert!(!svc.auto_enabled());
 }
 
 #[test]
@@ -989,7 +1550,7 @@ fn two_github_passes_against_the_fake_the_second_makes_no_commit_and_reads_no_bl
     fs::write(t.data.join("courses/demo/MISSION.md"), "# demo\n").expect("write mission");
     let store = t.store();
     connect_github(store.as_ref(), &t.repo);
-    let svc = t.service_with(gh.endpoints(), None);
+    let svc = t.service_with(gh.endpoints(), GoogleEndpoints::default(), None);
 
     let first = svc.run(false);
     assert_eq!(first.last.state, "idle");
