@@ -29,6 +29,7 @@ use crate::child;
 use crate::course_data::{course_deck_name_for, valid_course};
 use crate::courses::{self, CoursesError};
 use crate::data_root::{self, DataRootSource, DATA_ROOT_ENV};
+use crate::embeddings::{models_dir, EmbeddingConfig};
 use crate::events::{self, EventBus};
 use crate::exercises;
 use crate::files;
@@ -37,6 +38,7 @@ use crate::js;
 use crate::knowledge;
 use crate::lesson;
 use crate::limits::{self, LimitsCache};
+use crate::model_download;
 use crate::protocol::{GlobalEvent, LearnerSettings, SettingsResponse, SyncStatus, DEFAULT_PORT};
 use crate::settings::{self, SettingsError};
 use crate::sync::gdrive::GoogleEndpoints;
@@ -48,8 +50,8 @@ use crate::sync::service::{SyncConfig, SyncService};
 /// Shown instead of the SPA when `app/web/dist` has not been built (main.ts:536-537).
 const MISSING_UI: &str = "Proxi: la UI non è stata compilata. Esegui `npm run app:build` e riapri questa pagina.";
 
-/// Base URLs for tests; `None` = the real service. Anki, GitHub and Google are honoured now; the rest
-/// by the issue that ports each client.
+/// Base URLs for tests; `None` = the real service. Anki, GitHub, Google and Hugging Face are
+/// honoured now; the rest by the issue that ports each client.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Endpoints {
     pub anki: Option<String>,
@@ -77,6 +79,9 @@ pub struct ServerOptions {
     pub endpoints: Endpoints,
     pub bins: EngineBins,
     pub memory_secrets: bool,
+    /// Mirrors Node `fetchModelOnStart` (main.ts:569); `None` = decide from the repo root and the
+    /// Hugging Face URL.
+    pub fetch_model_on_start: Option<bool>,
 }
 
 impl ServerOptions {
@@ -90,6 +95,7 @@ impl ServerOptions {
             endpoints: Endpoints::default(),
             bins: EngineBins::default(),
             memory_secrets: false,
+            fetch_model_on_start: None,
         }
     }
 }
@@ -184,6 +190,24 @@ pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
     // Bound before the service: the Google redirect URI points back at this port.
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", opts.port)).await?;
     let port = listener.local_addr()?.port();
+    // Node starts the fetch after listen and never waits for it (main.ts:569-570). Detached on purpose:
+    // it is not part of RunningServer, so close() neither waits for it nor aborts it.
+    if should_fetch_model(
+        &repo_root,
+        &data_root::repo_root(),
+        opts.endpoints.huggingface.as_deref(),
+        std::env::var(model_download::SKIP_MODEL_ENV).ok().as_deref(),
+        opts.fetch_model_on_start,
+    ) {
+        if let Ok(cfg) = EmbeddingConfig::load(&repo_root) {
+            let models = models_dir(&repo_root);
+            let url = opts.endpoints.huggingface.clone();
+            tokio::spawn(async move {
+                let _ = model_download::ensure_model(&models, &cfg, url.as_deref()).await;
+            });
+        }
+    }
+
     let sync_cfg = SyncConfig {
         repo_root: repo_root.clone(),
         data_root: data_root.clone(),
@@ -245,6 +269,19 @@ pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
         auto,
         task,
     })
+}
+
+/// Mirrors Node's startup gate (main.ts:569-570): fetch when the code root is the repo too, or when a
+/// Hugging Face URL is configured. `PROXI_SKIP_MODEL=1` always wins.
+pub fn should_fetch_model(
+    repo_root: &std::path::Path,
+    code_root: &std::path::Path,
+    huggingface: Option<&str>,
+    skip_env: Option<&str>,
+    fetch_on_start: Option<bool>,
+) -> bool {
+    skip_env != Some("1")
+        && fetch_on_start.unwrap_or(repo_root == code_root || huggingface.is_some())
 }
 
 fn router(state: Arc<AppState>, sync: SyncService) -> Router {
@@ -1321,6 +1358,37 @@ mod tests {
         // default for both (see the doc comment on port_from_env).
         assert_eq!(port_from_env(Some("0x1388")), Ok(DEFAULT_PORT));
         assert_eq!(port_from_env(Some("Infinity")), Ok(DEFAULT_PORT));
+    }
+
+    #[test]
+    fn should_fetch_model_mirrors_the_node_gate() {
+        let code = std::path::Path::new("/code");
+        let temp = std::path::Path::new("/tmp/repo");
+        assert!(should_fetch_model(code, code, None, None, None));
+        assert!(should_fetch_model(temp, code, Some("http://hf"), None, None));
+        assert!(!should_fetch_model(temp, code, None, None, None));
+
+        // The env skip wins over both true cases.
+        assert!(!should_fetch_model(code, code, None, Some("1"), None));
+        assert!(!should_fetch_model(
+            temp,
+            code,
+            Some("http://hf"),
+            Some("1"),
+            None
+        ));
+        assert!(should_fetch_model(code, code, None, Some("0"), None));
+
+        // An explicit flag overrides the root/URL rule.
+        assert!(!should_fetch_model(code, code, None, None, Some(false)));
+        assert!(should_fetch_model(temp, code, None, None, Some(true)));
+        assert!(!should_fetch_model(temp, code, None, Some("1"), Some(true)));
+    }
+
+    #[test]
+    fn server_options_leave_the_fetch_override_to_the_root_rule() {
+        let opts = ServerOptions::new(PathBuf::from("repo"));
+        assert!(opts.fetch_model_on_start.is_none());
     }
 
     /// Status and `error` text of a rejected body.

@@ -6,9 +6,11 @@ import path from "node:path";
 import { after, describe, it } from "node:test";
 import { GOOGLE_CLIENT_ID } from "../server/sync/gdrive.ts";
 import { captureGolden, GOLDEN_DIR, ISO_RE, normalise, rootVariants } from "./capture-golden.ts";
+import { captureLessonGolden, LESSON_GOLDEN } from "./capture-lesson-golden.ts";
 import { REPO_ROOT } from "./harness.ts";
 
 const ROUTES = ["settings", "limits", "events", "courses", "lesson", "graph", "exercises", "sync", "sync-gdrive"];
+const ALL_GOLDENS = [...ROUTES, LESSON_GOLDEN];
 
 const dirs: string[] = [];
 function tempDir(prefix: string): string {
@@ -76,7 +78,8 @@ describe("rootVariants", () => {
 it("committed golden fixtures match a fresh Node capture", async () => {
   const out = tempDir("golden-fresh-");
   await captureGolden(out);
-  for (const route of ROUTES) {
+  await captureLessonGolden(out);
+  for (const route of ALL_GOLDENS) {
     const committed = path.join(GOLDEN_DIR, `${route}.json`);
     assert.ok(fs.existsSync(committed), `missing ${committed}: run npm run golden:capture`);
     // Parsed, not bytes: with core.autocrlf the checkout is CRLF while a fresh capture is LF.
@@ -227,7 +230,7 @@ it("golden fixtures hold no key-like or personal data", () => {
   const keyLike = new RegExp("(?<![A-Za-z0-9_-])" + "sk" + "-");
   const personal = [os.tmpdir(), fs.realpathSync.native(os.tmpdir()), REPO_ROOT];
   const host = `(${os.hostname()})`;
-  for (const route of ROUTES) {
+  for (const route of ALL_GOLDENS) {
     const text = goldenText(route);
     assert.doesNotMatch(text, keyLike, route);
     // Walk the parsed values: JSON's escaping of Windows backslashes would hide a path in the raw text.
@@ -237,4 +240,27 @@ it("golden fixtures hold no key-like or personal data", () => {
     });
   }
   assert.match(goldenText("settings"), /"<repoRoot>"/);
+});
+
+it("lesson golden holds no raw timestamps or dates", () => {
+  // Only the captured cases: the seed is the replay's input and holds no timestamps.
+  const file = JSON.parse(goldenText(LESSON_GOLDEN)) as { cases: unknown };
+  const text = JSON.stringify(file.cases);
+  assert.doesNotMatch(text, /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
+  assert.doesNotMatch(text, /Generated: \d{4}/);
+  assert.match(text, /<iso>/);
+  assert.match(text, /Generated: <date>/);
+});
+
+it("lesson golden pins the slug and the D11 stderr", () => {
+  const file = JSON.parse(goldenText(LESSON_GOLDEN)) as {
+    cases: Array<{ name: string; stdout: string; stderr: string; files: Record<string, string | null> }>;
+  };
+  const init = file.cases.find((c) => c.name === "init-default");
+  assert.ok(init, "missing init-default");
+  assert.match(init.stdout, /"slug": "probabilita-e-davvero-50-ca-va"/);
+  for (const c of file.cases) {
+    assert.doesNotMatch(c.stderr, /\[home\]/, c.name);
+    assert.equal(Object.keys(c.files).includes("index.html"), false, c.name);
+  }
 });
