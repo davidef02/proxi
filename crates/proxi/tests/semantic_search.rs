@@ -118,13 +118,23 @@ fn cache_is_written_and_reused() {
     let mut other = cache.clone();
     other["dtype"] = serde_json::json!("other");
     fs::write(&file, other.to_string()).expect("write stale cache");
-    let third = SemanticSearch::new(model_root, file.clone(), cfg);
+    let third = SemanticSearch::new(model_root.clone(), file.clone(), cfg.clone());
     third
         .rank("computed", &nodes)
         .expect("rank after a stale cache");
     let rewritten: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&file).expect("read cache")).expect("cache json");
     assert_eq!(rewritten["dtype"], serde_json::json!("q8"));
+
+    // a corrupt file is read as empty too, and the next batch replaces it with a valid one
+    fs::write(&file, "not json").expect("write corrupt cache");
+    let fourth = SemanticSearch::new(model_root, file.clone(), cfg);
+    fourth
+        .rank("computed", &nodes)
+        .expect("rank after a corrupt cache");
+    let repaired: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&file).expect("read cache")).expect("cache json");
+    assert_eq!(repaired["vectors"].as_object().expect("vectors").len(), 3);
 }
 
 #[test]

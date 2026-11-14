@@ -76,6 +76,31 @@ async fn malformed_queries_fail_before_any_download() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn failed_download_exits_1() {
+    let repo = common::temp_dir("embed-bench-failed-download-repo");
+    let data = common::temp_dir("embed-bench-failed-download-data");
+    common::write_node_lines(&data.0, common::SAMPLE_CONCEPTS);
+    write_queries(
+        &data.0,
+        r#"[{"q":"Props","lang":"it","expect":"Props"}]"#,
+    );
+    // no model stored and a host that serves nothing: the download cannot succeed
+    let fake = FakeHf::start(None, HashMap::new()).await;
+
+    let (code, out, err) = bench(
+        &repo.0,
+        &data.0,
+        &["--huggingface-url", &fake.url, "--no-write"],
+    );
+    assert_eq!(code, Some(1), "{out}\n{err}");
+    assert!(
+        err.contains("embedding model not available: download of"),
+        "{err}"
+    );
+    assert!(!fake.requests().is_empty(), "the download was never tried");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn downloads_measures_and_records() {
     let cfg = EmbeddingConfig::load(&common::repo_root()).expect("embedding-model.json");
     let Some(model_root) = common::model_root(&cfg.model) else {

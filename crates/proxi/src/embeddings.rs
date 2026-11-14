@@ -353,6 +353,14 @@ mod tests {
     }
 
     #[test]
+    fn models_dir_is_the_learner_models_folder() {
+        assert_eq!(
+            models_dir(Path::new("repo")),
+            Path::new("repo").join(".learner").join("models")
+        );
+    }
+
+    #[test]
     fn cache_file_is_named_after_the_config() {
         let cfg = cfg();
         let file = cache_file(Path::new("repo"), &cfg);

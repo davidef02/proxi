@@ -214,6 +214,42 @@ async fn serve_fetches_the_model_from_the_huggingface_url() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn serve_listens_before_the_model_download_finishes() {
+    // This host never answers: a fetch awaited before listen would hold the `Proxi:` line forever.
+    let fake = FakeHf::start_hanging().await;
+    let root = common::temp_dir("serve-cli-hanging-model");
+    let repo = root.0.join("repo");
+    fs::create_dir_all(&repo).expect("create repo");
+    let repo_arg = repo.display().to_string();
+
+    let started = Instant::now();
+    let (_server, rx) = spawn_serve_env(
+        &[
+            "serve",
+            "--port",
+            "0",
+            "--repo-root",
+            &repo_arg,
+            "--data-root",
+            &repo_arg,
+            "--huggingface-url",
+            &fake.url,
+        ],
+        &[],
+    );
+    let waited = tokio::task::spawn_blocking(move || wait_for_url(&rx))
+        .await
+        .expect("join the URL wait");
+    let (_, port) = waited;
+    assert_ne!(port, 0);
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "the listen line waited for the download: {:?}",
+        started.elapsed()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn serve_skips_the_model_with_proxi_skip_model() {
     let fake = FakeHf::start(None, HashMap::new()).await;
     let root = common::temp_dir("serve-cli-skip-model");

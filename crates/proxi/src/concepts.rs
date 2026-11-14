@@ -281,6 +281,27 @@ mod tests {
     }
 
     #[test]
+    fn rank_concepts_lets_a_later_duplicate_cosine_win() {
+        let nodes = vec![node("n_a", "Alfa", "", &[])];
+        let cosines = hits(&[("n_a", 0.1), ("n_a", 0.9)]);
+
+        let scored = rank_concepts("zzz", &nodes, Some(&cosines), 0.5, 10);
+        assert_eq!(scored.len(), 1);
+        assert_eq!(scored[0].score, 0.9);
+    }
+
+    #[test]
+    fn rank_concepts_matches_aliases() {
+        let nodes = vec![node("n_a", "Alfa", "", &["passo"])];
+        let cosines = hits(&[("n_a", 0.0)]);
+
+        // the alias keeps a node under minScore and adds the lexical bonus
+        let scored = rank_concepts("passo", &nodes, Some(&cosines), 0.3, 10);
+        assert_eq!(ids(&nodes, &scored), ["n_a"]);
+        assert_eq!(scored[0].score, LEXICAL_BONUS);
+    }
+
+    #[test]
     fn rank_concepts_keeps_input_order_on_ties() {
         let nodes = vec![
             node("n_first", "Alfa", "", &[]),

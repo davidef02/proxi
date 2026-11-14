@@ -371,6 +371,13 @@ mod tests {
     }
 
     #[test]
+    fn gate_matches_d5_not_the_node_constants() {
+        assert_eq!(MIN_RECALL, 0.95);
+        assert_eq!(MAX_MEDIAN_MS, 10.0);
+        assert_eq!(TOP_K, 3);
+    }
+
+    #[test]
     fn parse_queries_maps_names_to_ids() {
         let ids = concept_ids();
         let queries = parse_queries(
