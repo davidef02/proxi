@@ -5,6 +5,9 @@ mod common;
 #[path = "common/fake_http.rs"]
 mod fake_http;
 
+#[path = "common/mock_anki.rs"]
+mod mock_anki;
+
 use std::cmp::Reverse;
 use std::fs;
 use std::net::TcpListener;
@@ -13,6 +16,7 @@ use std::time::Duration;
 
 use common::cli_golden;
 use fake_http::{FakeHttp, Reply};
+use mock_anki::MockAnki;
 use serde_json::{json, Value};
 
 /// Real URLs first (longest first: one port can spell the start of another), then the data
@@ -93,7 +97,14 @@ fn anki_cli_matches_the_node_golden() {
     let roots = cli_golden::data_roots(&data);
 
     let anki_error = golden["ankiError"].as_str().expect("ankiError").to_string();
-    let online = FakeHttp::start(|_| Reply::json(200, json!({ "result": 6, "error": null })));
+    let online = MockAnki::start(true, None);
+    let italian = MockAnki::start(
+        true,
+        Some(&[
+            ("Basilare", ["Fronte", "Retro"]),
+            ("Testo da completare", ["Testo", "Extra"]),
+        ]),
+    );
     let error_server =
         FakeHttp::start(move |_| Reply::json(200, json!({ "result": null, "error": anki_error })));
     let slow = FakeHttp::start(|_| {
@@ -107,7 +118,8 @@ fn anki_cli_matches_the_node_golden() {
         url
     };
     let urls = vec![
-        (online.url.clone(), "<ankiUrl>".to_string()),
+        (online.url().to_string(), "<ankiUrl>".to_string()),
+        (italian.url().to_string(), "<italianUrl>".to_string()),
         (error_server.url.clone(), "<errorUrl>".to_string()),
         (slow.url.clone(), "<slowUrl>".to_string()),
         (dead, "<deadUrl>".to_string()),
@@ -119,6 +131,9 @@ fn anki_cli_matches_the_node_golden() {
     for case in golden["cases"].as_array().expect("cases array") {
         let name = case["name"].as_str().expect("case name");
         let label = format!("anki-cli/{name}");
+        online.clear();
+        italian.clear();
+        error_server.clear();
         let args: Vec<String> = case["args"]
             .as_array()
             .expect("case args")
@@ -193,6 +208,22 @@ fn anki_cli_matches_the_node_golden() {
             panic!("{label}: files differ: {detail}");
         }
         assert_eq!(actual_files, expected_files, "{label}: files");
+
+        // At most one mock answers a case, so the order is the arrival order.
+        let mut actual = online.requests();
+        actual.extend(italian.requests());
+        actual.extend(error_server.requests().iter().map(|request| request.json()));
+        let actual_requests: Vec<String> = actual
+            .iter()
+            .map(|request| serde_json::to_string(request).expect("serialise request"))
+            .collect();
+        let expected_requests: Vec<String> = case["requests"]
+            .as_array()
+            .expect("case requests")
+            .iter()
+            .map(|request| serde_json::to_string(request).expect("serialise golden request"))
+            .collect();
+        assert_eq!(actual_requests, expected_requests, "{label}: requests");
     }
 }
 
@@ -235,8 +266,74 @@ fn golden_covers_every_case() {
         "export-no-payload",
         "export-invalid-data",
         "export-invalid-stdin-with-lesson",
+        "sync-lesson",
+        "sync-lesson-again",
+        "sync-allow-duplicates",
+        "sync-deck",
+        "sync-italian",
+        "sync-data-cards",
+        "sync-nodes-only",
+        "sync-no-payload",
+        "sync-anki-error",
+        "sync-offline",
+        "sync-missing-lesson",
+        "sync-invalid-data",
     ];
     assert_eq!(names, expected, "golden case names");
+}
+
+/// The actions a case sent, in arrival order.
+fn actions(case: &Value) -> Vec<&str> {
+    case["requests"]
+        .as_array()
+        .expect("case requests")
+        .iter()
+        .map(|request| request["action"].as_str().expect("request action"))
+        .collect()
+}
+
+#[test]
+fn golden_pins_sync() {
+    let golden = cli_golden::golden("anki-cli");
+    let lesson = find_case(&golden, "sync-lesson");
+    assert_eq!(
+        actions(lesson),
+        ["version", "createDeck", "modelNames", "addNotes"],
+        "sync-lesson actions"
+    );
+    assert_eq!(
+        lesson["requests"][1]["params"]["deck"].as_str(),
+        Some("Proxi::Vue.js & Vetrine"),
+        "sync-lesson createDeck"
+    );
+    for note in lesson["requests"][3]["params"]["notes"]
+        .as_array()
+        .expect("sync-lesson notes")
+    {
+        assert_eq!(
+            note["deckName"].as_str(),
+            Some("Proxi::Vue.js & Vetrine"),
+            "note deck"
+        );
+    }
+
+    assert!(
+        find_case(&golden, "sync-lesson-again")["stdout"]
+            .as_str()
+            .expect("sync-lesson-again stdout")
+            .starts_with("✅ Synced 0 cards"),
+        "a second sync must add nothing"
+    );
+    assert_eq!(
+        actions(find_case(&golden, "sync-anki-error")),
+        ["version"],
+        "an AnkiConnect error must stop after the version probe"
+    );
+    assert_eq!(
+        actions(find_case(&golden, "sync-offline")),
+        Vec::<&str>::new(),
+        "a timeout must not reach the mock"
+    );
 }
 
 #[test]
