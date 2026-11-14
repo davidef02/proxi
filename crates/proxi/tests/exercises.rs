@@ -383,6 +383,24 @@ async fn run_one(root: &Path, name: &str, cfg: &RunConfig) -> Value {
     run_exercise(root, "c", name, cfg, &Installs::default()).await
 }
 
+/// On Unix a concurrent test thread can fork while the shim script's write fd is still open,
+/// and the child holds it until its own exec: exec-ing the fresh shim then fails with ETXTBSY.
+/// Retry only that error; it comes from the install spawn, so the failed attempt left nothing behind.
+async fn run_one_retrying_text_file_busy(root: &Path, name: &str, cfg: &RunConfig) -> Value {
+    let mut result = run_one(root, name, cfg).await;
+    for _ in 0..10 {
+        let busy = result["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("Text file busy"));
+        if !busy {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        result = run_one(root, name, cfg).await;
+    }
+    result
+}
+
 fn fake_npm() -> String {
     format!(
         r#"import fs from "node:fs";fs.appendFileSync("install.log", process.argv[2] + "\n");fs.mkdirSync("node_modules/vitest", {{ recursive: true }});fs.writeFileSync("node_modules/vitest/vitest.mjs", {});"#,
@@ -577,8 +595,12 @@ async fn install_through_a_bin_shim() {
     fs::write(base.join("fake-npm.mjs"), fake_npm()).expect("write fake npm");
     let cfg = RunConfig::new(Some(node()), NpmCommand::Bin(fake_npm_bin(&base)));
 
-    let result = run_one(&root.0, "01-a", &cfg).await;
+    let result = run_one_retrying_text_file_busy(&root.0, "01-a", &cfg).await;
     assert_eq!(result["ok"], json!(true), "{}", result["error"]);
+    assert_eq!(
+        fs::read_to_string(base.join("install.log")).expect("install log"),
+        "install\n"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

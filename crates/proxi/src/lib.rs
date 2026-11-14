@@ -30,6 +30,8 @@ pub mod protocol;
 pub mod semantic;
 pub mod server;
 pub mod settings;
+pub mod stt;
+pub mod update;
 pub mod slug;
 pub mod sync;
 pub mod vitest;
