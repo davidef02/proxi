@@ -212,6 +212,34 @@ fn export_invalid_stdin_fails_before_lesson() {
 }
 
 #[test]
+fn extract_keeps_latex_backslashes() {
+    let (_t, data, cwd) = dirs("anki-cli-extract-latex");
+    let lesson = data.join("lessons-sciolte/0001-latex.html");
+    fs::create_dir_all(lesson.parent().expect("lesson parent")).expect("create lessons dir");
+    fs::write(
+        &lesson,
+        "<html><body><script type=\"application/json\" id=\"lesson-data\">\
+{\"metadata\":{\"topic\":\"Latex\",\"slug\":\"latex\"},\"nodes\":[\
+{\"nodeId\":\"n1\",\"tier\":\"axiom\",\"ankiParams\":{\
+\"targetQuestion\":\"Quanto vale $x$?\",\"targetFact\":\"$2x$\"}}]}\
+</script></body></html>",
+    )
+    .expect("write lesson");
+
+    let run = run(
+        &data,
+        &cwd,
+        &["extract", "--lesson", "lessons-sciolte/0001-latex.html"],
+        None,
+    );
+    assert_eq!(run.code, 0, "stderr: {}", run.stderr);
+    // Raw stdout, not the golden: capture normalisation turns every backslash into `/`.
+    let stdout: serde_json::Value = serde_json::from_str(&run.stdout).expect("extract prints JSON");
+    assert_eq!(stdout["cards"][0]["front"], json!("Quanto vale \\(x\\)?"));
+    assert_eq!(stdout["cards"][0]["back"], json!("\\(2x\\)"));
+}
+
+#[test]
 fn extract_requires_lesson() {
     let (_t, data, cwd) = dirs("anki-cli-extract-no-flag");
 
