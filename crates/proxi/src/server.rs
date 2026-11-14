@@ -17,6 +17,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use futures_util::stream::Stream;
+use futures_util::StreamExt;
 use serde_json::{json, Value};
 use tokio::task::JoinHandle;
 use tower_http::services::{ServeDir, ServeFile};
@@ -908,6 +909,17 @@ fn exercise_body(bytes: &Bytes, save: bool) -> Result<ExerciseBody, Response> {
     })
 }
 
+/// Reads and throws away the request body. A response sent while the body is unread makes hyper
+/// drop the connection, which the client sees as a reset (ECONNRESET in the TS test).
+async fn drain_body(body: Body) {
+    let mut stream = body.into_data_stream();
+    while let Some(chunk) = stream.next().await {
+        if chunk.is_err() {
+            break;
+        }
+    }
+}
+
 /// `POST /api/exercises/:action` with `run|open|save|hint` (main.ts:411-460).
 async fn post_exercise(
     State(state): State<Arc<AppState>>,
@@ -931,6 +943,9 @@ async fn post_exercise(
             .unwrap_or(0.0)
             > 600_000.0;
         if too_big {
+            // Answering before reading makes hyper close the socket while the client still writes,
+            // which undici reports as ECONNRESET; Node reads the body first, so drain it here.
+            drain_body(body).await;
             return json_error(StatusCode::PAYLOAD_TOO_LARGE, "File troppo grande");
         }
     }

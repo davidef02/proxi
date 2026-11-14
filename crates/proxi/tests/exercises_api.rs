@@ -546,6 +546,69 @@ async fn oversized_save_is_413() {
     assert_eq!(body, json!({"error": "File troppo grande"}));
 }
 
+/// Answering a 413 with the request body still unread makes the client's write fail with a reset
+/// (undici turns it into ECONNRESET in app/test/api-exercises.test.ts). Node reads the body first.
+#[tokio::test(flavor = "multi_thread")]
+async fn oversized_save_reads_the_whole_body_before_413() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let fixture = Fixture::new("exercises-api-drain");
+    seed(&fixture.data);
+    let server = start(fixture.options()).await.expect("start server");
+
+    let payload = json!({
+        "course": "demo",
+        "name": "01-a",
+        "path": "Esercizio.vue",
+        "content": "x".repeat(600_001),
+    })
+    .to_string();
+
+    let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", server.port))
+        .await
+        .expect("connect");
+    let head = format!(
+        "POST /api/exercises/save HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nx-learner-client: 1\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n",
+        server.port,
+        payload.len()
+    );
+    stream.write_all(head.as_bytes()).await.expect("write head");
+
+    // The body check happens on the headers, so the 413 is ready; it must wait for the body.
+    let mut early = [0u8; 1];
+    match tokio::time::timeout(Duration::from_secs(1), stream.read(&mut early)).await {
+        Err(_) => {}
+        Ok(Ok(0)) => panic!("connection closed before the body was sent"),
+        Ok(Ok(_)) => panic!("the server answered before reading the body"),
+        Ok(Err(error)) => panic!("read before sending the body: {error}"),
+    }
+
+    stream
+        .write_all(payload.as_bytes())
+        .await
+        .expect("write body");
+    let mut response = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while !String::from_utf8_lossy(&response).contains("\"File troppo grande\"") {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let mut chunk = [0u8; 1024];
+        let read = tokio::time::timeout(remaining, stream.read(&mut chunk))
+            .await
+            .expect("a response within 10 s")
+            .expect("read response");
+        if read == 0 {
+            break;
+        }
+        response.extend_from_slice(&chunk[..read]);
+    }
+    let response = String::from_utf8_lossy(&response);
+    assert!(response.starts_with("HTTP/1.1 413 "), "{response}");
+    assert!(
+        response.contains("\"error\":\"File troppo grande\""),
+        "{response}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn bad_bodies_use_the_zod_texts() {
     let fixture = Fixture::new("exercises-api-bodies");
