@@ -448,30 +448,24 @@ mod tests {
     }
 
     #[test]
-    fn has_data_false_on_empty_dir() {
-        let t = temp_dir("has-data-empty");
+    fn has_data_needs_courses_or_curriculum() {
+        let t = temp_dir("has-data");
         assert!(!has_data(&t.0));
-    }
 
-    #[test]
-    fn has_data_true_with_courses_dir() {
-        let t = temp_dir("has-data-courses");
-        fs::create_dir_all(t.0.join("courses")).expect("create courses");
-        assert!(has_data(&t.0));
-    }
+        let with_courses = t.0.join("with-courses");
+        fs::create_dir_all(with_courses.join("courses")).unwrap();
+        assert!(has_data(&with_courses));
 
-    #[test]
-    fn has_data_false_when_courses_is_a_file() {
-        let t = temp_dir("has-data-courses-file");
-        fs::write(t.0.join("courses"), "").expect("write courses file");
-        assert!(!has_data(&t.0));
-    }
+        let with_curriculum = t.0.join("with-curriculum");
+        fs::create_dir_all(&with_curriculum).unwrap();
+        fs::write(with_curriculum.join("curriculum.json"), "{}").unwrap();
+        assert!(has_data(&with_curriculum));
 
-    #[test]
-    fn has_data_true_with_curriculum_only() {
-        let t = temp_dir("has-data-curriculum");
-        fs::write(t.0.join("curriculum.json"), "{}").expect("write curriculum");
-        assert!(has_data(&t.0));
+        // A file called `courses` is not a data folder, like Node's statSync().isDirectory().
+        let courses_file = t.0.join("courses-file");
+        fs::create_dir_all(&courses_file).unwrap();
+        fs::write(courses_file.join("courses"), "").unwrap();
+        assert!(!has_data(&courses_file));
     }
 
     #[test]

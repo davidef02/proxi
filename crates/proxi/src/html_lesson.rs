@@ -24,7 +24,7 @@ pub fn parse_lesson_document(raw: &str) -> Result<Option<Value>, String> {
     };
     match js::parse_json(js::js_trim(&rest[..end])) {
         // An island that parses to a falsy value is no document (Node's callers test `!doc`).
-        Ok(doc) if js::truthy(&doc) => Ok(Some(doc)),
+        Ok(doc) if js::truthy(Some(&doc)) => Ok(Some(doc)),
         Ok(_) => Ok(None),
         Err(e) => Err(format!("{MALFORMED}: {e}")),
     }
@@ -599,7 +599,7 @@ pub fn build_sintesi_document(doc: &Value, lesson_path: &Path) -> Result<Value, 
     let mut out = Map::new();
     let title = metadata
         .get("title")
-        .filter(|value| js::truthy(value))
+        .filter(|value| js::truthy(Some(*value)))
         .or_else(|| metadata.get("topic"));
     if let Some(value) = title {
         out.insert("title".into(), value.clone());

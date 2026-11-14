@@ -1,0 +1,5 @@
+{"at":"2023-11-14T00:00:00.000Z","sessionId":"s1","course":"demo","lessonSlug":"t","nodeRefs":["demo/t#alpha"],"kind":"check","correct":true}
+{"at":"2023-11-14T22:13:20.500Z","sessionId":"anki","course":"demo","lessonSlug":"t","nodeRefs":["demo/t#alpha"],"kind":"review","source":"anki","reviewId":1700000000500,"cardId":1005,"ease":2,"lapses":0,"interval":1,"correct":true}
+{"at":"2023-11-14T22:13:21.000Z","sessionId":"anki","course":"demo","lessonSlug":"t","nodeRefs":["demo/t#alpha"],"kind":"review","source":"anki","reviewId":1700000001000,"cardId":1001,"ease":3,"lapses":0,"interval":10,"correct":true}
+{"at":"2023-11-14T22:13:22.000Z","sessionId":"anki","course":"demo","lessonSlug":"t","nodeRefs":["demo/t#alpha"],"kind":"review","source":"anki","reviewId":1700000002000,"cardId":1001,"ease":1,"lapses":0,"interval":10,"correct":false}
+{"at":"2023-11-14T22:13:23.000Z","sessionId":"anki","course":"demo","lessonSlug":"u","nodeRefs":["demo/u#dup"],"kind":"review","source":"anki","reviewId":1700000003000,"cardId":1002,"ease":4,"lapses":2,"interval":-600,"correct":true}

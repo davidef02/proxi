@@ -1,7 +1,7 @@
 mod common;
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use reqwest::{Client, Response};
@@ -41,19 +41,7 @@ async fn replay(route: &str, ordered: bool) {
         fs::write(&target, serde_json::to_vec_pretty(seed).expect("serialise seed"))
             .unwrap_or_else(|error| panic!("write seed {rel}: {error}"));
     }
-    for (rel, content) in golden
-        .get("dataSeed")
-        .and_then(Value::as_object)
-        .into_iter()
-        .flatten()
-    {
-        let text = content.as_str().expect("dataSeed value is a string");
-        let target = data.join(rel);
-        fs::create_dir_all(target.parent().expect("dataSeed file has a parent"))
-            .unwrap_or_else(|error| panic!("create parents of {rel}: {error}"));
-        // Verbatim, like capture-golden.ts: the seed is the replay's input and is never normalised.
-        fs::write(&target, text).unwrap_or_else(|error| panic!("write dataSeed {rel}: {error}"));
-    }
+    write_data_seed(&data, &golden["dataSeed"]);
 
     let mut options = ServerOptions::new(repo.clone());
     options.data_root = Some(data.clone());
@@ -149,6 +137,25 @@ async fn replay(route: &str, ordered: bool) {
     }
 
     server.close();
+}
+
+/// Writes a golden's `dataSeed` verbatim under the data folder: raw input, never normalised.
+fn write_data_seed(data: &Path, seed: &Value) {
+    let Some(files) = seed.as_object() else {
+        return;
+    };
+    for (rel, text) in files {
+        let target = data.join(rel);
+        fs::create_dir_all(target.parent().expect("data seed file has a parent"))
+            .unwrap_or_else(|error| panic!("create parents of {rel}: {error}"));
+        fs::write(
+            &target,
+            text.as_str()
+                .expect("data seed value is a string")
+                .as_bytes(),
+        )
+        .unwrap_or_else(|error| panic!("write data seed {rel}: {error}"));
+    }
 }
 
 /// Waits for the first complete `data:` block of an SSE stream.
@@ -271,4 +278,9 @@ async fn courses_match_the_node_golden() {
 #[tokio::test(flavor = "multi_thread")]
 async fn lesson_reading_matches_the_node_golden() {
     replay("lesson", true).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn graph_matches_the_node_golden() {
+    replay("graph", false).await;
 }

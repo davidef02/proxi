@@ -1,5 +1,5 @@
-//! The local HTTP server: settings, limits, events, courses, lesson reading, `/files` and the
-//! built UI.
+//! The local HTTP server: settings, limits, events, Anki status, courses, lesson reading, the map
+//! routes, sync, `/files` and the built UI.
 
 use std::convert::Infallible;
 use std::path::PathBuf;
@@ -7,32 +7,44 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Bytes;
-use axum::extract::{RawQuery, Request, State};
+use axum::extract::rejection::QueryRejection;
+use axum::extract::{Path, Query, RawQuery, Request, State};
 use axum::http::{header, Method, StatusCode, Uri};
 use axum::middleware::Next;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{any, get};
+use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use futures_util::stream::Stream;
 use serde_json::{json, Value};
 use tokio::task::JoinHandle;
 use tower_http::services::{ServeDir, ServeFile};
 
+use crate::anki_client::{self, AnkiClient};
+use crate::anki_import::ImportRegistry;
+use crate::anki_status::{start_review, status_all, status_for_course, ReviewStart};
+use crate::course_data::{course_deck_name_for, valid_course};
 use crate::courses::{self, CoursesError};
-use crate::data_root::{self, DATA_ROOT_ENV};
+use crate::data_root::{self, DataRootSource, DATA_ROOT_ENV};
 use crate::events::{self, EventBus};
 use crate::files;
+use crate::graph::store::GraphStore;
 use crate::js;
+use crate::knowledge;
 use crate::lesson;
 use crate::limits::{self, LimitsCache};
-use crate::protocol::{GlobalEvent, LearnerSettings, SettingsResponse, DEFAULT_PORT};
+use crate::protocol::{GlobalEvent, LearnerSettings, SettingsResponse, SyncStatus, DEFAULT_PORT};
 use crate::settings::{self, SettingsError};
+use crate::sync::github::{GithubEndpoints, real_sleeper};
+use crate::sync::routes::spawn_auto;
+use crate::sync::secrets::{ElectronDecryptor, KeychainStore, MemoryStore, SecretStore};
+use crate::sync::service::{SyncConfig, SyncService};
 
 /// Shown instead of the SPA when `app/web/dist` has not been built (main.ts:536-537).
 const MISSING_UI: &str = "Proxi: la UI non è stata compilata. Esegui `npm run app:build` e riapri questa pagina.";
 
-/// Base URLs for tests; `None` = the real service. Stored now, honoured by the issues that port each client.
+/// Base URLs for tests; `None` = the real service. Anki is honoured now; the rest by the issue that
+/// ports each client.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Endpoints {
     pub anki: Option<String>,
@@ -81,18 +93,36 @@ pub struct RunningServer {
     pub port: u16,
     pub url: String,
     pub events: EventBus,
+    sync: SyncService,
+    auto: JoinHandle<()>,
     task: JoinHandle<()>,
 }
 
 impl RunningServer {
     pub fn close(self) {
         self.task.abort();
+        self.auto.abort();
+    }
+
+    /// One last auto pass, bounded so quitting cannot hang, then stop serving.
+    pub async fn shutdown(self) {
+        self.auto.abort();
+        if self.sync.auto_enabled() {
+            let sync = self.sync.clone();
+            let _ = tokio::time::timeout(
+                Duration::from_secs(15),
+                tokio::task::spawn_blocking(move || sync.run(false)),
+            )
+            .await;
+        }
+        self.close();
     }
 }
 
 impl Drop for RunningServer {
     fn drop(&mut self) {
         self.task.abort();
+        self.auto.abort();
     }
 }
 
@@ -106,40 +136,88 @@ struct AppState {
     events: EventBus,
     keep_alive: Duration,
     limits: LimitsCache,
+    anki: AnkiClient,
+    imports: ImportRegistry,
+    graph: Arc<GraphStore>,
 }
 
 pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
     let repo_root = data_root::resolve_path(&opts.repo_root);
-    let data_root = match opts.data_root {
-        Some(path) => data_root::resolve_path(&path),
-        None => data_root::resolve_data_root(
-            &repo_root,
-            std::env::var(DATA_ROOT_ENV).ok().as_deref(),
-            &data_root::home_dir(),
-        )
-        .data_root,
+    let (data_root, data_root_from_env) = match &opts.data_root {
+        Some(path) => (data_root::resolve_path(path), false),
+        None => {
+            let resolved = data_root::resolve_data_root(
+                &repo_root,
+                std::env::var(DATA_ROOT_ENV).ok().as_deref(),
+                &data_root::home_dir(),
+            );
+            let from_env = resolved.source == DataRootSource::Env;
+            (resolved.data_root, from_env)
+        }
     };
     let dist = opts
         .dist_dir
         .unwrap_or_else(|| repo_root.join("app").join("web").join("dist"));
+    // The flag wins over the env, read once at start (Node read it per request; flags are the test seam).
+    let anki_url = anki_client::resolve_anki_url(
+        opts.endpoints.anki.as_deref(),
+        std::env::var(anki_client::ANKI_URL_ENV).ok().as_deref(),
+    );
+    let anki = AnkiClient::new(anki_url).map_err(std::io::Error::other)?;
+
+    let events = EventBus::new();
+    let store: Arc<dyn SecretStore> = if opts.memory_secrets {
+        Arc::new(MemoryStore::default())
+    } else {
+        Arc::new(KeychainStore::new())
+    };
+    let status_events = events.clone();
+    let pulled_events = events.clone();
+    let sync_cfg = SyncConfig {
+        repo_root: repo_root.clone(),
+        data_root: data_root.clone(),
+        data_root_from_env,
+        github: GithubEndpoints::from_override(opts.endpoints.github.as_deref()),
+        sleep: real_sleeper(),
+        store,
+        decryptor: Arc::new(ElectronDecryptor {
+            profiles: ElectronDecryptor::default_profiles(),
+        }),
+        make_provider: None,
+        on_status: Arc::new(move |status: &SyncStatus| {
+            status_events.emit(&GlobalEvent::Sync {
+                status: status.clone(),
+            });
+        }),
+        on_pulled: Arc::new(move || {
+            pulled_events.emit(&json!({ "type": "courses" }));
+        }),
+    };
+    // The keychain and the legacy migration are blocking: off the worker threads.
+    let sync = tokio::task::spawn_blocking(move || SyncService::new(sync_cfg))
+        .await
+        .map_err(std::io::Error::other)?;
 
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", opts.port)).await?;
     let port = listener.local_addr()?.port();
-    let events = EventBus::new();
     let state = Arc::new(AppState {
         repo_str: repo_root.display().to_string(),
         data_str: data_root.display().to_string(),
         repo_root,
-        data_root,
+        data_root: data_root.clone(),
         port,
         dist,
         events: events.clone(),
         keep_alive: opts.keep_alive,
         // One cache per server: Node keys it by repo root, and a server serves one repo.
         limits: LimitsCache::new(),
+        anki,
+        imports: ImportRegistry::new(),
+        graph: Arc::new(GraphStore::new(data_root)),
     });
 
-    let app = router(state);
+    let app = router(state, sync.clone());
+    let auto = spawn_auto(sync.clone(), events.clone());
     let task = tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     });
@@ -148,11 +226,13 @@ pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
         port,
         url: format!("http://127.0.0.1:{port}"),
         events,
+        sync,
+        auto,
         task,
     })
 }
 
-fn router(state: Arc<AppState>) -> Router {
+fn router(state: Arc<AppState>, sync: SyncService) -> Router {
     Router::new()
         .route(
             "/api/settings",
@@ -160,6 +240,15 @@ fn router(state: Arc<AppState>) -> Router {
         )
         .route("/api/limits", get(get_limits).fallback(not_found))
         .route("/api/events", get(events_handler).fallback(not_found))
+        .route("/api/anki", get(get_anki).fallback(not_found))
+        .route(
+            "/api/anki/review",
+            post(post_anki_review).fallback(not_found),
+        )
+        .route(
+            "/api/anki/import",
+            post(post_anki_import).fallback(not_found),
+        )
         .route("/api/courses", get(get_courses).fallback(not_found))
         .route(
             "/api/standalone-lessons",
@@ -168,10 +257,22 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/lesson", get(get_lesson).fallback(not_found))
         .route("/api/doc", get(get_doc).fallback(not_found))
         .route("/api/reference", get(get_reference).fallback(not_found))
+        .route("/api/map", get(get_map).fallback(not_found))
+        .route("/api/graph", get(get_graph).fallback(not_found))
+        .route(
+            "/api/graph/positions",
+            post(post_positions).fallback(not_found),
+        )
+        .route(
+            "/api/graph/nodes/{id}/delete",
+            post(delete_graph_node).fallback(not_found),
+        )
         .route("/files/", get(get_file))
         .route("/files/{*rest}", get(get_file))
         .route("/api/", any(not_found))
         .route("/api/{*rest}", any(not_found))
+        // Merged before the layer so the host/CSRF guards still cover it.
+        .merge(crate::sync::routes::router(sync))
         .fallback_service(
             ServeDir::new(&state.dist).fallback(ServeFile::new(state.dist.join("index.html"))),
         )
@@ -363,6 +464,113 @@ async fn get_limits(State(state): State<Arc<AppState>>) -> Json<Value> {
     Json(state.limits.get(&state.repo_root).unwrap_or(Value::Null))
 }
 
+/// The shape every Anki POST shares: `{"course": <slug>}`, with zod's texts on a bad body.
+fn course_from_body(body: &Bytes) -> Result<String, Response> {
+    let value: Value = match serde_json::from_slice(body) {
+        Ok(value) => value,
+        Err(_) => return Err(json_error(StatusCode::BAD_REQUEST, "Invalid JSON body")),
+    };
+    let Some(object) = value.as_object() else {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            &format!(
+                ": Invalid input: expected object, received {}",
+                js_type(&value)
+            ),
+        ));
+    };
+    let course = match object.get("course") {
+        Some(Value::String(course)) => course.clone(),
+        Some(other) => {
+            return Err(json_error(
+                StatusCode::BAD_REQUEST,
+                &format!(
+                    "course: Invalid input: expected string, received {}",
+                    js_type(other)
+                ),
+            ));
+        }
+        None => {
+            return Err(json_error(
+                StatusCode::BAD_REQUEST,
+                "course: Invalid input: expected string, received undefined",
+            ));
+        }
+    };
+    if !valid_course(&course) {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "course: Invalid string: must match pattern /^[a-z0-9]+(?:-[a-z0-9]+)*$/",
+        ));
+    }
+    Ok(course)
+}
+
+fn js_type(value: &Value) -> &'static str {
+    match value {
+        Value::Array(_) => "array",
+        Value::Null => "null",
+        Value::String(_) => "string",
+        Value::Number(_) => "number",
+        Value::Bool(_) => "boolean",
+        Value::Object(_) => "object",
+    }
+}
+
+/// `GET /api/anki`: one course's deck, else every course (Hono's `c.req.query` reads the first one).
+async fn get_anki(
+    State(state): State<Arc<AppState>>,
+    query: Result<Query<Vec<(String, String)>>, QueryRejection>,
+) -> Response {
+    let pairs = match query {
+        Ok(Query(pairs)) => pairs,
+        // A query axum cannot decode is no query, as Hono reads it.
+        Err(_) => Vec::new(),
+    };
+    let course = pairs
+        .iter()
+        .find(|(key, _)| key == "course")
+        .map(|(_, value)| value.clone());
+    match course {
+        Some(course) => {
+            if !valid_course(&course) {
+                return json_error(StatusCode::BAD_REQUEST, "Corso non valido");
+            }
+            Json(status_for_course(&state.anki, &state.data_root, &course).await).into_response()
+        }
+        None => Json(status_all(&state.anki, &state.data_root).await).into_response(),
+    }
+}
+
+async fn post_anki_review(State(state): State<Arc<AppState>>, body: Bytes) -> Response {
+    let course = match course_from_body(&body) {
+        Ok(course) => course,
+        Err(response) => return response,
+    };
+    let deck = course_deck_name_for(&state.data_root, &course);
+    match start_review(&state.anki, &deck).await {
+        ReviewStart::Started => Json(json!({ "ok": true })).into_response(),
+        ReviewStart::NoDeck => {
+            json_error(StatusCode::NOT_FOUND, "Nessun mazzo Anki per questo corso")
+        }
+        ReviewStart::Failed(error) => json_error(StatusCode::BAD_GATEWAY, &error),
+    }
+}
+
+async fn post_anki_import(State(state): State<Arc<AppState>>, body: Bytes) -> Response {
+    let course = match course_from_body(&body) {
+        Ok(course) => course,
+        Err(response) => return response,
+    };
+    Json(
+        state
+            .imports
+            .import(state.anki.clone(), state.data_root.clone(), course)
+            .await,
+    )
+    .into_response()
+}
+
 async fn events_handler(
     State(state): State<Arc<AppState>>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>> + Send> {
@@ -385,6 +593,84 @@ async fn events_handler(
             .interval(state.keep_alive)
             .text("keep-alive"),
     )
+}
+
+/// `GET /api/map`: scan the lessons and the progress ledger, derive the knowledge map.
+async fn get_map(State(state): State<Arc<AppState>>) -> Response {
+    let data_root = state.data_root.clone();
+    match tokio::task::spawn_blocking(move || knowledge::build_knowledge_map(&data_root)).await {
+        Ok(Ok(map)) => Json(map.to_json()).into_response(),
+        Ok(Err(message)) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &message),
+        Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"),
+    }
+}
+
+/// `GET /api/graph`: lay out whatever has no position yet, then the snapshot.
+async fn get_graph(State(state): State<Arc<AppState>>) -> Response {
+    let store = state.graph.clone();
+    let snapshot = tokio::task::spawn_blocking(move || {
+        store.ensure_layout();
+        store.read_snapshot().to_json()
+    })
+    .await;
+    match snapshot {
+        Ok(value) => Json(value).into_response(),
+        Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"),
+    }
+}
+
+async fn post_positions(State(state): State<Arc<AppState>>, body: Bytes) -> Response {
+    // Raw bytes on purpose: the Node server ignores the content-type (c.req.json()).
+    let parsed: Value = match serde_json::from_slice(&body) {
+        Ok(value) => value,
+        Err(_) => return json_error(StatusCode::BAD_REQUEST, "positions mancante"),
+    };
+    let Some(positions) = parsed.get("positions") else {
+        return json_error(StatusCode::BAD_REQUEST, "positions mancante");
+    };
+    if !positions.is_object() && !positions.is_array() {
+        return json_error(StatusCode::BAD_REQUEST, "positions mancante");
+    }
+    let update = positions.clone();
+    let store = state.graph.clone();
+    match tokio::task::spawn_blocking(move || store.save_positions(&update)).await {
+        Ok(Ok(())) => Json(json!({ "ok": true })).into_response(),
+        Ok(Err(error)) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
+        Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"),
+    }
+}
+
+/// `^(n|arg)_[\w-]+$`, hand-rolled: the crate has no regex.
+fn valid_graph_id(id: &str) -> bool {
+    let rest = id
+        .strip_prefix("arg_")
+        .or_else(|| id.strip_prefix("n_"));
+    rest.is_some_and(|rest| {
+        !rest.is_empty()
+            && rest
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    })
+}
+
+async fn delete_graph_node(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Response {
+    if !valid_graph_id(&id) {
+        return json_error(StatusCode::BAD_REQUEST, "id non valido");
+    }
+    let store = state.graph.clone();
+    match tokio::task::spawn_blocking(move || store.delete_node(&id)).await {
+        Ok(Ok(_)) => {
+            state.events.emit(&GlobalEvent::Graph {
+                revision: state.graph.next_revision(),
+            });
+            Json(json!({ "ok": true })).into_response()
+        }
+        Ok(Err(error)) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
+        Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"),
+    }
 }
 
 /// Mirrors `Number(env.LEARNER_PORT) || DEFAULT_PORT` followed by `listen` (main.ts:628,549-560).
@@ -509,12 +795,12 @@ pub fn serve_cli(args: ServeArgs) -> i32 {
         }
     };
 
-    runtime.block_on(async move {
+    let code = runtime.block_on(async move {
         match start(opts).await {
             Ok(server) => {
                 println!("Proxi: {}", server.url);
                 let _ = tokio::signal::ctrl_c().await;
-                server.close();
+                server.shutdown().await;
                 0
             }
             Err(error) => {
@@ -522,7 +808,10 @@ pub fn serve_cli(args: ServeArgs) -> i32 {
                 1
             }
         }
-    })
+    });
+    // Do not wait for the blocking pool: a pass stuck on GitHub would keep quitting for minutes.
+    runtime.shutdown_timeout(Duration::from_secs(1));
+    code
 }
 
 #[cfg(test)]
@@ -669,5 +958,45 @@ mod tests {
         // default for both (see the doc comment on port_from_env).
         assert_eq!(port_from_env(Some("0x1388")), Ok(DEFAULT_PORT));
         assert_eq!(port_from_env(Some("Infinity")), Ok(DEFAULT_PORT));
+    }
+
+    /// Status and `error` text of a rejected body.
+    async fn rejected(result: Result<String, Response>) -> (StatusCode, String) {
+        let response = result.expect_err("the body must be rejected");
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read the error body");
+        let body: Value = serde_json::from_slice(&bytes).expect("the error body is JSON");
+        let error = body["error"].as_str().expect("error is a string");
+        (status, error.to_string())
+    }
+
+    #[tokio::test]
+    async fn course_from_body_matches_the_node_schema_errors() {
+        let valid = course_from_body(&Bytes::from_static(br#"{"course":"demo"}"#));
+        assert_eq!(valid.expect("a valid body"), "demo");
+
+        let cases: [(&[u8], &str); 5] = [
+            (b"{", "Invalid JSON body"),
+            (b"[]", ": Invalid input: expected object, received array"),
+            (
+                b"{}",
+                "course: Invalid input: expected string, received undefined",
+            ),
+            (
+                br#"{"course":5}"#,
+                "course: Invalid input: expected string, received number",
+            ),
+            (
+                br#"{"course":"Bad"}"#,
+                "course: Invalid string: must match pattern /^[a-z0-9]+(?:-[a-z0-9]+)*$/",
+            ),
+        ];
+        for (body, want) in cases {
+            let (status, error) = rejected(course_from_body(&Bytes::from_static(body))).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{want}");
+            assert_eq!(error, want);
+        }
     }
 }
