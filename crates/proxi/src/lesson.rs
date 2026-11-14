@@ -471,30 +471,49 @@ fn close_span_end(src: &str, close: &str, from: usize) -> Option<usize> {
     None
 }
 
-fn strip_tag_spans(src: &str, tag: &str) -> String {
-    let open = format!("<{tag}");
-    let close = format!("</{tag}");
+/// `/<(script|style)\b[\s\S]*?<\/\1\s*>/gi` in one left-to-right pass: the earliest boundary-checked
+/// `<script` or `<style` wins and is stripped through the closing tag of that same tag.
+fn strip_script_and_style(src: &str) -> String {
     let mut out = String::with_capacity(src.len());
     let mut i = 0;
     while i < src.len() {
-        let Some(pos) = js::find_ci(src, &open, i) else {
+        let Some((pos, tag, after)) = next_script_or_style(src, i) else {
             out.push_str(&src[i..]);
             break;
         };
-        let after = pos + open.len();
-        let boundary_ok = after >= src.len() || !js::is_word_byte(src.as_bytes()[after]);
-        if boundary_ok {
-            if let Some(end) = close_span_end(src, &close, after) {
-                out.push_str(&src[i..pos]);
-                i = end;
-                continue;
-            }
+        let close = format!("</{tag}");
+        if let Some(end) = close_span_end(src, &close, after) {
+            out.push_str(&src[i..pos]);
+            i = end;
+            continue;
         }
         // No closing tag (or not a tag at all): keep it and keep scanning.
         out.push_str(&src[i..after]);
         i = after;
     }
     out
+}
+
+/// Earliest `<script`/`<style` at or after `from` whose tag name ends at a word boundary.
+fn next_script_or_style(src: &str, from: usize) -> Option<(usize, &'static str, usize)> {
+    let mut hit: Option<(usize, &'static str, usize)> = None;
+    // `script` first like the regex alternation on ties (they cannot share a start).
+    for tag in ["script", "style"] {
+        let open = format!("<{tag}");
+        let mut at = from;
+        while let Some(pos) = js::find_ci(src, &open, at) {
+            let after = pos + open.len();
+            if after >= src.len() || !js::is_word_byte(src.as_bytes()[after]) {
+                if hit.is_none_or(|(best, _, _)| pos < best) {
+                    hit = Some((pos, tag, after));
+                }
+                break;
+            }
+            // `<scriptx`: not the tag, keep looking for a later real one.
+            at = after;
+        }
+    }
+    hit
 }
 
 fn strip_link_tags(src: &str) -> String {
@@ -539,8 +558,7 @@ pub fn read_doc_body(root: &Path, rel: &str) -> Option<Value> {
         .or_else(|| inner_tag(&src, "body"))
         .unwrap_or(&src)
         .to_string();
-    html = strip_tag_spans(&html, "script");
-    html = strip_tag_spans(&html, "style");
+    html = strip_script_and_style(&html);
     html = strip_link_tags(&html);
 
     let mut out = Map::new();
@@ -833,6 +851,16 @@ mod tests {
             serde_json::to_string(&body).unwrap(),
             r#"{"title":"T","html":"<h2>Ciao</h2>"}"#
         );
+
+        // The earliest `<script`/`<style` wins and is stripped to its own close tag, like Node's
+        // single alternation pass: the `<script>` inside the style is not a nesting point.
+        write(
+            root,
+            "courses/c/reference/y.html",
+            "<main><style>/* <script> */</style><p>x</p><script></script></main>",
+        );
+        let body = read_doc_body(root, "courses/c/reference/y.html").expect("body");
+        assert_eq!(body["html"], serde_json::json!("<p>x</p>"));
         assert!(read_doc_body(root, "courses/c/reference/nope.html").is_none());
     }
 

@@ -145,7 +145,8 @@ pub fn extract_distilled_claim(node: &Value) -> Option<Value> {
         if !trimmed.is_empty() {
             return Some(Value::String(trimmed.to_string()));
         }
-        // A caveat with nothing after it ends the search: no fallback to the paragraph path.
+        // A whitespace-only caveat capture skips the steps[0] caveat search and falls through to
+        // the paragraph path.
     }
 
     let content = node.get("content").and_then(Value::as_str).unwrap_or("");
@@ -238,7 +239,8 @@ fn fence_match(content: &str) -> Option<(&str, &str)> {
                 return Some((language, &content[body_start..body_start + end]));
             }
         }
-        from = start + 3;
+        // The regex retries one char later: a four-backtick opening starts the fence at index 1.
+        from = start + 1;
     }
     None
 }
@@ -774,6 +776,12 @@ mod tests {
         let plain = plain.expect("code");
         assert_eq!(plain["language"], json!("typescript"));
         assert_eq!(plain["code"], json!("plain"));
+
+        // Four backticks: the regex retries one char later, so the fence opens at index 1.
+        let (_, four) = extract_key_snippet(&json!({ "content": "````js\nfn x() {}\n```" }));
+        let four = four.expect("code");
+        assert_eq!(four["language"], json!("js"));
+        assert_eq!(four["code"], json!("fn x() {}"));
     }
 
     #[test]

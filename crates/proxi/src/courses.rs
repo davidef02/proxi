@@ -99,12 +99,14 @@ fn mission_body(md: &str) -> String {
             .unwrap_or(lines.len());
         return lines[first + 1..end].join("\n");
     }
-    // No `## Why`: drop the first line starting with '#' (Node's `md.replace(/^#.*$/m, "")`).
+    // No `## Why`: blank the first line starting with '#' but keep its newline (Node's
+    // `md.replace(/^#.*$/m, "")`), so the paragraphs on either side stay separate.
     let mut out = Vec::with_capacity(lines.len());
     let mut stripped = false;
     for line in &lines {
         if !stripped && line.starts_with('#') {
             stripped = true;
+            out.push("");
             continue;
         }
         out.push(*line);
@@ -303,13 +305,16 @@ pub fn to_course_lesson(root: &Path, lesson: &Lesson) -> Map<String, Value> {
 }
 
 fn matched_lesson(root: &Path, lesson: &Lesson, planned: &Value) -> Value {
-    let mut entry = to_course_lesson(root, lesson);
-    match planned.get("title") {
-        Some(title) => {
-            entry.insert("title".into(), title.clone());
-        }
-        None => {
-            entry.remove("title");
+    let taught = to_course_lesson(root, lesson);
+    // Node spreads the taught entry then overwrites `title` in place; a fresh map keeps `title`
+    // first even when only the plan has one, and `Map::remove` would swap the last key into its slot.
+    let mut entry = Map::new();
+    if let Some(title) = planned.get("title") {
+        entry.insert("title".into(), title.clone());
+    }
+    for (key, value) in taught {
+        if key != "title" {
+            entry.insert(key, value);
         }
     }
     if let Some(nodes) = planned.get("plannedNodes") {
@@ -736,6 +741,43 @@ mod tests {
     }
 
     #[test]
+    fn matched_lesson_keeps_title_first_without_a_planned_title() {
+        let temp = temp_dir("planned-without-title");
+        let root = &temp.0;
+        // The plan names the lesson but carries no title: the taught title is dropped like Node's
+        // `title: undefined`, and every remaining key stays in `toCourseLesson` order.
+        write(
+            root,
+            "curriculum.json",
+            r#"{"chapters":[{"title":"Demo","slug":"demo","lessons":[{"slug":"prima","plannedNodes":2}]}]}"#,
+        );
+        write(
+            root,
+            "courses/demo/lessons/0001-prima.html",
+            &lesson_html(1, "prima", "Prima", 1, DAG),
+        );
+        let listing = list_courses(root).unwrap();
+        assert_eq!(
+            serde_json::to_string(&listing[0]["lessons"][0]).unwrap(),
+            r#"{"slug":"prima","lessonPath":"courses/demo/lessons/0001-prima.html","lessonNumber":1,"nodeCount":1,"inProgress":true,"plannedNodes":2}"#
+        );
+
+        // The plan has a title, the lesson's island has none: `title` is still first.
+        write(
+            root,
+            "curriculum.json",
+            r#"{"chapters":[{"title":"Demo","slug":"demo","lessons":[{"title":"Prima","slug":"prima"}]}]}"#,
+        );
+        let untitled = r#"<html><script type="application/json" id="lesson-data">{"metadata":{"lessonNumber":1,"title":"","slug":"prima"},"nodes":[]}</script></html>"#;
+        write(root, "courses/demo/lessons/0001-prima.html", untitled);
+        let listing = list_courses(root).unwrap();
+        assert_eq!(
+            serde_json::to_string(&listing[0]["lessons"][0]).unwrap(),
+            r#"{"title":"Prima","slug":"prima","lessonPath":"courses/demo/lessons/0001-prima.html","lessonNumber":1,"nodeCount":0,"inProgress":false}"#
+        );
+    }
+
+    #[test]
     fn mission_destination_reads_the_first_why_paragraph() {
         let temp = temp_dir("mission");
         let root = &temp.0;
@@ -754,6 +796,17 @@ mod tests {
         assert_eq!(
             mission_destination(root, "plain").as_deref(),
             Some("Intro qui.")
+        );
+
+        // A `#` line in the middle disappears but leaves its newline: paragraphs stay separate.
+        write(
+            root,
+            "courses/between/MISSION.md",
+            "Intro\n# Titolo\nAltro\n",
+        );
+        assert_eq!(
+            mission_destination(root, "between").as_deref(),
+            Some("Intro")
         );
 
         write(
