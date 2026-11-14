@@ -1,4 +1,5 @@
-//! The local HTTP server: settings, limits, events and the built UI.
+//! The local HTTP server: settings, limits, events, courses, lesson reading, `/files` and the
+//! built UI.
 
 use std::convert::Infallible;
 use std::path::PathBuf;
@@ -6,8 +7,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Bytes;
-use axum::extract::{Request, State};
-use axum::http::{header, Method, StatusCode};
+use axum::extract::{RawQuery, Request, State};
+use axum::http::{header, Method, StatusCode, Uri};
 use axum::middleware::Next;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
@@ -18,8 +19,12 @@ use serde_json::{json, Value};
 use tokio::task::JoinHandle;
 use tower_http::services::{ServeDir, ServeFile};
 
+use crate::courses::{self, CoursesError};
 use crate::data_root::{self, DATA_ROOT_ENV};
 use crate::events::{self, EventBus};
+use crate::files;
+use crate::js;
+use crate::lesson;
 use crate::limits::{self, LimitsCache};
 use crate::protocol::{GlobalEvent, LearnerSettings, SettingsResponse, DEFAULT_PORT};
 use crate::settings::{self, SettingsError};
@@ -94,6 +99,7 @@ impl Drop for RunningServer {
 struct AppState {
     repo_root: PathBuf,
     repo_str: String,
+    data_root: PathBuf,
     data_str: String,
     port: u16,
     dist: PathBuf,
@@ -124,6 +130,7 @@ pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
         repo_str: repo_root.display().to_string(),
         data_str: data_root.display().to_string(),
         repo_root,
+        data_root,
         port,
         dist,
         events: events.clone(),
@@ -153,6 +160,16 @@ fn router(state: Arc<AppState>) -> Router {
         )
         .route("/api/limits", get(get_limits).fallback(not_found))
         .route("/api/events", get(events_handler).fallback(not_found))
+        .route("/api/courses", get(get_courses).fallback(not_found))
+        .route(
+            "/api/standalone-lessons",
+            get(get_standalone_lessons).fallback(not_found),
+        )
+        .route("/api/lesson", get(get_lesson).fallback(not_found))
+        .route("/api/doc", get(get_doc).fallback(not_found))
+        .route("/api/reference", get(get_reference).fallback(not_found))
+        .route("/files/", get(get_file))
+        .route("/files/{*rest}", get(get_file))
         .route("/api/", any(not_found))
         .route("/api/{*rest}", any(not_found))
         .fallback_service(
@@ -172,6 +189,83 @@ fn not_found_response() -> Response {
 
 async fn not_found() -> Response {
     not_found_response()
+}
+
+/// Read routes ported from main.ts:204-205,483-535. Sync file I/O like the Node handlers; the
+/// data folder is small and this is a personal app.
+fn courses_response(result: Result<Vec<Value>, CoursesError>) -> Response {
+    match result {
+        Ok(list) => Json(Value::Array(list)).into_response(),
+        // Node: a SyntaxError from JSON.parse becomes 400 in onError (main.ts:184).
+        Err(CoursesError::Syntax) => json_error(StatusCode::BAD_REQUEST, "Invalid JSON body"),
+        Err(CoursesError::Other(message)) => {
+            json_error(StatusCode::INTERNAL_SERVER_ERROR, &message)
+        }
+    }
+}
+
+async fn get_courses(State(state): State<Arc<AppState>>) -> Response {
+    courses_response(courses::list_courses(&state.data_root))
+}
+
+async fn get_standalone_lessons(State(state): State<Arc<AppState>>) -> Response {
+    courses_response(courses::list_standalone_lessons(&state.data_root))
+}
+
+/// Hono's query decoding, not axum's `Query` (whose rejection is a non-JSON 400).
+fn query_path(query: Option<&str>) -> String {
+    js::query_param(query, "path").unwrap_or_default()
+}
+
+async fn get_lesson(State(state): State<Arc<AppState>>, RawQuery(query): RawQuery) -> Response {
+    let raw = query_path(query.as_deref());
+    let Some(rel) = lesson::lesson_rel(&raw) else {
+        return json_error(StatusCode::BAD_REQUEST, "Percorso della lezione non valido");
+    };
+    match lesson::read_lesson(&state.data_root, &rel) {
+        Ok(Some(lesson)) => Json(lesson.doc).into_response(),
+        // A malformed island throws in Node: onError answers 422 with its message.
+        Err(message) => json_error(StatusCode::UNPROCESSABLE_ENTITY, &message),
+        Ok(None) => match lesson::read_lesson_html(&state.data_root, &rel) {
+            // Node reads the file again: a missing file is a 404, EISDIR a 500.
+            Ok(None) => json_error(StatusCode::NOT_FOUND, "Lezione non trovata"),
+            Err(message) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &message),
+            Ok(Some(_)) => json_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "La lezione non ha dati strutturati",
+            ),
+        },
+    }
+}
+
+async fn get_doc(State(state): State<Arc<AppState>>, RawQuery(query): RawQuery) -> Response {
+    let raw = query_path(query.as_deref());
+    let Some(rel) = lesson::doc_rel(&raw) else {
+        return json_error(StatusCode::BAD_REQUEST, "Percorso del documento non valido");
+    };
+    match lesson::read_doc_body(&state.data_root, &rel) {
+        Some(doc) => Json(doc).into_response(),
+        None => json_error(StatusCode::NOT_FOUND, "Documento non trovato"),
+    }
+}
+
+async fn get_reference(State(state): State<Arc<AppState>>, RawQuery(query): RawQuery) -> Response {
+    let raw = query_path(query.as_deref());
+    let Some(rel) = lesson::doc_rel(&raw) else {
+        return json_error(StatusCode::BAD_REQUEST, "Percorso del documento non valido");
+    };
+    match lesson::read_reference_document(&state.data_root, &rel) {
+        Ok(Some(reference)) => Json(reference).into_response(),
+        Ok(None) => json_error(StatusCode::NOT_FOUND, "Sintesi non trovata"),
+        Err(message) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &message),
+    }
+}
+
+/// The raw URI path is decoded inside `files::serve`: a `Path` extractor would reject bad escapes
+/// before the handler sees them.
+async fn get_file(State(state): State<Arc<AppState>>, uri: Uri) -> Response {
+    let raw = uri.path().strip_prefix("/files/").unwrap_or("");
+    files::serve(&state.data_root, &state.repo_root, raw)
 }
 
 /// Same guards as main.ts:189-198 (DNS rebinding + CSRF), plus the SPA fallbacks.
@@ -203,7 +297,8 @@ async fn front(State(state): State<Arc<AppState>>, request: Request, next: Next)
         if !is_read {
             return not_found_response();
         }
-        if !state.dist.join("index.html").is_file() {
+        // /files is served from the data folder and the repo, not from the built UI.
+        if !path.starts_with("/files/") && !state.dist.join("index.html").is_file() {
             return (
                 StatusCode::OK,
                 [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
