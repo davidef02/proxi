@@ -570,6 +570,31 @@ async fn install_through_a_bin_shim() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn failed_install_is_a_run_failure() {
+    let (root, _dir) = temp_ex();
+    let base = exercises_base(&root.0);
+    fs::write(base.join("package.json"), "{}").expect("write package.json");
+    let fake = root.0.join("fake-npm-fail.mjs");
+    fs::write(&fake, "process.exit(3);").expect("write failing npm");
+    let cfg = RunConfig::new(Some(node()), NpmCommand::Script(fake));
+
+    let result = run_one(&root.0, "01-a", &cfg).await;
+    assert_eq!(result["ok"], json!(false));
+    assert_eq!(result["error"], json!("npm install è fallito (codice 3)"));
+
+    // npm exits 0 but still no vitest: the message says to install by hand.
+    let noop = root.0.join("fake-npm-noop.mjs");
+    fs::write(&noop, "process.exit(0);").expect("write noop npm");
+    let cfg = RunConfig::new(Some(node()), NpmCommand::Script(noop));
+    let result = run_one(&root.0, "01-a", &cfg).await;
+    assert_eq!(result["ok"], json!(false));
+    assert_eq!(
+        result["error"],
+        json!("Installazione non riuscita: esegui npm install in courses/c/exercises")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn node_missing_is_a_clear_error() {
     let (root, _dir) = temp_ex();
     let cfg = RunConfig::new(None, NpmCommand::Default);

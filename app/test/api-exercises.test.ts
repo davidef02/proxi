@@ -150,6 +150,10 @@ describe("GET /api/exercises/:course/:name", () => {
         assert.equal(missing.status, 404);
         assert.deepEqual(await missing.json(), { error: "Esercizio non trovato" });
       }
+
+      const badCourse = await fetch(`${server.url}/api/exercises/Bad/01-a`);
+      assert.equal(badCourse.status, 400);
+      assert.deepEqual(await badCourse.json(), { error: ": Invalid string: must match pattern /^[a-z0-9]+(?:-[a-z0-9]+)*$/" });
     });
   });
 });
@@ -199,6 +203,17 @@ describe("POST /api/exercises/save", () => {
       const shortPath = await post(server, "/api/exercises/save", { course: "demo", name: "01-a", path: "", content: "x" });
       assert.equal(shortPath.status, 400);
       assert.deepEqual(await shortPath.json(), { error: "path: Too small: expected string to have >=1 characters" });
+
+      const tooLong = [
+        [{ path: "a".repeat(201) }, "path: Too big: expected string to have <=200 characters"],
+        [{ content: "x".repeat(200_001) }, "content: Too big: expected string to have <=200000 characters"],
+        [{ baseVersion: "0".repeat(65) }, "baseVersion: Too big: expected string to have <=64 characters"],
+      ] as const;
+      for (const [patch, error] of tooLong) {
+        const res = await post(server, "/api/exercises/save", { course: "demo", name: "01-a", path: "Esercizio.vue", content: "x", ...patch });
+        assert.equal(res.status, 400, error);
+        assert.deepEqual(await res.json(), { error });
+      }
 
       const huge = await post(server, "/api/exercises/save", { course: "demo", name: "01-a", path: "Esercizio.vue", content: "x".repeat(600_001) });
       assert.equal(huge.status, 413);
