@@ -15,6 +15,7 @@ use serde_json::Value;
 use proxi::server::ServerOptions;
 
 pub mod anki_seed;
+pub mod cli_golden;
 pub mod fake_anki;
 pub mod fake_hf;
 

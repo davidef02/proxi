@@ -5,12 +5,13 @@ import os from "node:os";
 import path from "node:path";
 import { after, describe, it } from "node:test";
 import { GOOGLE_CLIENT_ID } from "../server/sync/gdrive.ts";
+import { ANKI_ERROR, ANKI_GOLDEN, captureAnkiGolden } from "./capture-anki-golden.ts";
 import { captureGolden, GOLDEN_DIR, ISO_RE, normalise, rootVariants } from "./capture-golden.ts";
 import { captureLessonGolden, LESSON_GOLDEN } from "./capture-lesson-golden.ts";
 import { REPO_ROOT } from "./harness.ts";
 
 const ROUTES = ["settings", "limits", "events", "courses", "lesson", "graph", "exercises", "sync", "sync-gdrive"];
-const ALL_GOLDENS = [...ROUTES, LESSON_GOLDEN];
+const ALL_GOLDENS = [...ROUTES, LESSON_GOLDEN, ANKI_GOLDEN];
 
 const dirs: string[] = [];
 function tempDir(prefix: string): string {
@@ -79,6 +80,7 @@ it("committed golden fixtures match a fresh Node capture", async () => {
   const out = tempDir("golden-fresh-");
   await captureGolden(out);
   await captureLessonGolden(out);
+  await captureAnkiGolden(out);
   for (const route of ALL_GOLDENS) {
     const committed = path.join(GOLDEN_DIR, `${route}.json`);
     assert.ok(fs.existsSync(committed), `missing ${committed}: run npm run golden:capture`);
@@ -262,5 +264,62 @@ it("lesson golden pins the slug and the D11 stderr", () => {
   for (const c of file.cases) {
     assert.doesNotMatch(c.stderr, /\[home\]/, c.name);
     assert.equal(Object.keys(c.files).includes("index.html"), false, c.name);
+  }
+});
+
+it("anki golden pins ping, LaTeX and the data/stdin parity", () => {
+  const file = JSON.parse(goldenText(ANKI_GOLDEN)) as {
+    cases: Array<{ name: string; stdout: string; exitCode: number; files: Record<string, string | null> }>;
+  };
+  const byName = (name: string) => {
+    const found = file.cases.find((c) => c.name === name);
+    assert.ok(found, `missing anki case ${name}`);
+    return found;
+  };
+  assert.equal(byName("ping-online").stdout, "✅ AnkiConnect is ONLINE (<ankiUrl>) — Version 6 (<ms>ms)\n");
+  // The error after the prefix is platform-dependent: `fetch failed` on a fast refusal, a timeout on a slow one.
+  const offline = byName("ping-offline");
+  assert.ok(offline.stdout.startsWith("⚠️ AnkiConnect is OFFLINE (<deadUrl>): "));
+  assert.equal(offline.exitCode, 0);
+  assert.match(byName("ping-timeout").stdout, /Connection timed out/);
+  assert.ok(byName("ping-error").stdout.includes(ANKI_ERROR));
+  assert.equal(
+    byName("export-data-nodes").files["decks/from-data.tsv"],
+    byName("export-stdin-nodes").files["decks/from-stdin.tsv"],
+  );
+  // The JSON-escaped `\(\frac`: the LaTeX pass ran, and the extract dump keeps V8's number printing.
+  // normaliseStream turns every backslash into `/`, so the pinned escape reads `/(/frac` in the golden.
+  const latex = JSON.stringify("\\(\\frac").slice(1, -1).split("\\\\").join("/").split("\\").join("/");
+  const extract = byName("extract-course").stdout;
+  assert.ok(extract.includes('"vue-js-vetrine"'));
+  assert.ok(extract.includes('"tier::undefined"'));
+  assert.ok(extract.includes(latex));
+  assert.ok(extract.includes('"lessonNumber": 1,'));
+});
+
+it("lesson golden covers rebuild and compile-ref", () => {
+  const file = JSON.parse(goldenText(LESSON_GOLDEN)) as {
+    cases: Array<{ name: string; stderr: string; files: Record<string, string | null> }>;
+  };
+  const byName = (name: string) => {
+    const found = file.cases.find((c) => c.name === name);
+    assert.ok(found, `missing ${name}`);
+    return found;
+  };
+
+  const reference = byName("compile-ref-default").files["reference/il-modello-osi.html"];
+  assert.ok(reference, "compile-ref-default wrote no reference/il-modello-osi.html");
+  assert.match(reference, /id="reference-data"/);
+  assert.match(reference, /confonde rete e trasporto/); // the sibling learning-record scan, not the board
+
+  const alias = Object.values(byName("reference-alias-record").files);
+  assert.equal(alias.length, 1);
+  assert.match(alias[0] as string, /confonde la legge con il caso/); // --record wins over the scan
+
+  assert.equal(byName("rebuild-slug-miss").stderr, "Error: Lesson not found: nope\n");
+  assert.equal(byName("compile-ref-slug-miss").stderr, "Error: Cannot compile reference: lesson file not found (undefined)\n");
+
+  for (const c of file.cases) {
+    for (const name of Object.keys(c.files)) assert.doesNotMatch(name, /learning-records\//, `${c.name} lists a learning record`);
   }
 });
