@@ -782,6 +782,71 @@ fn data_cards_sync_without_lesson() {
     );
 }
 
+const STDIN_CARDS: &str =
+    r#"{"deck":"Proxi::Da stdin","slug":"da-stdin","cards":[{"type":"basic","front":"F","back":"B","tags":[]}]}"#;
+
+#[test]
+fn sync_reads_the_stdin_payload_and_its_deck_and_slug() {
+    let fake = MockAnki::start(true, None);
+    let (_t, data, cwd) = dirs("anki-cli-sync-stdin");
+
+    // An empty --data falls through to --stdin, and the payload's deck and slug drive the sync.
+    let run = run(
+        &data,
+        &cwd,
+        &["sync", "--data", "", "--stdin", "--anki-url", fake.url()],
+        Some(STDIN_CARDS),
+    );
+    assert_eq!(run.code, 0, "stderr: {}", run.stderr);
+    let tsv = data.join("decks").join("da-stdin.tsv");
+    assert_eq!(
+        run.stdout,
+        format!(
+            "✅ Synced 1 cards to deck 'Proxi::Da stdin' (0 duplicates skipped)\n📁 Backup TSV saved to {}\n",
+            tsv.display()
+        )
+    );
+    assert!(tsv.is_file(), "the payload slug names the TSV");
+    let requests = fake.requests();
+    assert_eq!(requests[1]["action"], json!("createDeck"));
+    assert_eq!(requests[1]["params"], json!({ "deck": "Proxi::Da stdin" }));
+    assert_eq!(fake.added_notes()[0]["deckName"], json!("Proxi::Da stdin"));
+    let content = fs::read_to_string(&tsv).expect("read TSV");
+    assert!(content.contains("#deck:Proxi::Da stdin\n"), "{content}");
+}
+
+#[test]
+fn sync_slug_flag_names_the_tsv() {
+    let fake = MockAnki::start(true, None);
+    let (_t, data, cwd) = dirs("anki-cli-sync-slug");
+
+    let run = run(
+        &data,
+        &cwd,
+        &[
+            "sync",
+            "--data",
+            CALCULUS_CARDS,
+            "--topic",
+            "Calculus",
+            "--slug",
+            "alias",
+            "--anki-url",
+            fake.url(),
+        ],
+        None,
+    );
+    assert_eq!(run.code, 0, "stderr: {}", run.stderr);
+    let tsv = data.join("decks").join("alias.tsv");
+    assert!(tsv.is_file(), "the --slug flag names the TSV");
+    assert!(
+        run.stdout.ends_with(&format!("📁 Backup TSV saved to {}\n", tsv.display())),
+        "stdout: {}",
+        run.stdout
+    );
+    assert_eq!(fake.added_notes().len(), 2);
+}
+
 const ALGEBRA_NODES: &str = r#"{"topic":"Algebra","nodes":[{"nodeId":"n-det","tier":"axiom","ankiParams":{"suggestedCloze":"Il determinante {{c1::e nullo}}"}}]}"#;
 
 #[test]
