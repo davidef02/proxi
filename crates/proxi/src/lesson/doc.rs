@@ -1193,6 +1193,19 @@ mod tests {
     }
 
     #[test]
+    fn render_full_lesson_defaults_a_missing_date_to_today() {
+        let doc = json!({"metadata": {"title": "Senza data"}, "nodes": []});
+        let before: String = iso_now().chars().take(10).collect();
+        let html = render_full_lesson(&doc, "<!-- LESSON_DATE_SLOT -->").expect("render");
+        let after: String = iso_now().chars().take(10).collect();
+        let date = html.strip_prefix("Generated: ").expect("date slot filled");
+        assert!(
+            date == before || date == after,
+            "expected today's date, got {html:?}"
+        );
+    }
+
+    #[test]
     fn rebuild_rerenders_appended_nodes_from_the_island() {
         let tmp = temp_dir("rebuild-nodes");
         let init = init_lesson(&init_options(&tmp.0, "Calcolo", "Derivate")).expect("init");
