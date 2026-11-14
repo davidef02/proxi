@@ -8,7 +8,7 @@ import { GOOGLE_CLIENT_ID } from "../server/sync/gdrive.ts";
 import { captureGolden, GOLDEN_DIR, ISO_RE, normalise, rootVariants } from "./capture-golden.ts";
 import { REPO_ROOT } from "./harness.ts";
 
-const ROUTES = ["settings", "limits", "events", "courses", "lesson", "graph", "sync", "sync-gdrive"];
+const ROUTES = ["settings", "limits", "events", "courses", "lesson", "graph", "exercises", "sync", "sync-gdrive"];
 
 const dirs: string[] = [];
 function tempDir(prefix: string): string {
@@ -129,6 +129,36 @@ it("graph golden holds the graph event and JS-shaped positions", () => {
   const body = byName("get-graph").response.body;
   for (const node of body.nodes) assert.ok(node.id in body.positions, `no position for ${node.id}`);
   assert.match(goldenText("graph"), /"dataSeed"/);
+});
+
+it("exercises golden holds the workspace order, the stale conflict and the courses event", () => {
+  interface FileEntry {
+    path: string;
+    readOnly: boolean;
+  }
+  const file = JSON.parse(goldenText("exercises")) as {
+    cases: Array<{ name: string; firstEvent?: unknown; response: { status: number; body: unknown } }>;
+  };
+  const byName = (name: string) => {
+    const found = file.cases.find((c) => c.name === name);
+    assert.ok(found, `missing exercises case ${name}`);
+    return found;
+  };
+  const detail = byName("detail").response.body as { files: FileEntry[] };
+  assert.deepStrictEqual(
+    detail.files.map((f) => [f.path, f.readOnly]),
+    [
+      ["app.js", false],
+      ["Esercizio.js", false],
+      ["Esercizio.test.js", true],
+      ["sub/a/b/ok.js", false],
+    ],
+  );
+  const stale = byName("save-stale").response;
+  assert.equal(stale.status, 409);
+  assert.deepStrictEqual(stale.body, { error: "Il file è cambiato fuori dall'editor", code: "stale" });
+  assert.deepStrictEqual(byName("save").firstEvent, { type: "courses" });
+  assert.deepStrictEqual(byName("hint").firstEvent, { type: "courses" });
 });
 
 it("sync golden records one commit with the normalised host", () => {

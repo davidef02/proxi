@@ -1,11 +1,13 @@
 pub mod anki_client;
 pub mod anki_import;
 pub mod anki_status;
+pub mod child;
 pub mod course_data;
 pub mod courses;
 pub mod curriculum;
 pub mod data_root;
 pub mod events;
+pub mod exercises;
 pub mod files;
 pub mod graph;
 pub mod html_lesson;
@@ -17,3 +19,4 @@ pub mod protocol;
 pub mod server;
 pub mod settings;
 pub mod sync;
+pub mod vitest;

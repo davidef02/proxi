@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 axum = "0.8.9"
-tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time", "process", "io-util"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 clap = { version = "4.6.7", features = ["derive"] }
@@ -23,6 +23,7 @@ form_urlencoded = "1.2.2"
 base64 = "0.23.1"
 gethostname = "1.1.0"
 indexmap = { version = "2.14.2", features = ["serde"] }
+process-wrap = { version = "10.0.1", default-features = false, features = ["tokio1", "job-object", "process-group", "kill-on-drop"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
