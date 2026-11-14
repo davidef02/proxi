@@ -1226,6 +1226,28 @@ fn a_failed_token_exchange_lands_in_gdrive_error_and_the_page() {
     assert_eq!(s.gdrive.error.as_deref(), Some(message));
     assert!(!s.gdrive.connected);
     assert_eq!(s.provider, "local");
+
+    // Starting a new login clears the previous connect error, as Node does.
+    start_params(&svc);
+    assert_eq!(svc.status().gdrive.error, None);
+}
+
+#[test]
+fn a_malformed_gdrive_secret_is_the_connect_error_of_the_gdrive_provider() {
+    let t = Harness::new(&[]);
+    write_settings(&t.repo, &json!({ "syncProvider": "gdrive" })).expect("switch to gdrive");
+    t.store
+        .set(GDRIVE_ACCOUNT, "not json")
+        .expect("store a malformed gdrive secret");
+    let svc = t.service();
+
+    let s = svc.status();
+    assert!(!s.gdrive.connected);
+    assert_eq!(s.gdrive.error.as_deref(), Some(UNREADABLE_ERROR));
+
+    // The error belongs to the active provider only: local keeps the status clean.
+    write_settings(&t.repo, &json!({ "syncProvider": "local" })).expect("switch to local");
+    assert_eq!(svc.status().gdrive.error, None);
 }
 
 #[test]
@@ -1410,8 +1432,14 @@ fn resolve_and_restore_refresh_the_board() {
     svc.run(false);
     let id = svc.conflicts()[0].id.clone();
     let before = t.counters.pulled();
+    let emitted = t.counters.statuses.lock().unwrap().len();
     svc.resolve_conflict(&id, "local").expect("resolve");
     assert_eq!(t.counters.pulled(), before + 1);
+    assert_eq!(
+        t.counters.statuses.lock().unwrap().len(),
+        emitted + 1,
+        "a resolve emits the new status"
+    );
 
     // restore
     let u = Harness::new(&[
@@ -1433,8 +1461,14 @@ fn resolve_and_restore_refresh_the_board() {
     svc.run(false);
     let id = svc.trash()[0].id.clone();
     let before = u.counters.pulled();
+    let emitted = u.counters.statuses.lock().unwrap().len();
     svc.restore(&id).expect("restore");
     assert_eq!(u.counters.pulled(), before + 1);
+    assert_eq!(
+        u.counters.statuses.lock().unwrap().len(),
+        emitted + 1,
+        "a restore emits the new status"
+    );
     assert_eq!(
         fs::read_to_string(u.data.join("courses/a.md")).expect("restored"),
         "a"
