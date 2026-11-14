@@ -35,7 +35,7 @@ gh pr merge --auto --squash                # GitHub merges once the `checks` job
 ## Study content is not in this repo
 
 Learner data (`courses/`, `curriculum.json`, `index.html`, `decks/`, `graph/`) lives in the data folder
-(`npm run data -- where`), outside the repo, and is never committed here. Sync is the app's job (Settings →
+(`proxi data where`), outside the repo, and is never committed here. Sync is the app's job (Settings →
 Sincronizzazione). `viz/` is repo content and goes the code path.
 
 ## Repo settings (GitHub)

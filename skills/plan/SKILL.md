@@ -6,7 +6,7 @@ description: Plan a chapter — the ordered list of lessons that takes him from 
 # Planning a chapter
 
 A **chapter** is a course: `courses/<slug>/`, holding its own lessons, reference sheets and learning
-records. `courses/...` paths are relative to the data folder (`npm run data -- where`). A **lesson** is one session and the nodes it produces. This skill decides the chapter's
+records. `courses/...` paths are relative to the data folder (`proxi data where`). A **lesson** is one session and the nodes it produces. This skill decides the chapter's
 lessons and their order — nothing else. It never teaches: the pull to start explaining is the signal
 that planning is done.
 
@@ -23,7 +23,7 @@ is that place, and this skill is the only thing that writes it.
 ### 0. See what is already planned
 
 ```bash
-npm run home -- chapters
+proxi home chapters
 ```
 
 Re-planning an existing chapter replaces it wholesale, so know whether one already covers the
@@ -80,7 +80,7 @@ ordering — after this the plan exists and re-planning replaces it wholesale.
 ### 5. Write it
 
 ```bash
-npm run home -- plan --chapter "<chapter title>" \
+proxi home plan --chapter "<chapter title>" \
   --lessons-json '[{"title":"<lesson title>","plannedNodes":4}, ...]'
 ```
 
@@ -91,8 +91,8 @@ match the real directory, or every lesson of that course reads as outside the pl
 Then regenerate the board:
 
 ```bash
-npm run home                 # requires Anki open (AnkiConnect)
-npm run home -- --no-anki    # without card counts
+proxi home                 # requires Anki open (AnkiConnect)
+proxi home --no-anki       # without card counts
 ```
 
 Lesson slugs derive from the titles, and a lesson counts as taught when

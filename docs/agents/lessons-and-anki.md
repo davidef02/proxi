@@ -1,6 +1,6 @@
 # Lessons, Reference Sheets, Anki & the Status Board
 
-The commands run from the repo but operate in the data folder (`npm run data -- where`): relative
+The commands run from the repo but operate in the data folder (`proxi data where`): relative
 `--out-dir`, `--lesson` and `--node-file` paths resolve there.
 
 ## Commands
@@ -9,26 +9,27 @@ Always name the course directory: `lesson init` defaults to `./lessons/`, so pas
 `--out-dir courses/<course>/lessons` (the flag is `--out-dir`, not `--lessons-dir`).
 
 ```bash
-npm run lesson init -- --topic "<topic>" --title "<planned title>" \
+proxi lesson init --topic "<topic>" --title "<planned title>" \
   --dag "<mermaid>" --goal "<goal>" --out-dir courses/<course>/lessons
-npm run lesson append -- --lesson courses/<course>/lessons/000N-<slug>.html --node-json '<json>'
-npm run lesson compile-ref -- --lesson courses/<course>/lessons/000N-<slug>.html \
+proxi lesson append --lesson courses/<course>/lessons/000N-<slug>.html --node-json '<json>'
+proxi lesson append --lesson courses/<course>/lessons/000N-<slug>.html --node-file node.json
+proxi lesson compile-ref --lesson courses/<course>/lessons/000N-<slug>.html \
   --out-dir courses/<course>/reference
 
-npm run anki sync -- --lesson courses/<course>/lessons/000N-<slug>.html   # only after opt-in
+proxi anki sync --lesson courses/<course>/lessons/000N-<slug>.html   # only after opt-in
 
-npm run home                                # regenerate index.html (needs Anki open)
-npm run home -- --no-anki                   # regenerate without card counts
-npm run home -- plan --chapter "Docker" --lessons-json '[{"title":"...","plannedNodes":4}]'
+proxi home                                # regenerate index.html (needs Anki open)
+proxi home --no-anki                      # regenerate without card counts
+proxi home plan --chapter "Docker" --lessons-json '[{"title":"...","plannedNodes":4}]'
 #   add --slug <course-dir> when the directory name differs from the chapter title (app-cache)
 ```
 
-On Windows `npm run` cuts a multi-line argument at the first newline (a `--dag` becomes
-`graph TD`, and every flag after it, `--out-dir` included, is lost). Pass multi-line values via
-`node --import tsx extensions/html-lesson.ts init ...`, and node payloads via `--node-file`.
+When a node payload is awkward to quote in the shell, write it to a file in the data folder and pass
+`--node-file <file>` instead of `--node-json`.
 
-`lesson init`, `append` and `compile-ref` regenerate `index.html` themselves (without card counts
-when Anki is closed). Run `npm run home` after `anki sync` so the card counts catch up.
+`lesson init`, `append` and `compile-ref` do not touch `index.html`: run `proxi home` (or
+`proxi home --no-anki` with Anki closed) after them, and again after `anki sync` so the
+card counts catch up.
 
 ---
 

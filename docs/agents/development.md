@@ -60,6 +60,16 @@ Server tests start servers through `startServer` in `app/test/harness.ts` (`PROX
 default node) with the external services faked by `app/test/fake-servers.ts`; a test file that runs against
 the binary uses only HTTP/SSE and is listed in `RUST_PORTED` of `scripts/test-rust.mjs`.
 
+## The `proxi` binary
+
+`cargo build --release --locked` builds `target/release/proxi` (`proxi.exe` on Windows); `cargo test --locked`
+runs its tests, and `npm run test:rust` runs the ported HTTP/SSE tests against that build.
+`npm run desktop:install` runs the same build and adds `target/release` to the user PATH (Windows, no admin
+rights; `npm run desktop:uninstall` removes it), so agents run `proxi lesson|anki|home|data` from any new
+shell; check with `proxi --version`. The binary finds the repo from its own location: keep it in
+`target/release`, never copy it elsewhere. Until the cutover `proxi lesson|anki|home|data` match the
+`npm run` scripts flag for flag, output for output.
+
 ## Where the logic lives
 
 | Concern | Module |

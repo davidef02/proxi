@@ -4,15 +4,17 @@ An Electron window around the same server as `npm run app`. No terminal needed o
 
 ## Install
 
-Prerequisites: `npm install` in the repo root; Claude Code installed and logged in (`claude` once in a terminal).
+Prerequisites: `npm install` in the repo root; Rust stable (`cargo`); Claude Code installed and logged in (`claude` once in a terminal).
 
 ```bash
-npm run desktop:install      # builds the UI, creates "Proxi" in the Start menu and on the Desktop
-npm run desktop           # run it right now without shortcuts
+npm run desktop:install  # builds the UI and the proxi binary, adds target\release to the user PATH, creates "Proxi" in the Start menu and on the Desktop
+npm run desktop          # run it right now without shortcuts
 ```
 
 The shortcut runs `node_modules\electron\dist\electron.exe app\desktop\main.mjs` with the repo as working directory.
 `node app/desktop/install-shortcuts.mjs --dir <folder>` writes a single shortcut into `<folder>` (tests).
+
+The PATH step adds `<repo>\target\release` to your user `Path` (no admin rights) and builds it with `cargo build --release --locked` first; open a new terminal, then `proxi --version` answers. `--dir` (tests) skips the build and the PATH step.
 
 ## Update
 
@@ -22,7 +24,7 @@ behind a small splash window when stale. If a rebuild fails and an older build e
 
 ## Uninstall
 
-`npm run desktop:uninstall` removes both shortcuts. Window position is stored in
+`npm run desktop:uninstall` removes both shortcuts and the PATH entry. Window position is stored in
 `%APPDATA%\proxi\window.json`; delete that folder to forget it.
 
 ## Behaviour

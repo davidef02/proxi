@@ -38,11 +38,12 @@ npm install
 npm run desktop
 ```
 
-On Windows, `npm run desktop:install` adds Start menu and Desktop shortcuts.
+On Windows, `npm run desktop:install` adds Start menu and Desktop shortcuts and puts the `proxi` command on your PATH.
 
 ## Requirements
 
 - Node 24
+- Rust stable (`cargo`, from https://rustup.rs), to build the `proxi` command
 - One AI CLI, installed and logged in: Claude Code (`claude`), Antigravity (`agy`) or OpenCode (`opencode`)
 - Optional: Anki with the AnkiConnect add-on; without it, decks are exported as TSV files
 - Windows, macOS or Linux (desktop shortcuts are Windows-only)
