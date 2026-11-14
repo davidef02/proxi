@@ -1,13 +1,19 @@
 #![allow(dead_code)]
 
+use std::ffi::OsStr;
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{Shutdown, TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use serde_json::Value;
+
+use proxi::server::ServerOptions;
 
 pub mod anki_seed;
 pub mod cli_golden;
@@ -52,6 +58,80 @@ pub fn temp_dir(tag: &str) -> TempDir {
     ));
     fs::create_dir_all(&path).expect("create temp dir");
     TempDir(path)
+}
+
+/// A temp repo and data folder; the files on disk are the fixture.
+pub struct Fixture {
+    pub root: TempDir,
+    pub repo: PathBuf,
+    pub data: PathBuf,
+}
+
+impl Fixture {
+    pub fn new(tag: &str) -> Self {
+        let root = temp_dir(tag);
+        let repo = root.0.join("repo");
+        let data = root.0.join("data");
+        fs::create_dir_all(&repo).expect("create repo");
+        fs::create_dir_all(&data).expect("create data");
+        Self { root, repo, data }
+    }
+
+    /// No build: a read outside /files answers MISSING_UI, so a /files 200 proves the exemption.
+    pub fn options(&self) -> ServerOptions {
+        let mut options = ServerOptions::new(self.repo.clone());
+        options.data_root = Some(self.data.clone());
+        options.dist_dir = Some(self.root.0.join("missing-dist"));
+        options
+    }
+
+    /// Long enough that only a request's own event can appear in the stream.
+    pub fn options_with_keep_alive(&self, keep_alive: Duration) -> ServerOptions {
+        let mut options = self.options();
+        options.keep_alive = keep_alive;
+        options
+    }
+
+    pub fn data_file(&self, rel: &str, content: &str) {
+        write(&self.data, rel, content);
+    }
+
+    pub fn repo_file(&self, rel: &str, content: &str) {
+        write(&self.repo, rel, content);
+    }
+}
+
+/// Writes `content` to `root/rel`, creating the parent directories.
+pub fn write(root: &Path, rel: &str, content: &str) {
+    let path = root.join(rel);
+    fs::create_dir_all(path.parent().expect("a parent")).expect("create parent dir");
+    fs::write(path, content).expect("write fixture file");
+}
+
+/// Waits for the first complete `data:` block of an SSE stream.
+pub async fn first_event(stream: &mut reqwest::Response) -> Value {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let mut buffer = String::new();
+    loop {
+        if let Some(index) = buffer.find("\n\n") {
+            let block = buffer[..index].to_string();
+            let data: String = block
+                .lines()
+                .filter_map(|line| line.strip_prefix("data:"))
+                .map(str::trim)
+                .collect();
+            assert!(!data.is_empty(), "first SSE block has no data: {block:?}");
+            return serde_json::from_str(&data)
+                .unwrap_or_else(|error| panic!("SSE event is not JSON ({error}): {data}"));
+        }
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let chunk = tokio::time::timeout(remaining, stream.chunk())
+            .await
+            .unwrap_or_else(|_| panic!("no SSE event within 10 s; got {buffer:?}"))
+            .expect("read SSE chunk")
+            .expect("SSE stream closed before the first event");
+        buffer.push_str(&String::from_utf8_lossy(&chunk));
+    }
 }
 
 pub fn require_node() {
@@ -162,6 +242,170 @@ pub fn fake_key(rest: &str) -> String {
     ["sk", rest].concat()
 }
 
+pub struct FakeReply {
+    pub status: u16,
+    pub body: String,
+    pub delay: Duration,
+}
+
+/// A fake AnkiConnect on a real port, so `reqwest` exercises the same wire as Anki.
+pub struct FakeAnki {
+    pub url: String,
+    requests: Arc<Mutex<Vec<serde_json::Value>>>,
+}
+
+impl FakeAnki {
+    pub fn requests(&self) -> Vec<serde_json::Value> {
+        self.requests.lock().expect("lock Anki requests").clone()
+    }
+}
+
+pub fn fake_anki<F>(handler: F) -> FakeAnki
+where
+    F: Fn(&serde_json::Value) -> FakeReply + Send + Sync + 'static,
+{
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake AnkiConnect");
+    let address = listener.local_addr().expect("fake AnkiConnect address");
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&requests);
+    let handler = Arc::new(handler);
+
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let handler = Arc::clone(&handler);
+            let recorded = Arc::clone(&recorded);
+            thread::spawn(move || {
+                let Some(body) = read_request_body(&mut stream) else {
+                    return;
+                };
+                let request =
+                    serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
+                recorded
+                    .lock()
+                    .expect("lock Anki requests")
+                    .push(request.clone());
+
+                let reply = handler(&request);
+                if !reply.delay.is_zero() {
+                    thread::sleep(reply.delay);
+                }
+                let reason = match reply.status {
+                    200 => "OK",
+                    500 => "Internal Server Error",
+                    _ => "Unknown",
+                };
+                let body = reply.body.as_bytes();
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    reply.status,
+                    reason,
+                    body.len()
+                );
+                let _ = stream.write_all(body);
+                let _ = stream.shutdown(Shutdown::Write);
+            });
+        }
+    });
+
+    FakeAnki {
+        url: format!("http://127.0.0.1:{}", address.port()),
+        requests,
+    }
+}
+
+/// Parses a minimal HTTP request: headers up to `\r\n\r\n`, then `Content-Length` bytes.
+fn read_request_body(stream: &mut std::net::TcpStream) -> Option<Vec<u8>> {
+    let mut raw = Vec::new();
+    let mut chunk = [0u8; 1024];
+    let head_end = loop {
+        if let Some(position) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+            break position;
+        }
+        let n = stream.read(&mut chunk).ok()?;
+        if n == 0 {
+            return None;
+        }
+        raw.extend_from_slice(&chunk[..n]);
+    };
+    let head = String::from_utf8_lossy(&raw[..head_end]).to_string();
+    let content_length = head
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            if name.trim().eq_ignore_ascii_case("content-length") {
+                value.trim().parse::<usize>().ok()
+            } else {
+                None
+            }
+        })
+        .unwrap_or(0);
+
+    let mut body = raw.split_off(head_end + 4);
+    while body.len() < content_length {
+        let n = stream.read(&mut chunk).ok()?;
+        if n == 0 {
+            return None;
+        }
+        body.extend_from_slice(&chunk[..n]);
+    }
+    body.truncate(content_length);
+    Some(body)
+}
+
+pub fn fake_anki_scripted(responses: &serde_json::Value) -> FakeAnki {
+    let responses = responses.clone();
+    fake_anki(move |request| {
+        let action = request
+            .get("action")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        let reply = responses
+            .get(action)
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({ "result": null, "error": "unsupported action" }));
+        FakeReply {
+            status: 200,
+            body: reply.to_string(),
+            delay: Duration::ZERO,
+        }
+    })
+}
+
+pub fn closed_port_url() -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind closed port");
+    let port = listener.local_addr().expect("closed port address").port();
+    drop(listener);
+    format!("http://127.0.0.1:{port}")
+}
+
+/// A listener that never accepts, with its accept queue already full: a further connect hangs in
+/// SYN retransmission instead of being refused, like a host that drops packets.
+pub struct Blackhole {
+    pub url: String,
+    _listener: TcpListener,
+    _held: Vec<TcpStream>,
+}
+
+pub fn blackhole() -> Blackhole {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind blackhole");
+    let address = listener.local_addr().expect("blackhole address");
+    let mut held = Vec::new();
+    // The backlog size differs per OS (128 on Windows, up to somaxconn elsewhere), the symptom not.
+    loop {
+        match TcpStream::connect_timeout(&address, Duration::from_millis(20)) {
+            Ok(stream) => held.push(stream),
+            Err(_) => break,
+        }
+    }
+    Blackhole {
+        url: format!("http://127.0.0.1:{}", address.port()),
+        _listener: listener,
+        _held: held,
+    }
+}
+
 /// The real Node server, killed on drop so a failing test never leaks a process.
 pub struct NodeServer {
     child: Child,
@@ -211,6 +455,58 @@ pub fn start_node(repo: &Path) -> NodeServer {
         if let Some(raw) = line.trim().strip_prefix("PORT ") {
             server.port = raw.trim().parse().expect("PORT line has a number");
             return server;
+        }
+    }
+}
+
+/// The `proxi serve` binary, killed on drop so a failing test never leaks a process.
+pub struct ServeChild {
+    child: Child,
+}
+
+impl Drop for ServeChild {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Spawns the binary with a fixed `PATH` and waits for its URL: the AC3 seam (no Node on PATH).
+pub fn spawn_serve_with_path(args: &[&str], path: &OsStr) -> (ServeChild, String) {
+    let mut child = Command::new(proxi_bin())
+        .args(args)
+        .env("PATH", path)
+        .env_remove("LEARNER_PORT")
+        .env_remove("LEARNER_DATA_ROOT")
+        .env_remove("LEARNER_NPM_BIN")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("spawn proxi serve");
+
+    let stdout = child.stdout.take().expect("stdout pipe");
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            let Ok(line) = line else { break };
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        assert!(
+            !remaining.is_zero(),
+            "proxi serve did not print `Proxi: <url>` in 30 s"
+        );
+        let line = rx
+            .recv_timeout(remaining)
+            .expect("proxi serve exited before printing the URL");
+        if let Some(url) = line.trim().strip_prefix("Proxi: ") {
+            return (ServeChild { child }, url.to_string());
         }
     }
 }

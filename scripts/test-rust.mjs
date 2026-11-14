@@ -16,6 +16,7 @@ export const RUST_PORTED = [
   "app/test/api-anki.test.ts",
   "app/test/graph-api.test.ts",
   "app/test/api-sync.test.ts",
+  "app/test/api-exercises.test.ts",
 ];
 
 export function rustTestEnv(base = process.env) {

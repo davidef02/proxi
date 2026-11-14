@@ -26,6 +26,11 @@ enum Command {
     },
     /// Run the local server
     Serve(proxi::server::ServeArgs),
+    /// Homepage and chapter plan: generate, plan, chapters, help
+    Home {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
     /// Embedding benchmark: recall@3 and median query time
     EmbedBench(proxi::embed_bench::EmbedBenchArgs),
 }
@@ -39,6 +44,7 @@ fn main() -> std::process::ExitCode {
         Some("data") => proxi::data_root::run_cli(&args[2..]),
         Some("lesson") => proxi::lesson::cli::run_cli(&args[2..]),
         Some("anki") => proxi::anki::cli::run_cli(&args[2..]),
+        Some("home") => proxi::home::run_cli(&args[2..]),
         _ => {
             let cli = Cli::parse_from(&args);
             match cli.command {
@@ -46,6 +52,7 @@ fn main() -> std::process::ExitCode {
                 Command::Lesson { args } => proxi::lesson::cli::run_cli(&args),
                 Command::Anki { args } => proxi::anki::cli::run_cli(&args),
                 Command::Serve(args) => proxi::server::serve_cli(args),
+                Command::Home { args } => proxi::home::run_cli(&args),
                 Command::EmbedBench(args) => proxi::embed_bench::run_cli(args),
             }
         }

@@ -3,7 +3,7 @@
 mod common;
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use reqwest::header::{
     ACCESS_CONTROL_ALLOW_ORIGIN, CONTENT_SECURITY_POLICY, CONTENT_TYPE, HOST,
@@ -12,50 +12,11 @@ use reqwest::header::{
 use reqwest::{Client, Response, StatusCode};
 use serde_json::{json, Value};
 
-use proxi::server::{start, RunningServer, ServerOptions};
+use common::{Fixture, write};
+use proxi::server::{start, RunningServer};
 
 const MISSING_UI: &str =
     "Proxi: la UI non è stata compilata. Esegui `npm run app:build` e riapri questa pagina.";
-
-/// A temp repo and data folder; the files on disk are the fixture.
-struct Fixture {
-    root: common::TempDir,
-    repo: PathBuf,
-    data: PathBuf,
-}
-
-impl Fixture {
-    fn new(tag: &str) -> Self {
-        let root = common::temp_dir(tag);
-        let repo = root.0.join("repo");
-        let data = root.0.join("data");
-        fs::create_dir_all(&repo).expect("create repo");
-        fs::create_dir_all(&data).expect("create data");
-        Self { root, repo, data }
-    }
-
-    fn options(&self) -> ServerOptions {
-        let mut options = ServerOptions::new(self.repo.clone());
-        options.data_root = Some(self.data.clone());
-        // No build: a read outside /files answers MISSING_UI, so a /files 200 proves the exemption.
-        options.dist_dir = Some(self.root.0.join("missing-dist"));
-        options
-    }
-
-    fn data_file(&self, rel: &str, content: &str) {
-        write(&self.data, rel, content);
-    }
-
-    fn repo_file(&self, rel: &str, content: &str) {
-        write(&self.repo, rel, content);
-    }
-}
-
-fn write(root: &Path, rel: &str, content: &str) {
-    let path = root.join(rel);
-    fs::create_dir_all(path.parent().expect("a parent")).expect("create parent dir");
-    fs::write(path, content).expect("write fixture file");
-}
 
 fn url(server: &RunningServer, path: &str) -> String {
     format!("{}{}", server.url, path)
