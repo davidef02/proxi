@@ -22,4 +22,5 @@ pub mod protocol;
 pub mod semantic;
 pub mod server;
 pub mod settings;
+pub mod slug;
 pub mod sync;

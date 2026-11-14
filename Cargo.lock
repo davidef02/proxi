@@ -2045,6 +2045,7 @@ dependencies = [
  "futures-util",
  "gethostname",
  "getrandom 0.4.3",
+ "icu_normalizer",
  "indexmap",
  "keyring",
  "ort",
