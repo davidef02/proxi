@@ -4,10 +4,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, describe, it } from "node:test";
+import { GOOGLE_CLIENT_ID } from "../server/sync/gdrive.ts";
 import { captureGolden, GOLDEN_DIR, ISO_RE, normalise, rootVariants } from "./capture-golden.ts";
 import { REPO_ROOT } from "./harness.ts";
 
-const ROUTES = ["settings", "limits", "events", "graph"];
+const ROUTES = ["settings", "limits", "events", "graph", "sync", "sync-gdrive"];
 
 const dirs: string[] = [];
 function tempDir(prefix: string): string {
@@ -111,6 +112,59 @@ it("graph golden holds the graph event and JS-shaped positions", () => {
   assert.match(goldenText("graph"), /"dataSeed"/);
 });
 
+it("sync golden records one commit with the normalised host", () => {
+  const file = JSON.parse(goldenText("sync")) as {
+    cases: Array<{ name: string; remote?: { method: string; path: string; body: unknown }[] }>;
+  };
+  const first = file.cases.find((c) => c.name === "run-first");
+  const again = file.cases.find((c) => c.name === "run-again");
+  assert.ok(first?.remote, "run-first has no remote log");
+  const base = "/repos/tester/proxi-data";
+  assert.deepEqual(
+    first.remote.map((r) => `${r.method} ${r.path}`),
+    [
+      `POST ${base}/git/blobs`,
+      `POST ${base}/git/blobs`,
+      `POST ${base}/git/blobs`,
+      `POST ${base}/git/trees`,
+      `POST ${base}/git/commits`,
+      `PATCH ${base}/git/refs/heads/main`,
+    ],
+  );
+  const commit = first.remote.find((r) => r.path === `${base}/git/commits`);
+  assert.equal((commit?.body as { message?: string } | undefined)?.message, "sync: 3 sent, 0 deleted (<host>)");
+  assert.deepEqual(again?.remote, []);
+});
+
+it("sync-gdrive golden uploads the local files and refreshes the token", () => {
+  interface Remote {
+    method: string;
+    path: string;
+    body: unknown;
+  }
+  interface UploadBody {
+    meta: { modifiedTime?: string };
+    data: string;
+  }
+  const file = JSON.parse(goldenText("sync-gdrive")) as { cases: Array<{ name: string; remote?: Remote[] }> };
+  const first = file.cases.find((c) => c.name === "run-first");
+  assert.ok(first?.remote, "run-first has no remote log");
+  const token = first.remote.find((r) => r.path === "/token");
+  assert.deepEqual(token?.body, { client_id: GOOGLE_CLIENT_ID, refresh_token: "rt-1", grant_type: "refresh_token" });
+  const uploads = first.remote.filter((r) => r.path.startsWith("/upload/drive/v3/files"));
+  assert.ok(uploads.length > 0, "no upload recorded");
+  for (const upload of uploads) {
+    const body = upload.body as UploadBody;
+    assert.equal(body.meta.modifiedTime, "<iso>");
+    assert.equal(typeof body.data, "string"); // the boundary is parsed away, the bytes stay utf8
+  }
+  // A pass builds a fresh provider, so it refreshes the token even when it writes nothing.
+  const again = file.cases.find((c) => c.name === "run-again");
+  assert.ok(again?.remote?.some((r) => r.path === "/token"), "run-again has no token refresh");
+  assert.equal(again?.remote?.some((r) => r.path.startsWith("/upload/")), false);
+  for (const c of file.cases) if (c.remote) assert.doesNotMatch(JSON.stringify(c.remote), /boundary/);
+});
+
 it("golden fixtures hold no raw timestamps", () => {
   // Only the captured cases: the seed is the replay's input and keeps its fixed literal timestamp.
   for (const route of ROUTES) {
@@ -123,12 +177,14 @@ it("golden fixtures hold no raw timestamps", () => {
 it("golden fixtures hold no key-like or personal data", () => {
   const keyLike = new RegExp("(?<![A-Za-z0-9_-])" + "sk" + "-");
   const personal = [os.tmpdir(), fs.realpathSync.native(os.tmpdir()), REPO_ROOT];
+  const host = `(${os.hostname()})`;
   for (const route of ROUTES) {
     const text = goldenText(route);
     assert.doesNotMatch(text, keyLike, route);
     // Walk the parsed values: JSON's escaping of Windows backslashes would hide a path in the raw text.
     walkStrings(JSON.parse(text), (s) => {
       for (const needle of personal) assert.equal(s.includes(needle), false, `${route}: ${s} contains ${needle}`);
+      assert.equal(s.includes(host), false, `${route}: ${s} contains the hostname`);
     });
   }
   assert.match(goldenText("settings"), /"<repoRoot>"/);

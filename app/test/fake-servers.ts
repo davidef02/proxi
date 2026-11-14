@@ -32,6 +32,7 @@ export class FakeHttpServer {
   requests: RecordedRequest[] = [];
 
   private routes = new Map<string, Route>();
+  private fallback: FakeHandler | null = null;
   private server: http.Server | null = null;
   private closing: Promise<void> | null = null;
 
@@ -42,9 +43,15 @@ export class FakeHttpServer {
     this.routes.set(key(method, pathname), reply);
   }
 
+  /** Answers every request with no exact route; exact routes win. */
+  onFallback(handler: FakeHandler): void {
+    this.fallback = handler;
+  }
+
   reset(): void {
     this.requests = [];
     this.routes.clear();
+    this.fallback = null;
   }
 
   async start(): Promise<string> {
@@ -91,8 +98,9 @@ export class FakeHttpServer {
     const route = this.routes.get(key(recorded.method, target.pathname));
     let reply: FakeReply;
     try {
-      if (route === undefined) reply = { status: 404, body: { error: `fake ${this.name}: no route for ${recorded.method} ${target.pathname}` } };
-      else reply = typeof route === "function" ? await route(recorded) : route;
+      const hit = route ?? this.fallback;
+      if (hit === null) reply = { status: 404, body: { error: `fake ${this.name}: no route for ${recorded.method} ${target.pathname}` } };
+      else reply = typeof hit === "function" ? await hit(recorded) : hit;
     } catch (err) {
       reply = { status: 500, body: { error: String(err) } };
     }

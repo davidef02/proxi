@@ -1,0 +1,282 @@
+{
+  "route": "sync",
+  "seed": {
+    ".learner/settings.json": {
+      "syncProvider": "local"
+    },
+    ".learner/secrets.json": {
+      "v": 1,
+      "encrypted": false,
+      "data": "{\"github\":{\"token\":\"tttttttttttt\",\"login\":\"tester\",\"repo\":\"tester/proxi-data\",\"branch\":\"main\"}}"
+    }
+  },
+  "dataSeed": {
+    "curriculum.json": "{\"chapters\":[]}\n",
+    "courses/algebra/notes.md": "# algebra\n",
+    "courses/algebra/lessons/0001-intro.html": "<p>locale</p>\n",
+    "graph/nodes.jsonl": "{\"id\":\"n1\"}\n"
+  },
+  "github": {
+    "login": "tester",
+    "files": {
+      "README.md": "# proxi-data\n",
+      "courses/algebra/lessons/0001-intro.html": "<p>remoto</p>\n",
+      "decks/algebra.tsv": "q\ta\n"
+    }
+  },
+  "cases": [
+    {
+      "name": "status-connected",
+      "request": {
+        "method": "GET",
+        "path": "/api/sync"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "state": "idle",
+          "provider": "local",
+          "dataRoot": "<dataRoot>",
+          "dataRootFromEnv": false,
+          "needsData": false,
+          "encrypted": false,
+          "github": {
+            "connected": true,
+            "login": "tester",
+            "repo": "tester/proxi-data"
+          },
+          "gdrive": {
+            "connected": false,
+            "pending": false
+          },
+          "conflictCount": 0,
+          "trashCount": 0
+        }
+      }
+    },
+    {
+      "name": "provider-github",
+      "request": {
+        "method": "POST",
+        "path": "/api/settings",
+        "body": {
+          "syncProvider": "github"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "provider": "claude",
+          "claudeAuth": "subscription",
+          "anthropicApiKey": "",
+          "agyModels": {
+            "teacher": "gemini-3.8-flash-high",
+            "subagent": "gemini-3.8-flash-medium",
+            "map": "gemini-3.8-flash-medium"
+          },
+          "opencodeModels": {
+            "teacher": "omniroute/auto/best-coding",
+            "subagent": "omniroute/auto/fast",
+            "map": "omniroute/auto/fast"
+          },
+          "teacherModel": "sonnet",
+          "subagentModel": "sonnet",
+          "mapModel": "sonnet",
+          "effort": {
+            "teacher": "default",
+            "subagent": "default",
+            "map": "default"
+          },
+          "autoMap": true,
+          "sttProvider": "groq",
+          "sttApiKey": "",
+          "dictationLanguage": "it",
+          "syncProvider": "github",
+          "githubClientId": "",
+          "googleClientId": "",
+          "googleClientSecret": "",
+          "repoRoot": "<repoRoot>",
+          "dataRoot": "<dataRoot>"
+        }
+      }
+    },
+    {
+      "name": "run-first",
+      "request": {
+        "method": "POST",
+        "path": "/api/sync/run",
+        "body": {}
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "state": "idle",
+          "at": "<iso>",
+          "pushed": 3,
+          "pulled": 2,
+          "deleted": 0,
+          "conflicts": 1,
+          "provider": "github",
+          "dataRoot": "<dataRoot>",
+          "dataRootFromEnv": false,
+          "needsData": false,
+          "encrypted": false,
+          "github": {
+            "connected": true,
+            "login": "tester",
+            "repo": "tester/proxi-data"
+          },
+          "gdrive": {
+            "connected": false,
+            "pending": false
+          },
+          "conflictCount": 1,
+          "trashCount": 0
+        }
+      },
+      "remote": [
+        {
+          "method": "POST",
+          "path": "/repos/tester/proxi-data/git/blobs",
+          "body": {
+            "content": "IyBhbGdlYnJhCg==",
+            "encoding": "base64"
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/repos/tester/proxi-data/git/blobs",
+          "body": {
+            "content": "eyJpZCI6Im4xIn0K",
+            "encoding": "base64"
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/repos/tester/proxi-data/git/blobs",
+          "body": {
+            "content": "eyJjaGFwdGVycyI6W119Cg==",
+            "encoding": "base64"
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/repos/tester/proxi-data/git/trees",
+          "body": {
+            "base_tree": "tree1",
+            "tree": [
+              {
+                "path": "courses/algebra/notes.md",
+                "mode": "100644",
+                "type": "blob",
+                "sha": "76ffc57d25e27a96b227b85136e64d7f2f36e5d6"
+              },
+              {
+                "path": "graph/nodes.jsonl",
+                "mode": "100644",
+                "type": "blob",
+                "sha": "17f7510d2e75b66421db95d5bdb4b9cc721dc5a8"
+              },
+              {
+                "path": "curriculum.json",
+                "mode": "100644",
+                "type": "blob",
+                "sha": "8d43ce2157feeb26f59f145417455f24fbcb0324"
+              }
+            ]
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/repos/tester/proxi-data/git/commits",
+          "body": {
+            "message": "sync: 3 sent, 0 deleted (<host>)",
+            "tree": "tree3",
+            "parents": [
+              "commit2"
+            ]
+          }
+        },
+        {
+          "method": "PATCH",
+          "path": "/repos/tester/proxi-data/git/refs/heads/main",
+          "body": {
+            "sha": "commit4",
+            "force": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "run-again",
+      "request": {
+        "method": "POST",
+        "path": "/api/sync/run",
+        "body": {}
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "state": "idle",
+          "at": "<iso>",
+          "pushed": 0,
+          "pulled": 0,
+          "deleted": 0,
+          "conflicts": 0,
+          "provider": "github",
+          "dataRoot": "<dataRoot>",
+          "dataRootFromEnv": false,
+          "needsData": false,
+          "encrypted": false,
+          "github": {
+            "connected": true,
+            "login": "tester",
+            "repo": "tester/proxi-data"
+          },
+          "gdrive": {
+            "connected": false,
+            "pending": false
+          },
+          "conflictCount": 1,
+          "trashCount": 0
+        }
+      },
+      "remote": []
+    },
+    {
+      "name": "disconnect",
+      "request": {
+        "method": "POST",
+        "path": "/api/sync/disconnect",
+        "body": {
+          "provider": "github"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "state": "idle",
+          "at": "<iso>",
+          "pushed": 0,
+          "pulled": 0,
+          "deleted": 0,
+          "conflicts": 0,
+          "provider": "local",
+          "dataRoot": "<dataRoot>",
+          "dataRootFromEnv": false,
+          "needsData": false,
+          "encrypted": false,
+          "github": {
+            "connected": false
+          },
+          "gdrive": {
+            "connected": false,
+            "pending": false
+          },
+          "conflictCount": 1,
+          "trashCount": 0
+        }
+      }
+    }
+  ]
+}
