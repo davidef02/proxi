@@ -1,4 +1,5 @@
 // Captures golden HTTP/SSE outputs from the Node server into crates/proxi/tests/fixtures/golden (A12). Regenerate only from Node, before the cutover.
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -204,6 +205,9 @@ const primaReferenceDoc = { title: "Sintesi prima", slug: "prima", nodes: [], fo
 
 const GRAPH_AT = "2026-01-01T00:00:00.000Z";
 
+/** sha1 of the `app.js` the exercises script seeds: the version the editor sends back on its first save. */
+const APP_JS_SHA1 = createHash("sha1").update("// app\n").digest("hex");
+
 /** One graph/nodes.jsonl line: a proposition with one provenance point. `extra` lands after `provenance`. */
 function nodeLine(id: string, name: string, statement: string, chatId: string, messageId: string, extra: Record<string, unknown> = {}): string {
   return JSON.stringify({ id, name, statement, aliases: [], createdAt: GRAPH_AT, provenance: [{ chatId, messageId }], ...extra });
@@ -408,6 +412,81 @@ export const SCRIPTS: Script[] = [
       { name: "delete-chain", request: { method: "POST", path: "/api/graph/nodes/arg_gad/delete", body: {} } },
       { name: "delete-invalid-id", request: { method: "POST", path: "/api/graph/nodes/x_1/delete", body: {} } },
       { name: "get-map-after", request: { method: "GET", path: "/api/map" } },
+    ],
+  },
+  {
+    route: "exercises",
+    seed: {},
+    dataSeed: {
+      "courses/demo/exercises/package.json": "{}",
+      "courses/demo/exercises/01-somma/Esercizio.js": "export const somma = (a, b) => 0;\n",
+      "courses/demo/exercises/01-somma/Esercizio.test.js": "// test\n",
+      // Lowercase first letter: localeCompare puts it before Esercizio.js, byte order would not.
+      "courses/demo/exercises/01-somma/app.js": "// app\n",
+      "courses/demo/exercises/01-somma/ISTRUZIONI.md": "# Somma\n\nScrivi somma.\n",
+      "courses/demo/exercises/01-somma/SUGGERIMENTI.json": JSON.stringify({ hints: ["Usa +", "Ritorna a + b"], final: true, revealed: 1 }),
+      "courses/demo/exercises/01-somma/.app-lastrun.json": JSON.stringify({
+        ok: true,
+        passed: 1,
+        failed: 0,
+        total: 1,
+        failures: [],
+        tests: [{ name: "somma", status: "passed" }],
+        durationMs: 12,
+        at: "2026-01-01T00:00:00.000Z",
+      }),
+      "courses/demo/exercises/01-somma/sub/a/b/ok.js": "// depth 3\n",
+      "courses/demo/exercises/01-somma/sub/a/b/c/no.js": "// too deep\n",
+      // In `files` (any extension is listed) but not in the workspace (walk keeps the editor extensions only).
+      "courses/demo/exercises/01-somma/note.txt": "x",
+      "courses/demo/exercises/02-vuoto/README.md": "vuoto\n",
+      "courses/demo/exercises/02-vuoto/SUGGERIMENTI.json": JSON.stringify({ hints: ["a", "b", "c"], revealed: 1.5 }),
+      // Falsy: listExercises omits lastRun.
+      "courses/demo/exercises/02-vuoto/.app-lastrun.json": "0",
+      "courses/demo/exercises/zz-verifica/Esercizio.vue": "<template />\n",
+      "courses/demo/exercises/zz-verifica/SUGGERIMENTI.json": JSON.stringify({ hints: ["uno", 2], final: "si", revealed: "x" }),
+      // Malformed: listExercises omits lastRun.
+      "courses/demo/exercises/zz-verifica/.app-lastrun.json": "{nope",
+      "courses/demo/exercises/misc/x.js": "x",
+    },
+    cases: [
+      { name: "list", request: { method: "GET", path: "/api/exercises/demo" } },
+      { name: "list-missing", request: { method: "GET", path: "/api/exercises/nessuno" } },
+      { name: "list-bad", request: { method: "GET", path: "/api/exercises/Bad" } },
+      { name: "detail", request: { method: "GET", path: "/api/exercises/demo/01-somma" } },
+      { name: "detail-missing", request: { method: "GET", path: "/api/exercises/demo/09-no" } },
+      { name: "detail-not-exercise", request: { method: "GET", path: "/api/exercises/demo/misc" } },
+      {
+        name: "save",
+        request: {
+          method: "POST",
+          path: "/api/exercises/save",
+          body: { course: "demo", name: "01-somma", path: "app.js", content: "// nuovo\n", baseVersion: APP_JS_SHA1 },
+        },
+        awaitEvent: true,
+      },
+      {
+        name: "save-stale",
+        request: {
+          method: "POST",
+          path: "/api/exercises/save",
+          body: { course: "demo", name: "01-somma", path: "app.js", content: "x", baseVersion: "0".repeat(40) },
+        },
+      },
+      {
+        name: "save-readonly",
+        request: {
+          method: "POST",
+          path: "/api/exercises/save",
+          body: { course: "demo", name: "01-somma", path: "Esercizio.test.js", content: "x" },
+        },
+      },
+      {
+        name: "hint",
+        request: { method: "POST", path: "/api/exercises/hint", body: { course: "demo", name: "zz-verifica" } },
+        awaitEvent: true,
+      },
+      { name: "detail-after", request: { method: "GET", path: "/api/exercises/demo/01-somma" } },
     ],
   },
   {

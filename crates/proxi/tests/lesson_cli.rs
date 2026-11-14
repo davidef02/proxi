@@ -373,19 +373,69 @@ fn non_object_payload_is_rejected() {
 }
 
 #[test]
-fn out_of_scope_commands_fail_clearly() {
-    let t = common::temp_dir("lesson-out-of-scope");
+fn rebuild_and_compile_ref_errors_match_node() {
+    let t = common::temp_dir("lesson-errors");
     let data = t.0.join("data");
     let cwd = t.0.join("cwd");
     fs::create_dir_all(&cwd).expect("create cwd");
+    let lessons = data.join("courses/demo/lessons");
+    fs::create_dir_all(&lessons).expect("create lessons");
+    fs::write(lessons.join("0001-rotta.html"), "<html></html>").expect("write corrupted lesson");
 
-    let run = run_lesson(&data, &cwd, &["rebuild"], None);
-    assert_eq!(run.code, 1);
-    assert_eq!(run.stdout, "");
-    assert_eq!(
-        run.stderr,
-        "Error: rebuild is not ported to proxi yet: run npm run lesson -- rebuild\n"
-    );
+    let cases: &[(&[&str], &str)] = &[
+        (&["rebuild"], "Error: Lesson not found: undefined\n"),
+        (
+            &["rebuild", "--slug", "nope"],
+            "Error: Lesson not found: nope\n",
+        ),
+        (
+            &["rebuild", "--lesson", "courses/demo/lessons/9999-x.html"],
+            "Error: Lesson not found: courses/demo/lessons/9999-x.html\n",
+        ),
+        (
+            &[
+                "rebuild",
+                "--lesson",
+                "courses/demo/lessons/0001-rotta.html",
+            ],
+            "Error: Corrupted lesson file: missing #lesson-data island in courses/demo/lessons/0001-rotta.html\n",
+        ),
+        (
+            &["compile-ref", "--slug", "nope"],
+            "Error: Cannot compile reference: lesson file not found (undefined)\n",
+        ),
+        (
+            &["reference"],
+            "Error: Cannot compile reference: lesson file not found (undefined)\n",
+        ),
+        (
+            &[
+                "compile-ref",
+                "--lesson",
+                "courses/demo/lessons/9999-x.html",
+            ],
+            "Error: Cannot compile reference: lesson file not found (courses/demo/lessons/9999-x.html)\n",
+        ),
+        (
+            &[
+                "reference",
+                "--lesson",
+                "courses/demo/lessons/0001-rotta.html",
+            ],
+            "Error: Corrupted lesson file: missing #lesson-data in courses/demo/lessons/0001-rotta.html\n",
+        ),
+    ];
+
+    for (args, expected) in cases {
+        let run = run_lesson(&data, &cwd, args, None);
+        assert_eq!(run.code, 1, "{args:?}");
+        assert_eq!(run.stdout, "", "{args:?}");
+        assert_eq!(run.stderr, *expected, "{args:?}");
+        assert!(
+            !data.join("reference").exists(),
+            "{args:?}: a failed command must not create the reference folder"
+        );
+    }
 }
 
 #[test]

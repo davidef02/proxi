@@ -21,7 +21,7 @@
     "app:build": "vite build --config app/web/vite.config.ts",
     "test:app": "node --import tsx --test app/test/*.test.ts",
     "test:rust": "node scripts/test-rust.mjs",
-    "golden:capture": "node --import tsx app/test/capture-golden.ts && node --import tsx app/test/capture-lesson-golden.ts",
+    "golden:capture": "node --import tsx app/test/capture-golden.ts && node --import tsx app/test/capture-lesson-golden.ts && node --import tsx app/test/capture-anki-golden.ts",
     "typecheck:app": "tsc -p app/tsconfig.json --noEmit",
     "e2e": "playwright test -c app/e2e/playwright.config.ts",
     "eval": "node --import tsx app/eval/run.ts",

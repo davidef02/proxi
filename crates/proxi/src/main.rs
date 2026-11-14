@@ -14,8 +14,13 @@ enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Lessons: init, append, list
+    /// Lessons: init, append, list, rebuild, compile-ref (reference)
     Lesson {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Anki cards: ping, extract, export
+    Anki {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
@@ -33,11 +38,13 @@ fn main() -> std::process::ExitCode {
     let code = match args.get(1).map(String::as_str) {
         Some("data") => proxi::data_root::run_cli(&args[2..]),
         Some("lesson") => proxi::lesson::cli::run_cli(&args[2..]),
+        Some("anki") => proxi::anki::cli::run_cli(&args[2..]),
         _ => {
             let cli = Cli::parse_from(&args);
             match cli.command {
                 Command::Data { args } => proxi::data_root::run_cli(&args),
                 Command::Lesson { args } => proxi::lesson::cli::run_cli(&args),
+                Command::Anki { args } => proxi::anki::cli::run_cli(&args),
                 Command::Serve(args) => proxi::server::serve_cli(args),
                 Command::EmbedBench(args) => proxi::embed_bench::run_cli(args),
             }

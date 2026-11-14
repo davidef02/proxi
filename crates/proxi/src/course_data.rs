@@ -1,6 +1,7 @@
 //! Course data the Anki routes read: curriculum, lessons, progress log.
 
 use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
@@ -87,6 +88,41 @@ fn clean_deck_title(text: &str) -> String {
 /// JS `String.prototype.trim` also drops the BOM, which `char::is_whitespace` does not.
 fn js_trim(text: &str) -> &str {
     text.trim_matches(|c: char| c.is_whitespace() || c == '\u{FEFF}')
+}
+
+/// `courses/<course>/lessons/file.html` → (data root, course), as Node's path parts check it.
+fn course_of(lesson_path: &Path) -> Option<(PathBuf, String)> {
+    let resolved = crate::data_root::resolve_path(lesson_path);
+    let lessons = resolved.parent()?;
+    if lessons.file_name() != Some(OsStr::new("lessons")) {
+        return None;
+    }
+    let course_dir = lessons.parent()?;
+    let course = course_dir.file_name()?.to_string_lossy().into_owned();
+    let courses = course_dir.parent()?;
+    if courses.file_name() != Some(OsStr::new("courses")) {
+        return None;
+    }
+    Some((courses.parent()?.to_path_buf(), course))
+}
+
+/// One deck per course: "Proxi::<chapter title>", None for a lesson outside a course directory.
+pub fn course_deck_name(lesson_path: &Path) -> Option<String> {
+    course_of(lesson_path).map(|(base, course)| course_deck_name_for(&base, &course))
+}
+
+/// Course and lesson tags for a lesson in a course; [] outside one, no lesson tag when the slug is empty.
+pub fn course_lesson_tags(lesson_path: &Path, lesson_slug: Option<&Value>) -> Vec<String> {
+    let Some((_base, course)) = course_of(lesson_path) else {
+        return Vec::new();
+    };
+    let mut tags = vec![format!("course::{course}")];
+    if let Some(slug) = lesson_slug
+        && crate::lesson::js::js_truthy(Some(slug))
+    {
+        tags.push(format!("lesson::{}", crate::lesson::js::js_to_string(slug)));
+    }
+    tags
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -377,6 +413,56 @@ mod tests {
 
         fs::remove_file(t.0.join("curriculum.json")).unwrap();
         assert_eq!(course_deck_name_for(&t.0, "demo"), "Proxi::demo");
+    }
+
+    #[test]
+    fn course_lesson_tags_outside_and_inside() {
+        let t = temp_dir("lesson-tags");
+        let loose = t.0.join("lessons").join("0001-x.html");
+        assert_eq!(
+            course_lesson_tags(&loose, Some(&json!("x"))),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            course_lesson_tags(Path::new("some/random/path.html"), Some(&json!("x"))),
+            Vec::<String>::new()
+        );
+
+        let in_course = t.0.join("courses/demo/lessons/0001-x.html");
+        assert_eq!(
+            course_lesson_tags(&in_course, Some(&json!("x"))),
+            vec!["course::demo".to_string(), "lesson::x".to_string()]
+        );
+        assert_eq!(
+            course_lesson_tags(&in_course, None),
+            vec!["course::demo".to_string()]
+        );
+        assert_eq!(
+            course_lesson_tags(&in_course, Some(&json!(""))),
+            vec!["course::demo".to_string()]
+        );
+    }
+
+    #[test]
+    fn course_deck_name_uses_chapter_title() {
+        let t = temp_dir("chapter-deck");
+        write_curriculum(
+            &t.0,
+            json!([{ "title": "Vue.js & Vetrine", "slug": "vue-vetrine", "lessons": [] }]),
+        );
+        assert_eq!(
+            course_deck_name(&t.0.join("courses/vue-vetrine/lessons/0001-a.html")),
+            Some("Proxi::Vue.js & Vetrine".to_string())
+        );
+        assert_eq!(
+            course_deck_name_for(&t.0, "missing-course"),
+            "Proxi::missing-course"
+        );
+        assert_eq!(
+            course_deck_name(&t.0.join("courses/lezioni-singole/lessons/a.html")),
+            Some("Proxi::Lezioni singole".to_string())
+        );
+        assert_eq!(course_deck_name(&t.0.join("lessons/a.html")), None);
     }
 
     #[test]

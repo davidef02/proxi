@@ -537,7 +537,27 @@ fn formula(math: &Value, title: Option<&Value>) -> Value {
     Value::Object(map)
 }
 
+fn read_record(path: &Path) -> Result<String, String> {
+    if path.is_dir() {
+        // Node's readFileSync text for a directory.
+        return Err("EISDIR: illegal operation on a directory, read".to_string());
+    }
+    fs::read(path)
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+        .map_err(|error| error.to_string())
+}
+
 pub fn build_sintesi_document(doc: &Value, lesson_path: &Path) -> Result<Value, String> {
+    build_sintesi_document_with_record(doc, lesson_path, None)
+}
+
+/// `buildSintesiDocument` with Node's `learningRecordPath`: an existing, non-empty read wins
+/// over the sibling `learning-records/` scan.
+pub fn build_sintesi_document_with_record(
+    doc: &Value,
+    lesson_path: &Path,
+    record_path: Option<&str>,
+) -> Result<Value, String> {
     let metadata = doc.get("metadata").filter(|value| value.is_object());
     let nodes = doc.get("nodes").and_then(Value::as_array);
     let (Some(metadata), Some(nodes)) = (metadata, nodes) else {
@@ -545,10 +565,18 @@ pub fn build_sintesi_document(doc: &Value, lesson_path: &Path) -> Result<Value, 
     };
 
     let slug = js::js_string(metadata.get("slug"));
-    let record = find_learning_record_for_lesson(lesson_path, &slug)
-        .and_then(|path| fs::read(path).ok())
-        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-        .filter(|text| !text.is_empty());
+    let record = record_path
+        .filter(|path| !path.is_empty())
+        .filter(|path| Path::new(path).exists())
+        .map(|path| read_record(Path::new(path)))
+        .transpose()?
+        .filter(|text| !text.is_empty())
+        .or_else(|| {
+            find_learning_record_for_lesson(lesson_path, &slug)
+                .and_then(|path| fs::read(path).ok())
+                .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+                .filter(|text| !text.is_empty())
+        });
     let misconceptions = record
         .as_deref()
         .map(extract_misconceptions_from_record)
@@ -845,5 +873,91 @@ mod tests {
     fn sintesi_document_requires_metadata_and_nodes() {
         let err = build_sintesi_document(&json!({ "nodes": [] }), Path::new("x.html")).unwrap_err();
         assert!(err.starts_with("Malformed #lesson-data island:"), "{err}");
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("proxi-html-lesson-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn record_fixture(dir: &Path, lesson_name: &str) -> PathBuf {
+        fs::create_dir_all(dir.join("lessons")).unwrap();
+        fs::create_dir_all(dir.join("learning-records")).unwrap();
+        let lesson = dir.join("lessons").join(lesson_name);
+        fs::write(&lesson, "").unwrap();
+        fs::write(
+            dir.join("learning-records").join("0004-a.md"),
+            "## Evidence\n- Nodo 1: scambia A\n",
+        )
+        .unwrap();
+        lesson
+    }
+
+    #[test]
+    fn sintesi_record_path_wins_over_sibling_scan() {
+        let dir = temp_dir("record-wins");
+        let lesson = record_fixture(&dir, "0004-x.html");
+        let override_path = dir.join("override.md");
+        fs::write(&override_path, "## Evidence\n- Nodo 2: confonde B\n").unwrap();
+
+        let doc = json!({ "metadata": { "slug": "x" }, "nodes": [] });
+        let out =
+            build_sintesi_document_with_record(&doc, &lesson, Some(override_path.to_str().unwrap()))
+                .unwrap();
+        assert_eq!(
+            serde_json::to_string(&out["misconceptions"]).unwrap(),
+            r#"[{"description":"Nodo 2: confonde B","sourceNode":"Nodo 2"}]"#
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn sintesi_missing_or_empty_record_path_falls_back_to_scan() {
+        let dir = temp_dir("record-fallback");
+        let lesson = record_fixture(&dir, "0004-x.html");
+        let empty_path = dir.join("empty.md");
+        fs::write(&empty_path, "").unwrap();
+
+        let doc = json!({ "metadata": { "slug": "x" }, "nodes": [] });
+        let expected = r#"[{"description":"Nodo 1: scambia A","sourceNode":"Nodo 1"}]"#;
+        for path in [dir.join("missing.md"), empty_path] {
+            let out =
+                build_sintesi_document_with_record(&doc, &lesson, Some(path.to_str().unwrap()))
+                    .unwrap();
+            assert_eq!(
+                serde_json::to_string(&out["misconceptions"]).unwrap(),
+                expected
+            );
+        }
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn sintesi_record_path_directory_is_eisdir() {
+        let dir = temp_dir("record-dir");
+        let doc = json!({ "metadata": { "slug": "x" }, "nodes": [] });
+        let lesson = dir.join("lessons").join("0004-x.html");
+        let err =
+            build_sintesi_document_with_record(&doc, &lesson, Some(dir.to_str().unwrap()))
+                .unwrap_err();
+        assert_eq!(err, "EISDIR: illegal operation on a directory, read");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn sintesi_none_record_matches_build_sintesi_document() {
+        let dir = temp_dir("record-none");
+        let lesson = record_fixture(&dir, "0004-x.html");
+        let doc = json!({
+            "metadata": { "slug": "x", "topic": "T" },
+            "nodes": [{ "title": "N", "content": "<p>Prima. Seconda.</p>" }]
+        });
+        assert_eq!(
+            build_sintesi_document_with_record(&doc, &lesson, None).unwrap(),
+            build_sintesi_document(&doc, &lesson).unwrap()
+        );
+        fs::remove_dir_all(&dir).unwrap();
     }
 }
