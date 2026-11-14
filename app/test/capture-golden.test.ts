@@ -5,10 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { after, describe, it } from "node:test";
 import { GOOGLE_CLIENT_ID } from "../server/sync/gdrive.ts";
-import { captureGolden, GOLDEN_DIR, ISO_RE, normalise, rootVariants } from "./capture-golden.ts";
+import { captureGolden, GOLDEN_DIR, ISO_RE, normalise, normaliseSession, rootVariants } from "./capture-golden.ts";
 import { REPO_ROOT } from "./harness.ts";
 
-const ROUTES = ["settings", "limits", "events", "courses", "lesson", "graph", "sync", "sync-gdrive"];
+const ROUTES = ["settings", "limits", "events", "courses", "lesson", "graph", "sync", "sync-gdrive", "sessions"];
 
 const dirs: string[] = [];
 function tempDir(prefix: string): string {
@@ -59,6 +59,43 @@ describe("normalise", () => {
     assert.equal(normalise("/a/data", roots), "<dataRoot>");
     assert.equal(normalise("2026-11-12T10:00:00Z", roots), "<iso>");
     assert.equal(normalise("/elsewhere", roots), "/elsewhere");
+  });
+});
+
+describe("normaliseSession", () => {
+  it("replaces the session id first, then other UUIDs and fake engine counters, keeping the rest and the order", () => {
+    const roots = { repoRoot: ["/a/repo"], dataRoot: ["/a/data"] };
+    const session = "11111111-1111-4111-8111-111111111111";
+    const other = "22222222-2222-4222-8222-222222222222";
+    const input = {
+      path: `/api/sessions/${session}/events`,
+      itemId: "t:msg_1234_1:1",
+      tool: "toolu_fake_5678_2",
+      learner: `l:${other}`,
+      plain: "Ciao",
+      at: "2026-11-12T10:00:00.000Z",
+      root: "/a/repo",
+      nested: [session, other],
+    };
+    const out = normaliseSession(input, roots, session);
+    assert.deepEqual(out, {
+      path: "/api/sessions/<session>/events",
+      itemId: "t:msg_<pid>_1:1",
+      tool: "toolu_fake_<pid>_2",
+      learner: "l:<uuid>",
+      plain: "Ciao",
+      at: "<iso>",
+      root: "<repoRoot>",
+      nested: ["<session>", "<uuid>"],
+    });
+    assert.deepEqual(Object.keys(out as object), Object.keys(input));
+    assert.equal(input.learner, `l:${other}`); // deep copy: the input is untouched
+  });
+
+  it("replaces a root only when it is the whole string", () => {
+    const roots = { repoRoot: ["/a/repo"], dataRoot: ["/a/data"] };
+    assert.equal(normaliseSession("/a/repo/file.json", roots, "x"), "/a/repo/file.json");
+    assert.equal(normaliseSession("/a/data", roots, "x"), "<dataRoot>");
   });
 });
 
@@ -182,6 +219,54 @@ it("sync-gdrive golden uploads the local files and refreshes the token", () => {
   assert.ok(again?.remote?.some((r) => r.path === "/token"), "run-again has no token refresh");
   assert.equal(again?.remote?.some((r) => r.path.startsWith("/upload/")), false);
   for (const c of file.cases) if (c.remote) assert.doesNotMatch(JSON.stringify(c.remote), /boundary/);
+});
+
+it("sessions golden holds the snapshot, the live turn and the state file", () => {
+  interface SessionCase {
+    name: string;
+    request: { path: string };
+    response: { body: any };
+    events?: any[];
+  }
+  const file = JSON.parse(goldenText("sessions")) as {
+    cases: SessionCase[];
+    stateFile: Record<string, unknown>;
+  };
+  const message = file.cases.find((c) => c.name === "message");
+  assert.ok(message);
+  assert.ok(message.events, "the message case has no events");
+  const [snapshot, ...live] = message.events;
+  assert.equal(snapshot.type, "snapshot");
+  assert.equal(snapshot.state.id, "<session>");
+  assert.ok(snapshot.state.items.some((i: any) => i.kind === "teacher" && i.text === "Ciao, sono il docente."));
+  assert.deepEqual(
+    live.map((e) => (e.type === "item" ? `item:${e.item.kind}` : e.type)),
+    ["item:learner", "status", "item:teacher", "delta", "delta", "delta", "item:teacher", "usage", "status"],
+  );
+  assert.equal(live[0].item.text, "Ciao");
+  assert.equal(live[1].status, "running");
+  assert.equal(live[2].item.streaming, true);
+  assert.equal(live.slice(3, 6).map((e) => e.text).join(""), "Ciao, sono il docente.");
+  assert.equal(live[6].item.streaming, false);
+  assert.equal(live[7].usage.turns, 2);
+  assert.equal(live[8].status, "idle");
+
+  const create = file.cases.find((c) => c.name === "create");
+  assert.deepEqual(create?.response.body, { id: "<session>" });
+  const get = file.cases.find((c) => c.name === "get");
+  assert.equal(get?.request.path, "/api/sessions/<session>");
+  const list = file.cases.find((c) => c.name === "list");
+  assert.deepEqual(list?.response.body.map((s: any) => s.id), ["<session>"]);
+
+  // No machine- or run-dependent id survives the capture, in the cases and in the saved state.
+  const uuid = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/;
+  walkStrings({ cases: file.cases, stateFile: file.stateFile }, (s) => {
+    assert.doesNotMatch(s, ISO_RE, s);
+    assert.doesNotMatch(s, uuid, s);
+  });
+
+  // A successful turn clears pendingStart and lastTurn: only the live fields keep their Node order.
+  assert.deepEqual(Object.keys(file.stateFile), ["state", "provider", "resume", "canRetry"]);
 });
 
 it("golden fixtures hold no raw timestamps", () => {
