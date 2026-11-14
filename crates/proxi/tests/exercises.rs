@@ -347,6 +347,18 @@ fn editor_command_line_quotes_the_dir_and_refuses_quotes() {
 
 const FAKE_VITEST: &str = r#"import fs from "node:fs";const o=process.argv.find(a=>a.startsWith("--outputFile=")).slice(13);fs.writeFileSync(o,JSON.stringify({numTotalTests:1,numPassedTests:1,numFailedTests:0,testResults:[]}));"#;
 
+/// Exits soon after spawning a grandchild that inherited stderr and outlives it.
+const HOLD_STDERR_VITEST: &str = r#"
+import { spawn } from "node:child_process";
+
+// Windows needs `detached` for the grandchild to outlive the console of its parent here.
+spawn(process.execPath, ["-e", "setInterval(() => {}, 1000); setTimeout(() => process.exit(0), 60000);"], {
+  detached: process.platform === "win32",
+  stdio: ["ignore", "ignore", "inherit"],
+}).unref();
+setTimeout(() => process.exit(0), 300);
+"#;
+
 fn node() -> PathBuf {
     proxi::child::node_on_path().expect("node on PATH")
 }
@@ -619,6 +631,33 @@ async fn missing_report_shows_stderr_without_ansi() {
         result["error"],
         json!("vitest non ha prodotto un report. boom")
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stderr_held_open_after_the_root_exits_is_bounded() {
+    let (root, _dir) = temp_ex();
+    fake_vitest(&exercises_base(&root.0), HOLD_STDERR_VITEST);
+    let mut cfg = cfg();
+    cfg.run_timeout = Duration::from_secs(2);
+
+    // The root exits at once and a grandchild keeps stderr open: without a bound on the reader
+    // the run would never answer, like the Node timer never firing.
+    let started = Instant::now();
+    let result = tokio::time::timeout(Duration::from_secs(15), run_one(&root.0, "01-a", &cfg))
+        .await
+        .expect("the run must answer without waiting for the descendant");
+    let elapsed = started.elapsed();
+    assert_eq!(result["ok"], json!(false));
+    let error = result["error"].as_str().expect("error");
+    assert!(
+        error.starts_with("vitest non ha prodotto un report."),
+        "{error}"
+    );
+    assert!(
+        elapsed >= Duration::from_millis(1500),
+        "the descendant did not hold stderr open: {elapsed:?}"
+    );
+    assert!(elapsed < Duration::from_secs(10), "{elapsed:?}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
