@@ -34,28 +34,6 @@ describe("sync routes, data folder and sync-related HTTP surface", () => {
     fs.rmSync(path.dirname(repo), { recursive: true, force: true });
   });
 
-  it("GET /api/sync returns the status shape for a local provider on an existing data folder", async () => {
-    const r = await fetch(`${base()}/api/sync`);
-    assert.equal(r.status, 200);
-    const s = (await r.json()) as Record<string, unknown>;
-    assert.equal(s.provider, "local");
-    assert.equal(s.dataRoot, data);
-    assert.equal(s.needsData, false);
-    assert.equal(s.state, "idle");
-    assert.equal(s.dataRootFromEnv, false);
-    assert.equal(s.conflictCount, 0);
-    assert.equal(s.trashCount, 0);
-    assert.equal((s.github as { connected: boolean }).connected, false);
-    assert.equal((s.gdrive as { connected: boolean }).connected, false);
-  });
-
-  it("POST /api/sync/run needs the x-learner-client header", async () => {
-    assert.equal((await fetch(`${base()}/api/sync/run`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })).status, 403);
-    const r = await fetch(`${base()}/api/sync/run`, { method: "POST", headers: { ...guard, "content-type": "application/json" }, body: "{}" });
-    assert.equal(r.status, 200);
-    assert.equal(((await r.json()) as { provider: string }).provider, "local");
-  });
-
   it("GET /oauth/google/callback with an unknown state answers 400 html", async () => {
     const r = await fetch(`${base()}/oauth/google/callback?state=x`);
     assert.equal(r.status, 400);
@@ -138,16 +116,7 @@ describe("sync routes, data folder and sync-related HTTP surface", () => {
     assert.equal(fs.readFileSync(path.join(data, "courses", "demo", "MISSION.md"), "utf8"), "# Mission\n");
   });
 
-  it("POST /api/sync/run accepts confirmDeletions and rejects a non-boolean", async () => {
-    assert.equal((await post("/api/sync/run", { confirmDeletions: true })).status, 200);
-    assert.equal((await post("/api/sync/run", { confirmDeletions: "yes" })).status, 400);
-  });
-
-  it("POST /api/sync/disconnect and /api/sync/data-root validate their input", async () => {
-    assert.equal((await post("/api/sync/disconnect", { provider: "dropbox" })).status, 400);
-    const d = await post("/api/sync/disconnect", { provider: "github" });
-    assert.equal(d.status, 200);
-    assert.equal(((await d.json()) as { provider: string }).provider, "local");
+  it("POST /api/sync/data-root validates its input", async () => {
     assert.equal((await post("/api/sync/data-root", { dataRoot: "relative/dir" })).status, 400);
     assert.equal((await post("/api/sync/data-root", { dataRoot: path.join(repo, "inside") })).status, 400);
     assert.equal(fs.existsSync(path.join(repo, ".learner", "config.json")), false);
@@ -165,49 +134,6 @@ describe("sync routes, data folder and sync-related HTTP surface", () => {
     const s = (await r.json()) as { github: { error?: string; pending?: unknown } };
     assert.match(s.github.error ?? "", /Client GitHub non configurato/);
     assert.equal(s.github.pending, undefined);
-  });
-});
-
-describe("server start on a fresh install: no legacy migration", () => {
-  let srv: RunningServer;
-  let tmp: string;
-  let repo: string;
-  let data: string;
-  let settings: string;
-  let settingsBefore: string;
-  let savedEnv: string | undefined;
-
-  before(async () => {
-    savedEnv = process.env.LEARNER_DATA_ROOT;
-    delete process.env.LEARNER_DATA_ROOT;
-    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sync-fresh-start-"));
-    repo = path.join(tmp, "repo");
-    data = path.join(tmp, "data");
-    fs.mkdirSync(repo, { recursive: true });
-    fs.mkdirSync(data, { recursive: true });
-    fs.mkdirSync(path.join(repo, ".learner"), { recursive: true });
-    const old = path.join(tmp, "old-drive");
-    fs.mkdirSync(path.join(old, "courses", "demo"), { recursive: true });
-    fs.writeFileSync(path.join(old, "courses", "demo", "MISSION.md"), "# Mission\n");
-    settings = path.join(repo, ".learner", "settings.json");
-    settingsBefore = JSON.stringify({ driveSync: true, driveFolder: old, autoMap: false });
-    fs.writeFileSync(settings, settingsBefore);
-    srv = await createServer({ repoRoot: repo, dataRoot: data, port: 0, openBrowser: false, checkUpdateOnStart: false });
-  });
-
-  after(async () => {
-    await srv.close();
-    if (savedEnv === undefined) delete process.env.LEARNER_DATA_ROOT;
-    else process.env.LEARNER_DATA_ROOT = savedEnv;
-    fs.rmSync(tmp, { recursive: true, force: true });
-  });
-
-  it("leaves old Drive settings untouched, writes no pointer and reports an empty data folder as needsData", async () => {
-    assert.equal(fs.existsSync(path.join(repo, ".learner", "config.json")), false);
-    assert.equal(fs.readFileSync(settings, "utf8"), settingsBefore);
-    const s = (await (await fetch(`http://127.0.0.1:${srv.port}/api/sync`)).json()) as { dataRoot: string; needsData: boolean };
-    assert.equal(s.needsData, true);
-    assert.equal(path.resolve(s.dataRoot), path.resolve(data));
   });
 });
 

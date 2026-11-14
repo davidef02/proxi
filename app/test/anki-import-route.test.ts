@@ -1,3 +1,4 @@
+// Node-only: drives SessionManager; the HTTP cases live in api-anki.test.ts.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -6,7 +7,6 @@ import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 import { createServer, type RunningServer } from "../server/main.ts";
 import { MockAnki } from "../../tests/mock-anki.ts";
-import type { AnkiImportResult, AnkiStatusResponse, KnowledgeMap } from "../shared/protocol.ts";
 
 const FAKE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fake-claude.mjs");
 
@@ -40,103 +40,6 @@ function tempRepo(): string {
 
 describe("POST /api/anki/import route", () => {
   let srv: RunningServer;
-  const api = (p: string, body?: unknown) =>
-    fetch(srv.url + p, body === undefined ? undefined : { method: "POST", headers: { "x-learner-client": "1", "content-type": "application/json" }, body: JSON.stringify(body) });
-
-  it("AC1: imports reviews and derives shaky status on node demo/t#alpha", async () => {
-    const root = tempRepo();
-    const mock = new MockAnki();
-    mock.cards = [
-      {
-        deckName: "Proxi::Demo",
-        tags: ["node::alpha"],
-        interval: 1,
-        lapses: 0,
-        reviews: [
-          { id: 1700000000000, ease: 3 },
-          { id: 1700000100000, ease: 1 },
-        ],
-      },
-    ];
-    const url = await mock.start();
-    const prevUrl = process.env.LEARNER_ANKI_URL;
-    process.env.LEARNER_ANKI_URL = url;
-    try {
-      srv = await createServer({
-        repoRoot: root,
-        dataRoot: root,
-        port: 0,
-        openBrowser: false,
-        claudeBin: process.execPath,
-        claudeBinArgs: [FAKE],
-        addDirs: [],
-      });
-
-      const res = await api("/api/anki/import", { course: "demo" });
-      assert.equal(res.status, 200);
-      const data = (await res.json()) as AnkiImportResult;
-      assert.equal(data.online, true);
-      assert.equal(data.imported, 2);
-
-      const mapRes = await api("/api/map");
-      assert.equal(mapRes.status, 200);
-      const map = (await mapRes.json()) as KnowledgeMap;
-      const node = map.nodes.find((n) => n.key === "demo/t#alpha");
-      assert.ok(node);
-      assert.equal(node.status, "shaky");
-    } finally {
-      if (srv) await srv.close();
-      await mock.stop();
-      if (prevUrl === undefined) delete process.env.LEARNER_ANKI_URL;
-      else process.env.LEARNER_ANKI_URL = prevUrl;
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("AC6: answers online:false when Anki is down without modifying progress or map", async () => {
-    const root = tempRepo();
-    const prevUrl = process.env.LEARNER_ANKI_URL;
-    process.env.LEARNER_ANKI_URL = "http://127.0.0.1:9";
-    try {
-      srv = await createServer({
-        repoRoot: root,
-        dataRoot: root,
-        port: 0,
-        openBrowser: false,
-        claudeBin: process.execPath,
-        claudeBinArgs: [FAKE],
-        addDirs: [],
-      });
-
-      const res = await api("/api/anki/import", { course: "demo" });
-      assert.equal(res.status, 200);
-      const data = (await res.json()) as AnkiImportResult;
-      assert.equal(data.online, false);
-      assert.equal(data.imported, 0);
-      assert.equal(data.skipped, 0);
-      assert.ok(data.error);
-
-      const mapRes = await api("/api/map");
-      assert.equal(mapRes.status, 200);
-      const map = (await mapRes.json()) as KnowledgeMap;
-      const node = map.nodes.find((n) => n.key === "demo/t#alpha");
-      assert.ok(node);
-      assert.equal(node.status, "taught");
-
-      const ankiRes = await api("/api/anki?course=demo");
-      assert.equal(ankiRes.status, 200);
-      const ankiData = (await ankiRes.json()) as AnkiStatusResponse;
-      assert.equal(ankiData.online, false);
-
-      const progressFile = path.join(root, "courses", "demo", "progress.jsonl");
-      assert.equal(fs.existsSync(progressFile), false);
-    } finally {
-      if (srv) await srv.close();
-      if (prevUrl === undefined) delete process.env.LEARNER_ANKI_URL;
-      else process.env.LEARNER_ANKI_URL = prevUrl;
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  });
 
   it("triggers import on teach session creation, not on plan session", async () => {
     const root = tempRepo();

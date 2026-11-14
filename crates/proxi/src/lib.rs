@@ -1,8 +1,17 @@
+pub mod anki_client;
+pub mod anki_import;
+pub mod anki_status;
+pub mod course_data;
+pub mod curriculum;
 pub mod data_root;
 pub mod events;
+pub mod graph;
+pub mod js;
+pub mod knowledge;
 pub mod lesson;
 pub mod limits;
 pub mod protocol;
 pub mod server;
 pub mod settings;
 pub mod slug;
+pub mod sync;

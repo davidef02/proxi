@@ -69,6 +69,14 @@ pub fn default_data_root(home: &Path) -> PathBuf {
     home.join("Documents").join(DATA_DIR_NAME)
 }
 
+/// True when `dir` already holds learner data (`courses/` is a directory, or `curriculum.json` exists).
+pub fn has_data(dir: &Path) -> bool {
+    std::fs::metadata(dir.join("courses"))
+        .map(|meta| meta.is_dir())
+        .unwrap_or(false)
+        || dir.join("curriculum.json").exists()
+}
+
 pub fn read_data_root_pointer(repo_root: &Path) -> Option<PathBuf> {
     let raw = std::fs::read_to_string(repo_root.join(".learner").join("config.json")).ok()?;
     let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
@@ -446,6 +454,27 @@ mod tests {
             default_data_root(&t.0),
             t.0.join("Documents").join("proxi-data")
         );
+    }
+
+    #[test]
+    fn has_data_needs_courses_or_curriculum() {
+        let t = temp_dir("has-data");
+        assert!(!has_data(&t.0));
+
+        let with_courses = t.0.join("with-courses");
+        fs::create_dir_all(with_courses.join("courses")).unwrap();
+        assert!(has_data(&with_courses));
+
+        let with_curriculum = t.0.join("with-curriculum");
+        fs::create_dir_all(&with_curriculum).unwrap();
+        fs::write(with_curriculum.join("curriculum.json"), "{}").unwrap();
+        assert!(has_data(&with_curriculum));
+
+        // A file called `courses` is not a data folder, like Node's statSync().isDirectory().
+        let courses_file = t.0.join("courses-file");
+        fs::create_dir_all(&courses_file).unwrap();
+        fs::write(courses_file.join("courses"), "").unwrap();
+        assert!(!has_data(&courses_file));
     }
 
     #[test]
