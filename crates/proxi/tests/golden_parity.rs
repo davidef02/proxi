@@ -4,10 +4,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use reqwest::{Client, Response};
+use reqwest::Client;
 use serde_json::Value;
 
-use proxi::server::{start, ServerOptions};
+use common::{Fixture, first_event};
+use proxi::server::start;
 
 fn golden_file(route: &str) -> PathBuf {
     common::repo_root()
@@ -28,11 +29,9 @@ async fn replay(route: &str, ordered: bool) {
     let golden: Value = serde_json::from_str(&raw)
         .unwrap_or_else(|error| panic!("parse {}: {error}", file.display()));
 
-    let dir = common::temp_dir(route);
-    let repo = dir.0.join("repo");
-    let data = dir.0.join("data");
-    fs::create_dir_all(&repo).expect("create repo");
-    fs::create_dir_all(&data).expect("create data");
+    let fixture = Fixture::new(route);
+    let repo = fixture.repo.clone();
+    let data = fixture.data.clone();
 
     for (rel, seed) in golden["seed"].as_object().expect("seed object") {
         let target = repo.join(rel);
@@ -43,10 +42,8 @@ async fn replay(route: &str, ordered: bool) {
     }
     write_data_seed(&data, &golden["dataSeed"]);
 
-    let mut options = ServerOptions::new(repo.clone());
-    options.data_root = Some(data.clone());
     // Long enough that only the request's event can appear in the stream.
-    options.keep_alive = Duration::from_secs(120);
+    let options = fixture.options_with_keep_alive(Duration::from_secs(120));
     let server = start(options).await.expect("start Rust server");
     let client = Client::new();
     let repo_root = proxi::data_root::resolve_path(&repo).display().to_string();
@@ -155,32 +152,6 @@ fn write_data_seed(data: &Path, seed: &Value) {
                 .as_bytes(),
         )
         .unwrap_or_else(|error| panic!("write data seed {rel}: {error}"));
-    }
-}
-
-/// Waits for the first complete `data:` block of an SSE stream.
-async fn first_event(stream: &mut Response) -> Value {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    let mut buffer = String::new();
-    loop {
-        if let Some(index) = buffer.find("\n\n") {
-            let block = buffer[..index].to_string();
-            let data: String = block
-                .lines()
-                .filter_map(|line| line.strip_prefix("data:"))
-                .map(str::trim)
-                .collect();
-            assert!(!data.is_empty(), "first SSE block has no data: {block:?}");
-            return serde_json::from_str(&data)
-                .unwrap_or_else(|error| panic!("SSE event is not JSON ({error}): {data}"));
-        }
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        let chunk = tokio::time::timeout(remaining, stream.chunk())
-            .await
-            .unwrap_or_else(|_| panic!("no SSE event within 10 s; got {buffer:?}"))
-            .expect("read SSE chunk")
-            .expect("SSE stream closed before the first event");
-        buffer.push_str(&String::from_utf8_lossy(&chunk));
     }
 }
 

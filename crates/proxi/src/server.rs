@@ -491,46 +491,38 @@ async fn get_limits(State(state): State<Arc<AppState>>) -> Json<Value> {
     Json(state.limits.get(&state.repo_root).unwrap_or(Value::Null))
 }
 
-/// The shape every Anki POST shares: `{"course": <slug>}`, with zod's texts on a bad body.
-fn course_from_body(body: &Bytes) -> Result<String, Response> {
-    let value: Value = match serde_json::from_slice(body) {
+/// JSON parse then object check, with zod's texts on a bad body; `Err` is the 400 to send.
+fn body_object(bytes: &Bytes) -> Result<serde_json::Map<String, Value>, Response> {
+    let value: Value = match serde_json::from_slice(bytes) {
         Ok(value) => value,
         Err(_) => return Err(json_error(StatusCode::BAD_REQUEST, "Invalid JSON body")),
     };
-    let Some(object) = value.as_object() else {
-        return Err(json_error(
+    match value {
+        Value::Object(object) => Ok(object),
+        other => Err(json_error(
             StatusCode::BAD_REQUEST,
             &format!(
                 ": Invalid input: expected object, received {}",
-                js_type(&value)
+                js_type(&other)
             ),
-        ));
-    };
-    let course = match object.get("course") {
-        Some(Value::String(course)) => course.clone(),
-        Some(other) => {
-            return Err(json_error(
-                StatusCode::BAD_REQUEST,
-                &format!(
-                    "course: Invalid input: expected string, received {}",
-                    js_type(other)
-                ),
-            ));
-        }
-        None => {
-            return Err(json_error(
-                StatusCode::BAD_REQUEST,
-                "course: Invalid input: expected string, received undefined",
-            ));
-        }
-    };
-    if !valid_course(&course) {
-        return Err(json_error(
-            StatusCode::BAD_REQUEST,
-            "course: Invalid string: must match pattern /^[a-z0-9]+(?:-[a-z0-9]+)*$/",
-        ));
+        )),
     }
-    Ok(course)
+}
+
+/// The shape every Anki POST shares: `{"course": <slug>}`, with zod's texts on a bad body.
+fn course_from_body(body: &Bytes) -> Result<String, Response> {
+    let object = body_object(body)?;
+    let mut issues = Vec::new();
+    let course = required_string(&object, "course", &mut issues);
+    if let Some(course) = &course {
+        if !valid_course(course) {
+            push_issue(&mut issues, "course", COURSE_PATTERN);
+        }
+    }
+    if !issues.is_empty() {
+        return Err(json_error(StatusCode::BAD_REQUEST, &issues.join("; ")));
+    }
+    Ok(course.expect("a required string"))
 }
 
 fn js_type(value: &Value) -> &'static str {
@@ -804,28 +796,16 @@ fn required_string(
 
 /// Hand-rolled zod: schema key order, issues joined by `"; "`. `Err` is the 400 to send.
 fn exercise_body(bytes: &Bytes, save: bool) -> Result<ExerciseBody, Response> {
-    let value: Value = match serde_json::from_slice(bytes) {
-        Ok(value) => value,
-        Err(_) => return Err(json_error(StatusCode::BAD_REQUEST, "Invalid JSON body")),
-    };
-    let Some(object) = value.as_object() else {
-        return Err(json_error(
-            StatusCode::BAD_REQUEST,
-            &format!(
-                ": Invalid input: expected object, received {}",
-                js_type(&value)
-            ),
-        ));
-    };
+    let object = body_object(bytes)?;
 
     let mut issues = Vec::new();
-    let course = required_string(object, "course", &mut issues);
+    let course = required_string(&object, "course", &mut issues);
     if let Some(course) = &course {
         if !valid_course(course) {
             push_issue(&mut issues, "course", COURSE_PATTERN);
         }
     }
-    let name = required_string(object, "name", &mut issues);
+    let name = required_string(&object, "name", &mut issues);
     if let Some(name) = &name {
         if !exercises::safe_name(name) {
             push_issue(&mut issues, "name", NAME_PATTERN);
@@ -836,7 +816,7 @@ fn exercise_body(bytes: &Bytes, save: bool) -> Result<ExerciseBody, Response> {
     let mut content = String::new();
     let mut base_version = None;
     if save {
-        if let Some(value) = required_string(object, "path", &mut issues) {
+        if let Some(value) = required_string(&object, "path", &mut issues) {
             let len = utf16_len(&value);
             if len < 1 {
                 push_issue(
@@ -853,7 +833,7 @@ fn exercise_body(bytes: &Bytes, save: bool) -> Result<ExerciseBody, Response> {
             }
             path = value;
         }
-        if let Some(value) = required_string(object, "content", &mut issues) {
+        if let Some(value) = required_string(&object, "content", &mut issues) {
             if utf16_len(&value) > 200_000 {
                 push_issue(
                     &mut issues,

@@ -4,6 +4,7 @@ use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 #[cfg(windows)]
@@ -146,20 +147,77 @@ impl Drop for TreeChild {
     }
 }
 
+/// Collects a child's stderr while it runs. `finish` bounds the wait, because a descendant that
+/// inherited the pipe can outlive the root: the root is then already reaped, so `kill_tree` cannot
+/// reach it and an unbounded read would never see EOF.
+pub struct StderrReader {
+    buffer: Arc<Mutex<Vec<u8>>>,
+    task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl StderrReader {
+    /// Starts reading `stderr` (from `TreeChild::take_stderr`) in the background.
+    pub fn start(stderr: Option<tokio::process::ChildStderr>) -> Self {
+        let buffer = Arc::new(Mutex::new(Vec::new()));
+        let task = stderr.map(|mut pipe| {
+            let buffer = Arc::clone(&buffer);
+            tokio::spawn(async move {
+                let mut chunk = [0u8; 8192];
+                loop {
+                    match tokio::io::AsyncReadExt::read(&mut pipe, &mut chunk).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => buffer
+                            .lock()
+                            .expect("stderr buffer lock")
+                            .extend_from_slice(&chunk[..n]),
+                    }
+                }
+            })
+        });
+        Self { buffer, task }
+    }
+
+    /// Waits for EOF for at most `limit`, then returns what arrived. On elapse the reader is
+    /// aborted.
+    pub async fn finish(mut self, limit: Duration) -> String {
+        if let Some(mut task) = self.task.take() {
+            if tokio::time::timeout(limit, &mut task).await.is_err() {
+                task.abort();
+            }
+        }
+        let bytes = self.buffer.lock().expect("stderr buffer lock");
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+}
+
+impl Drop for StderrReader {
+    fn drop(&mut self) {
+        // The run returned early (timeout, error or cancellation): stop the reader as well.
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+    }
+}
+
 pub fn find_on_path(name: &str, path: Option<&OsStr>) -> Option<PathBuf> {
     for entry in std::env::split_paths(path?) {
         if entry.as_os_str().is_empty() {
             continue;
         }
-        let direct = entry.join(name);
-        if direct.is_file() {
-            return Some(direct);
-        }
         #[cfg(windows)]
         {
+            // Windows' own lookup never picks an extensionless file: a `node` there is a shell
+            // shim, and running it fails with "%1 is not a valid Win32 application".
             let exe = entry.join(format!("{name}.exe"));
             if exe.is_file() {
                 return Some(exe);
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            let direct = entry.join(name);
+            if direct.is_file() {
+                return Some(direct);
             }
         }
     }
@@ -248,6 +306,60 @@ setInterval(() => appendFileSync(join(here, "beat.txt"), "."), 50);
         cmd
     }
 
+    fn piped_node_command(node: &Path, script: &Path) -> tokio::process::Command {
+        let mut cmd = tokio::process::Command::new(node);
+        cmd.arg(script)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        cmd
+    }
+
+    const STDERR_PARENT: &str = r#"
+import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const holder = spawn(process.execPath, [join(here, "holder.mjs")], {
+  detached: true,
+  stdio: ["ignore", "ignore", "inherit"],
+});
+holder.unref();
+writeFileSync(join(here, "holder.pid"), String(holder.pid));
+"#;
+
+    const STDERR_HOLDER: &str =
+        "setInterval(() => {}, 1000);\nsetTimeout(() => process.exit(0), 60000);";
+
+    #[cfg(windows)]
+    fn kill_pid(pid: u32) {
+        TreeChild::taskkill(pid);
+    }
+
+    #[cfg(not(windows))]
+    fn kill_pid(pid: u32) {
+        let _ = std::process::Command::new("kill")
+            .args(["-9", &pid.to_string()])
+            .status();
+    }
+
+    async fn holder_pid(path: &Path) -> Option<u32> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Ok(text) = fs::read_to_string(path) {
+                if let Ok(pid) = text.trim().parse() {
+                    return Some(pid);
+                }
+            }
+            if Instant::now() >= deadline {
+                return None;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
     fn beat_len(path: &Path) -> u64 {
         fs::metadata(path).map(|m| m.len()).unwrap_or(0)
     }
@@ -290,6 +402,20 @@ setInterval(() => appendFileSync(join(here, "beat.txt"), "."), 50);
 
         let path = std::env::join_paths([&empty, &tools]).expect("join paths");
         assert_eq!(find_on_path("tool", Some(&path)), Some(tool));
+
+        #[cfg(windows)]
+        {
+            // A dir with only an extensionless `tool` (a shell shim) must not win: Windows never
+            // runs an extensionless file.
+            let shims = dir.0.join("shims");
+            fs::create_dir_all(&shims).expect("create shims");
+            fs::write(shims.join("tool"), "").expect("write shim");
+            let path = std::env::join_paths([&empty, &shims, &tools]).expect("join paths");
+            assert_eq!(
+                find_on_path("tool", Some(&path)),
+                Some(tools.join("tool.exe"))
+            );
+        }
 
         assert_eq!(find_on_path("tool", None), None);
         let empty_path = std::env::join_paths([&empty]).expect("join paths");
@@ -363,6 +489,52 @@ setInterval(() => appendFileSync(join(here, "beat.txt"), "."), 50);
         handle.abort();
         let _ = handle.await;
         assert_stopped(&beat).await;
+    }
+
+    /// The fallback spawn reaps only the root. A descendant that inherits stderr can outlive it,
+    /// so `StderrReader::finish` must bound the wait instead of waiting for an EOF that never comes.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stderr_held_open_by_a_descendant_is_bounded() {
+        let node = node_on_path().expect("node on PATH");
+        let dir = temp_dir();
+        fs::write(dir.0.join("parent.mjs"), STDERR_PARENT).expect("write parent");
+        fs::write(dir.0.join("holder.mjs"), STDERR_HOLDER).expect("write holder");
+        let parent = dir.0.join("parent.mjs");
+        let make = || piped_node_command(&node, &parent);
+
+        let mut child = spawn_with(&make, false).expect("spawn parent");
+        assert!(!child.uses_tree());
+        let reader = StderrReader::start(child.take_stderr());
+        let status = child
+            .wait_timeout(Duration::from_secs(10))
+            .await
+            .expect("wait")
+            .expect("the root exits");
+        assert!(status.success());
+        let holder = holder_pid(&dir.0.join("holder.pid")).await;
+        assert!(holder.is_some(), "the holder never started");
+
+        let started = Instant::now();
+        let stderr =
+            tokio::time::timeout(Duration::from_secs(5), reader.finish(Duration::from_secs(2)))
+                .await
+                .expect("the stderr read must be bounded by its own limit");
+        // The descendant keeps the pipe open, so the read only ends by its own limit: a fast
+        // return means the fixture stopped holding it, and the test would prove nothing.
+        assert!(
+            started.elapsed() >= Duration::from_millis(1500),
+            "the pipe was not held open by the descendant"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(4),
+            "the stderr read waited for the descendant"
+        );
+        assert!(stderr.is_empty(), "{stderr}");
+
+        // The holder outlived the root, so the fallback tree cannot kill it: clean it up here.
+        if let Some(pid) = holder {
+            kill_pid(pid);
+        }
     }
 
     #[cfg(windows)]

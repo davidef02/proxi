@@ -680,13 +680,7 @@ pub async fn run_exercise(
         Ok(child) => child,
         Err(e) => return run_failure(&e.to_string()),
     };
-    let stderr = child.take_stderr().map(|mut pipe| {
-        tokio::spawn(async move {
-            let mut buf = Vec::new();
-            let _ = tokio::io::AsyncReadExt::read_to_end(&mut pipe, &mut buf).await;
-            buf
-        })
-    });
+    let stderr = child::StderrReader::start(child.take_stderr());
 
     let status = match child.wait_timeout(cfg.run_timeout).await {
         Ok(status) => status,
@@ -698,13 +692,11 @@ pub async fn run_exercise(
             cfg.run_timeout.as_secs()
         ));
     }
-    let stderr = match stderr {
-        Some(task) => task
-            .await
-            .map(|buf| String::from_utf8_lossy(&buf).into_owned())
-            .unwrap_or_default(),
-        None => String::new(),
-    };
+    // Node's timer bounded the whole run, stdio close included. A descendant that inherited
+    // stderr can outlive the root and hold the pipe open after it was reaped.
+    let stderr = stderr
+        .finish(cfg.run_timeout.saturating_sub(start.elapsed()))
+        .await;
     if !out.exists() {
         return run_failure(&vitest::clean_message(&format!(
             "vitest non ha prodotto un report. {stderr}"

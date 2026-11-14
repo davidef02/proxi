@@ -3,51 +3,15 @@
 mod common;
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 use reqwest::{Client, Response, StatusCode};
 use serde_json::{json, Value};
 use sha1::{Digest, Sha1};
 
-use proxi::server::{start, RunningServer, ServerOptions};
-
-/// A temp repo and data folder; the files on disk are the fixture.
-struct Fixture {
-    root: common::TempDir,
-    repo: PathBuf,
-    data: PathBuf,
-}
-
-impl Fixture {
-    fn new(tag: &str) -> Self {
-        let root = common::temp_dir(tag);
-        let repo = root.0.join("repo");
-        let data = root.0.join("data");
-        fs::create_dir_all(&repo).expect("create repo");
-        fs::create_dir_all(&data).expect("create data");
-        Self { root, repo, data }
-    }
-
-    fn options(&self) -> ServerOptions {
-        let mut options = ServerOptions::new(self.repo.clone());
-        options.data_root = Some(self.data.clone());
-        options.dist_dir = Some(self.root.0.join("missing-dist"));
-        // Long enough that only a request's own event can appear in the stream.
-        options.keep_alive = Duration::from_secs(120);
-        options
-    }
-
-    fn data_file(&self, rel: &str, content: &str) {
-        write(&self.data, rel, content);
-    }
-}
-
-fn write(root: &Path, rel: &str, content: &str) {
-    let path = root.join(rel);
-    fs::create_dir_all(path.parent().expect("a parent")).expect("create parent dir");
-    fs::write(path, content).expect("write fixture file");
-}
+use common::{Fixture, first_event, write};
+use proxi::server::{start, RunningServer};
 
 fn sha1_hex(text: &str) -> String {
     let mut hasher = Sha1::new();
@@ -130,32 +94,6 @@ async fn subscribe(client: &Client, base: &str) -> Response {
     response
 }
 
-/// Waits for the first complete `data:` block of an SSE stream.
-async fn first_event(stream: &mut Response) -> Value {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    let mut buffer = String::new();
-    loop {
-        if let Some(index) = buffer.find("\n\n") {
-            let block = buffer[..index].to_string();
-            let data: String = block
-                .lines()
-                .filter_map(|line| line.strip_prefix("data:"))
-                .map(str::trim)
-                .collect();
-            assert!(!data.is_empty(), "first SSE block has no data: {block:?}");
-            return serde_json::from_str(&data)
-                .unwrap_or_else(|error| panic!("SSE event is not JSON ({error}): {data}"));
-        }
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        let chunk = tokio::time::timeout(remaining, stream.chunk())
-            .await
-            .unwrap_or_else(|_| panic!("no SSE event within 10 s; got {buffer:?}"))
-            .expect("read SSE chunk")
-            .expect("SSE stream closed before the first event");
-        buffer.push_str(&String::from_utf8_lossy(&chunk));
-    }
-}
-
 /// Fails when anything arrives within `wait`: keep-alive is 120 s in these fixtures.
 async fn expect_no_event(stream: &mut Response, wait: Duration) {
     match tokio::time::timeout(wait, stream.chunk()).await {
@@ -178,7 +116,9 @@ fs.writeFileSync(out, JSON.stringify({ numTotalTests: 1, numPassedTests: 1, numF
 async fn list_and_workspace_over_http() {
     let fixture = Fixture::new("exercises-api-list");
     seed(&fixture.data);
-    let server = start(fixture.options()).await.expect("start server");
+    let server = start(fixture.options_with_keep_alive(Duration::from_secs(120)))
+        .await
+        .expect("start server");
     let client = Client::new();
 
     let (status, list) = get_json(&client, &server, "/api/exercises/demo").await;
@@ -276,7 +216,9 @@ async fn list_and_workspace_over_http() {
 async fn save_conflict_is_409_stale() {
     let fixture = Fixture::new("exercises-api-stale");
     seed(&fixture.data);
-    let server = start(fixture.options()).await.expect("start server");
+    let server = start(fixture.options_with_keep_alive(Duration::from_secs(120)))
+        .await
+        .expect("start server");
     let client = Client::new();
     let file = fixture
         .data
@@ -330,7 +272,9 @@ async fn hint_writes_the_same_file_and_emits_courses() {
         "courses/demo/exercises/01-a/SUGGERIMENTI.json",
         &json!({"hints": ["a", "b"], "final": false, "revealed": 0}).to_string(),
     );
-    let server = start(fixture.options()).await.expect("start server");
+    let server = start(fixture.options_with_keep_alive(Duration::from_secs(120)))
+        .await
+        .expect("start server");
     let client = Client::new();
 
     let mut stream = subscribe(&client, &server.url).await;
@@ -364,7 +308,9 @@ async fn hint_writes_the_same_file_and_emits_courses() {
 async fn save_events_are_throttled_per_exercise() {
     let fixture = Fixture::new("exercises-api-events");
     seed(&fixture.data);
-    let server = start(fixture.options()).await.expect("start server");
+    let server = start(fixture.options_with_keep_alive(Duration::from_secs(120)))
+        .await
+        .expect("start server");
     let client = Client::new();
     let mut stream = subscribe(&client, &server.url).await;
 
@@ -412,7 +358,9 @@ async fn run_returns_the_result_and_writes_last_run() {
         "courses/demo/exercises/node_modules/vitest/vitest.mjs",
         VITEST_FAKE,
     );
-    let server = start(fixture.options()).await.expect("start server");
+    let server = start(fixture.options_with_keep_alive(Duration::from_secs(120)))
+        .await
+        .expect("start server");
     let client = Client::new();
 
     let response = post(
@@ -454,7 +402,9 @@ async fn run_returns_the_result_and_writes_last_run() {
 async fn run_unknown_and_missing() {
     let fixture = Fixture::new("exercises-api-run-errors");
     seed(&fixture.data);
-    let server = start(fixture.options()).await.expect("start server");
+    let server = start(fixture.options_with_keep_alive(Duration::from_secs(120)))
+        .await
+        .expect("start server");
     let client = Client::new();
 
     let (status, body) = post_json(
@@ -496,7 +446,9 @@ async fn run_unknown_and_missing() {
 async fn open_missing_is_404() {
     let fixture = Fixture::new("exercises-api-open");
     seed(&fixture.data);
-    let server = start(fixture.options()).await.expect("start server");
+    let server = start(fixture.options_with_keep_alive(Duration::from_secs(120)))
+        .await
+        .expect("start server");
     let client = Client::new();
 
     let (status, body) = post_json(
@@ -527,7 +479,9 @@ async fn open_missing_is_404() {
 async fn oversized_save_is_413() {
     let fixture = Fixture::new("exercises-api-huge");
     seed(&fixture.data);
-    let server = start(fixture.options()).await.expect("start server");
+    let server = start(fixture.options_with_keep_alive(Duration::from_secs(120)))
+        .await
+        .expect("start server");
     let client = Client::new();
 
     let (status, body) = post_json(
@@ -554,7 +508,9 @@ async fn oversized_save_reads_the_whole_body_before_413() {
 
     let fixture = Fixture::new("exercises-api-drain");
     seed(&fixture.data);
-    let server = start(fixture.options()).await.expect("start server");
+    let server = start(fixture.options_with_keep_alive(Duration::from_secs(120)))
+        .await
+        .expect("start server");
 
     let payload = json!({
         "course": "demo",
@@ -613,7 +569,9 @@ async fn oversized_save_reads_the_whole_body_before_413() {
 async fn bad_bodies_use_the_zod_texts() {
     let fixture = Fixture::new("exercises-api-bodies");
     seed(&fixture.data);
-    let server = start(fixture.options()).await.expect("start server");
+    let server = start(fixture.options_with_keep_alive(Duration::from_secs(120)))
+        .await
+        .expect("start server");
     let client = Client::new();
 
     let cases: [(&str, &str, &str); 8] = [
@@ -668,7 +626,9 @@ async fn bad_bodies_use_the_zod_texts() {
 async fn get_save_lists_course_save() {
     let fixture = Fixture::new("exercises-api-save-route");
     seed(&fixture.data);
-    let server = start(fixture.options()).await.expect("start server");
+    let server = start(fixture.options_with_keep_alive(Duration::from_secs(120)))
+        .await
+        .expect("start server");
     let client = Client::new();
 
     // `/api/exercises/save` is also a GET for the course "save", as in Hono.
