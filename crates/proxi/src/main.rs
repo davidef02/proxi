@@ -14,7 +14,7 @@ enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Lessons: init, append, list
+    /// Lessons: init, append, list, rebuild, compile-ref (reference)
     Lesson {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,

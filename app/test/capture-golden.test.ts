@@ -266,3 +266,30 @@ it("anki golden pins ping, LaTeX and the data/stdin parity", () => {
   assert.ok(extract.includes(latex));
   assert.ok(extract.includes('"lessonNumber": 1,'));
 });
+
+it("lesson golden covers rebuild and compile-ref", () => {
+  const file = JSON.parse(goldenText(LESSON_GOLDEN)) as {
+    cases: Array<{ name: string; stderr: string; files: Record<string, string | null> }>;
+  };
+  const byName = (name: string) => {
+    const found = file.cases.find((c) => c.name === name);
+    assert.ok(found, `missing ${name}`);
+    return found;
+  };
+
+  const reference = byName("compile-ref-default").files["reference/il-modello-osi.html"];
+  assert.ok(reference, "compile-ref-default wrote no reference/il-modello-osi.html");
+  assert.match(reference, /id="reference-data"/);
+  assert.match(reference, /confonde rete e trasporto/); // the sibling learning-record scan, not the board
+
+  const alias = Object.values(byName("reference-alias-record").files);
+  assert.equal(alias.length, 1);
+  assert.match(alias[0] as string, /confonde la legge con il caso/); // --record wins over the scan
+
+  assert.equal(byName("rebuild-slug-miss").stderr, "Error: Lesson not found: nope\n");
+  assert.equal(byName("compile-ref-slug-miss").stderr, "Error: Cannot compile reference: lesson file not found (undefined)\n");
+
+  for (const c of file.cases) {
+    for (const name of Object.keys(c.files)) assert.doesNotMatch(name, /learning-records\//, `${c.name} lists a learning record`);
+  }
+});

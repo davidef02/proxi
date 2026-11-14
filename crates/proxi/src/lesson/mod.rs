@@ -1,4 +1,4 @@
-//! Lesson artifacts and the `proxi lesson` CLI: init, append and list (port of
+//! Lesson artifacts and the `proxi lesson` CLI: init, append, list, rebuild and compile-ref (port of
 //! extensions/html-lesson.ts), plus the read side of the engine in [`artifact`].
 
 pub mod artifact;
@@ -6,6 +6,8 @@ pub mod cli;
 pub mod doc;
 pub mod js;
 pub mod node_path;
+pub mod reference;
+pub mod refresh;
 pub mod render;
 
 pub use artifact::{

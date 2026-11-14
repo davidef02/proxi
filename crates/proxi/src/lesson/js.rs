@@ -4,7 +4,7 @@ use std::io;
 
 use serde::Serialize;
 use serde_json::Value;
-use serde_json::ser::{Formatter, PrettyFormatter, Serializer};
+use serde_json::ser::{CompactFormatter, Formatter, PrettyFormatter, Serializer};
 
 /// JS `\s` / `String#trim`: includes U+FEFF, excludes U+0085.
 pub fn is_js_space(c: char) -> bool {
@@ -117,9 +117,9 @@ pub fn text(v: Option<&Value>) -> &str {
 }
 
 /// serde_json formatter that prints numbers the way V8 does.
-struct JsFormatter(PrettyFormatter<'static>);
+struct JsFormatter<F>(F);
 
-impl Formatter for JsFormatter {
+impl<F: Formatter> Formatter for JsFormatter<F> {
     fn begin_array<W>(&mut self, writer: &mut W) -> io::Result<()>
     where
         W: ?Sized + io::Write,
@@ -250,6 +250,14 @@ pub fn stringify_pretty(v: &Value) -> String {
     String::from_utf8(ser.into_inner()).expect("JSON output is UTF-8")
 }
 
+/// `JSON.stringify(v)`: compact, V8 numbers, '<' left as is.
+pub fn stringify_compact(v: &Value) -> String {
+    let mut ser = Serializer::with_formatter(Vec::new(), JsFormatter(CompactFormatter));
+    v.serialize(&mut ser)
+        .expect("serializing a Value cannot fail");
+    String::from_utf8(ser.into_inner()).expect("JSON output is UTF-8")
+}
+
 pub fn render_data_island(doc: &Value) -> String {
     format!(
         "<script type=\"application/json\" id=\"lesson-data\">\n{}\n  </script>",
@@ -344,6 +352,15 @@ mod tests {
         assert_eq!(
             stringify_pretty(&v),
             "{\n  \"z\": [],\n  \"a\": {},\n  \"m\": [\n    1,\n    {\n      \"k\": \"v\"\n    }\n  ]\n}"
+        );
+    }
+
+    #[test]
+    fn stringify_compact_matches_json_stringify() {
+        let v = json!({"b":1.0,"a":[1e21,1e-7,0.5,"<x>"],"c":{}});
+        assert_eq!(
+            stringify_compact(&v),
+            r#"{"b":1,"a":[1e+21,1e-7,0.5,"<x>"],"c":{}}"#
         );
     }
 
