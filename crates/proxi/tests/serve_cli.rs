@@ -23,6 +23,7 @@ const FLAGS: &[&str] = &[
     "--data-root",
     "--port",
     "--claude-bin",
+    "--claude-bin-arg",
     "--agy-bin",
     "--opencode-bin",
     "--git-bin",

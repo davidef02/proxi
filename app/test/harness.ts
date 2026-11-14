@@ -17,6 +17,13 @@ export function serverMode(env: NodeJS.ProcessEnv = process.env): ServerMode {
 
 export const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
 
+export const FAKE_CLAUDE = path.join(REPO_ROOT, "app", "test", "fake-claude.mjs");
+
+/** The fake engine as a claude bin pair: node running fake-claude.mjs, plus test-hook flags before Claude's args. */
+export function fakeClaude(extra: string[] = []): { cmd: string; args: string[] } {
+  return { cmd: process.execPath, args: [FAKE_CLAUDE, ...extra] };
+}
+
 export interface FakeUrls {
   anki?: string;
   github?: string;
@@ -72,6 +79,8 @@ export interface StartOptions {
   /** Default: repoRoot. */
   dataRoot?: string;
   fakes?: FakeUrls;
+  /** The engine to run instead of the real Claude (tests: `fakeClaude()`). */
+  claude?: { cmd: string; args?: string[] };
   /** Default: serverMode(). */
   mode?: ServerMode;
 }
@@ -88,10 +97,17 @@ export async function startServer(opts: StartOptions): Promise<TestServer> {
   const mode = opts.mode ?? serverMode();
   const repoRoot = path.resolve(opts.repoRoot);
   const dataRoot = path.resolve(opts.dataRoot ?? opts.repoRoot);
-  return mode === "binary" ? startBinary(repoRoot, dataRoot, opts.fakes) : startNode(repoRoot, dataRoot, opts.fakes);
+  return mode === "binary"
+    ? startBinary(repoRoot, dataRoot, opts.fakes, opts.claude)
+    : startNode(repoRoot, dataRoot, opts.fakes, opts.claude);
 }
 
-async function startNode(repoRoot: string, dataRoot: string, fakes?: FakeUrls): Promise<TestServer> {
+async function startNode(
+  repoRoot: string,
+  dataRoot: string,
+  fakes?: FakeUrls,
+  claude?: { cmd: string; args?: string[] },
+): Promise<TestServer> {
   // The Anki URL is the Node seam the fake server can reach without a new URL option.
   const prevAnki = process.env.LEARNER_ANKI_URL;
   if (fakes?.anki) process.env.LEARNER_ANKI_URL = fakes.anki;
@@ -105,6 +121,8 @@ async function startNode(repoRoot: string, dataRoot: string, fakes?: FakeUrls): 
       dataRoot,
       port: 0,
       openBrowser: false,
+      claudeBin: claude?.cmd,
+      claudeBinArgs: claude?.args,
       checkUpdateOnStart: false,
       fetchModelOnStart: false,
       fetchFn: fakes ? fakeFetch(fakes) : undefined,
@@ -122,11 +140,20 @@ async function startNode(repoRoot: string, dataRoot: string, fakes?: FakeUrls): 
   }
 }
 
-async function startBinary(repoRoot: string, dataRoot: string, fakes?: FakeUrls): Promise<TestServer> {
+async function startBinary(
+  repoRoot: string,
+  dataRoot: string,
+  fakes?: FakeUrls,
+  claude?: { cmd: string; args?: string[] },
+): Promise<TestServer> {
   const args = ["serve", "--port", "0", "--repo-root", repoRoot, "--data-root", dataRoot, "--memory-secrets"];
   for (const service of SERVICES) {
     const url = fakes?.[service.key];
     if (url) args.push(service.flag, url);
+  }
+  if (claude) {
+    args.push("--claude-bin", claude.cmd);
+    for (const arg of claude.args ?? []) args.push("--claude-bin-arg", arg);
   }
 
   // No shell (L15): a quoted path breaks under cmd.exe.

@@ -1,6 +1,6 @@
 // Scriptable stand-in for `claude -p --input-format stream-json --output-format stream-json`.
 // Scenario per turn: "FAKE:<name>" anywhere in the user text, else env FAKE_CLAUDE_SCENARIO, else "hello".
-// Scenarios: hello | quiz | slow | tool:<name>:<base64 json> | job:<base64 json array of steps>
+// Scenarios: hello | quiz | slow[:<n>] | tool:<name>:<base64 json> | job:<base64 json array of steps>
 // A job step is {tool, input} (calls mcp__job__<tool> on the job server) or {sleep: ms}; the scenario marker travels
 // inside the job's first message (e.g. in the brief), since the job process gets no env of its own.
 // The MCP client side is real: it POSTs JSON-RPC to the url/headers in the --mcp-config file.
@@ -9,15 +9,27 @@ import readline from "node:readline";
 
 const argv = process.argv.slice(2);
 console.error("fake-claude argv: " + JSON.stringify(argv));
+const arg = (name) => {
+  const i = argv.indexOf(name);
+  return i >= 0 ? argv[i + 1] : undefined;
+};
+// Test hook: dump the env the engine handed us, so a test can check the auth/data-root contract (AC3).
+const envOut = arg("--env-out");
+if (envOut) {
+  fs.writeFileSync(
+    envOut,
+    JSON.stringify({
+      ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ?? null,
+      MCP_TOOL_TIMEOUT: process.env.MCP_TOOL_TIMEOUT ?? null,
+      LEARNER_DATA_ROOT: process.env.LEARNER_DATA_ROOT ?? null,
+    }),
+  );
+}
 // The desktop shell probes `<bin> --version` with stdin open: answer and exit, never wait for a turn.
 if (argv.includes("--version")) {
   console.log("0.0.0 (fake-claude)");
   process.exit(0);
 }
-const arg = (name) => {
-  const i = argv.indexOf(name);
-  return i >= 0 ? argv[i + 1] : undefined;
-};
 const sessionId = arg("--session-id") ?? arg("--resume") ?? "00000000-0000-4000-8000-000000000000";
 const mcpFile = arg("--mcp-config");
 // Test hook: simulate "--resume of an unknown session" (exit before init).
@@ -222,7 +234,8 @@ async function play(scenario) {
   if (scenario === "crash") {
     process.exit(1);
   }
-  if (scenario === "slow") {
+  if (scenario === "slow" || scenario.startsWith("slow:")) {
+    const count = scenario === "slow" ? 50 : Number(scenario.slice(5)) || 0;
     const id = nextId("msg");
     startMessage(id);
     startThinking();
@@ -230,7 +243,7 @@ async function play(scenario) {
     let text = "";
     let stopped = false;
     const wake = new Promise((r) => (interrupt = () => ((stopped = true), r())));
-    for (let k = 0; k < 50 && !stopped; k++) {
+    for (let k = 0; k < count && !stopped; k++) {
       const t = `parola${k} `;
       text += t;
       delta(1, t);

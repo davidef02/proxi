@@ -60,6 +60,7 @@ pub struct Endpoints {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EngineBins {
     pub claude: Option<PathBuf>,
+    pub claude_args: Vec<String>,
     pub agy: Option<PathBuf>,
     pub opencode: Option<PathBuf>,
     pub git: Option<PathBuf>,
@@ -762,6 +763,9 @@ pub struct ServeArgs {
     /// Claude executable (tests: a fake)
     #[arg(long, value_name = "PATH")]
     pub claude_bin: Option<PathBuf>,
+    /// Extra argument before Claude's own (repeatable; tests: the fake script)
+    #[arg(long = "claude-bin-arg", value_name = "ARG", allow_hyphen_values = true)]
+    pub claude_bin_arg: Vec<String>,
     /// Antigravity executable (tests: a fake)
     #[arg(long, value_name = "PATH")]
     pub agy_bin: Option<PathBuf>,
@@ -796,10 +800,23 @@ pub struct ServeArgs {
 
 impl ServeArgs {
     /// The flag wins over `LEARNER_PORT`; 0 stays 0 (ephemeral port).
-    pub fn into_options(self, env_port: Option<&str>) -> Result<ServerOptions, String> {
+    pub fn into_options(
+        self,
+        env_port: Option<&str>,
+        env_claude_args: Option<&str>,
+    ) -> Result<ServerOptions, String> {
         let port = match self.port {
             Some(port) => port,
             None => port_from_env(env_port)?,
+        };
+        // Flags win over the env (Node's `claudeBinArgs`: main.ts:170,631).
+        let claude_args = if !self.claude_bin_arg.is_empty() {
+            self.claude_bin_arg
+        } else {
+            match env_claude_args {
+                Some(raw) => parse_claude_args_env(raw)?,
+                None => Vec::new(),
+            }
         };
         let mut options = ServerOptions::new(self.repo_root.unwrap_or_else(data_root::repo_root));
         // `None` here keeps the env/config resolution in `start`.
@@ -814,6 +831,7 @@ impl ServeArgs {
         };
         options.bins = EngineBins {
             claude: self.claude_bin,
+            claude_args,
             agy: self.agy_bin,
             opencode: self.opencode_bin,
             git: self.git_bin,
@@ -824,8 +842,25 @@ impl ServeArgs {
     }
 }
 
+/// `LEARNER_CLAUDE_BIN_ARGS`: JSON array of strings, like Node's `JSON.parse` (main.ts:631).
+fn parse_claude_args_env(raw: &str) -> Result<Vec<String>, String> {
+    let invalid = || format!("LEARNER_CLAUDE_BIN_ARGS non valido: {raw}");
+    let value: Value = serde_json::from_str(raw).map_err(|_| invalid())?;
+    let Some(items) = value.as_array() else {
+        return Err(invalid());
+    };
+    items
+        .iter()
+        .map(|item| item.as_str().map(str::to_string))
+        .collect::<Option<Vec<String>>>()
+        .ok_or_else(invalid)
+}
+
 pub fn serve_cli(args: ServeArgs) -> i32 {
-    let opts = match args.into_options(std::env::var("LEARNER_PORT").ok().as_deref()) {
+    let opts = match args.into_options(
+        std::env::var("LEARNER_PORT").ok().as_deref(),
+        std::env::var("LEARNER_CLAUDE_BIN_ARGS").ok().as_deref(),
+    ) {
         Ok(opts) => opts,
         Err(message) => {
             eprintln!("Error: {message}");
@@ -881,19 +916,19 @@ mod tests {
     #[test]
     fn serve_args_port_flag_wins_over_env() {
         let args = parse_serve_args(&["--port", "0"]).expect("parse --port 0");
-        assert_eq!(args.into_options(Some("5000")).unwrap().port, 0);
+        assert_eq!(args.into_options(Some("5000"), None).unwrap().port, 0);
 
         let args = parse_serve_args(&[]).expect("parse without a port");
-        assert_eq!(args.into_options(Some("5000")).unwrap().port, 5000);
+        assert_eq!(args.into_options(Some("5000"), None).unwrap().port, 5000);
 
         let args = parse_serve_args(&[]).expect("parse without a port");
-        assert_eq!(args.into_options(None).unwrap().port, DEFAULT_PORT);
+        assert_eq!(args.into_options(None, None).unwrap().port, DEFAULT_PORT);
     }
 
     #[test]
     fn serve_args_invalid_env_port_is_an_error() {
         let args = parse_serve_args(&[]).expect("parse without a port");
-        let Err(message) = args.into_options(Some("70000")) else {
+        let Err(message) = args.into_options(Some("70000"), None) else {
             panic!("expected an invalid LEARNER_PORT error");
         };
         assert!(message.starts_with("LEARNER_PORT non valido:"), "{message}");
@@ -910,6 +945,10 @@ mod tests {
             "4321",
             "--claude-bin",
             "c",
+            "--claude-bin-arg",
+            "x",
+            "--claude-bin-arg",
+            "--env-out",
             "--agy-bin",
             "a",
             "--opencode-bin",
@@ -931,7 +970,7 @@ mod tests {
             "--memory-secrets",
         ])
         .expect("parse full flags");
-        let opts = args.into_options(None).expect("into options");
+        let opts = args.into_options(None, None).expect("into options");
 
         assert_eq!(opts.port, 4321);
         assert_eq!(opts.repo_root, PathBuf::from("r"));
@@ -950,6 +989,7 @@ mod tests {
             opts.bins,
             EngineBins {
                 claude: Some(PathBuf::from("c")),
+                claude_args: vec!["x".to_string(), "--env-out".to_string()],
                 agy: Some(PathBuf::from("a")),
                 opencode: Some(PathBuf::from("o")),
                 git: Some(PathBuf::from("g")),
@@ -957,6 +997,43 @@ mod tests {
             }
         );
         assert!(opts.memory_secrets);
+    }
+
+    #[test]
+    fn serve_args_claude_args_fall_back_to_the_env_json() {
+        let args = parse_serve_args(&["--claude-bin", "c"]).expect("parse the bin");
+        let opts = args
+            .into_options(None, Some(r#"["node","fake.mjs","--env-out"]"#))
+            .expect("into options");
+        assert_eq!(opts.bins.claude_args, ["node", "fake.mjs", "--env-out"]);
+
+        let args = parse_serve_args(&[]).expect("parse no flags");
+        let opts = args.into_options(None, Some("[]")).expect("into options");
+        assert!(opts.bins.claude_args.is_empty());
+    }
+
+    #[test]
+    fn serve_args_claude_args_flags_win_over_the_env() {
+        let args = parse_serve_args(&["--claude-bin-arg", "flag"]).expect("parse the bin argument");
+        let opts = args
+            .into_options(None, Some(r#"["from-env"]"#))
+            .expect("into options");
+        assert_eq!(opts.bins.claude_args, ["flag"]);
+    }
+
+    #[test]
+    fn serve_args_invalid_claude_args_env_is_an_error() {
+        for raw in ["not json", r#"{"args":["x"]}"#, r#"["x",1]"#] {
+            let args = parse_serve_args(&[]).expect("parse no flags");
+            let Err(message) = args.into_options(None, Some(raw)) else {
+                panic!("expected an invalid LEARNER_CLAUDE_BIN_ARGS error for {raw}");
+            };
+            assert!(
+                message.starts_with("LEARNER_CLAUDE_BIN_ARGS non valido:"),
+                "{message}"
+            );
+            assert!(message.contains(raw), "{message}");
+        }
     }
 
     #[test]
