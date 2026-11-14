@@ -19,8 +19,9 @@ fn golden_file(route: &str) -> PathBuf {
         .join(format!("{route}.json"))
 }
 
-/// Replays one captured route against a fresh Rust server and compares status and body.
-async fn replay(route: &str) {
+/// Replays one captured route against a fresh Rust server and compares status and body. `ordered`
+/// also compares the serialised bodies, so key order has to match Node's.
+async fn replay(route: &str, ordered: bool) {
     let file = golden_file(route);
     let raw = fs::read_to_string(&file)
         .unwrap_or_else(|error| panic!("read {}: {error}", file.display()));
@@ -107,11 +108,15 @@ async fn replay(route: &str) {
         let expected_body = case["response"]["body"].clone();
 
         if (200..300).contains(&expected_status) {
-            assert_eq!(
-                normalise(body, &repo_root, &data_root),
-                expected_body,
-                "{label}"
-            );
+            let normalised = normalise(body, &repo_root, &data_root);
+            assert_eq!(normalised, expected_body, "{label}");
+            if ordered {
+                assert_eq!(
+                    serde_json::to_string(&normalised).expect("serialise Rust body"),
+                    serde_json::to_string(&expected_body).expect("serialise golden body"),
+                    "{label}: key order"
+                );
+            }
         } else {
             // Error messages differ word for word; only the shape is shared.
             assert!(
@@ -252,20 +257,30 @@ fn is_iso_accepts_only_utc_timestamps() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn settings_match_the_node_golden() {
-    replay("settings").await;
+    replay("settings", false).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn limits_match_the_node_golden() {
-    replay("limits").await;
+    replay("limits", false).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn events_match_the_node_golden() {
-    replay("events").await;
+    replay("events", false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn courses_match_the_node_golden() {
+    replay("courses", true).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn lesson_reading_matches_the_node_golden() {
+    replay("lesson", true).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn graph_matches_the_node_golden() {
-    replay("graph").await;
+    replay("graph", false).await;
 }

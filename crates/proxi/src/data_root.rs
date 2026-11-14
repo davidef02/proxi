@@ -1,6 +1,7 @@
 //! Data folder resolution and the `data` command.
 
 use std::env;
+use std::fs;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
@@ -74,12 +75,15 @@ pub fn default_data_root(home: &Path) -> PathBuf {
     home.join("Documents").join(DATA_DIR_NAME)
 }
 
-/// True when `dir` already holds learner data (`courses/` is a directory, or `curriculum.json` exists).
+/// True when `dir` already holds learner data (courses/ or curriculum.json).
 pub fn has_data(dir: &Path) -> bool {
-    std::fs::metadata(dir.join("courses"))
+    if fs::metadata(dir.join("courses"))
         .map(|meta| meta.is_dir())
         .unwrap_or(false)
-        || dir.join("curriculum.json").exists()
+    {
+        return true;
+    }
+    dir.join("curriculum.json").exists()
 }
 
 pub fn read_data_root_pointer(repo_root: &Path) -> Option<PathBuf> {

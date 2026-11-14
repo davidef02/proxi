@@ -69,37 +69,9 @@ describe("server guards and read routes", { skip }, () => {
     assert.equal((await raw(srv.port, "/mcp/abc", { method: "POST", headers: { "x-learner-token": srv.token } })).status, 404);
   });
 
-  it("serves only courses/ and assets/ under /files", async () => {
-    assert.equal((await raw(srv.port, "/files/courses/demo/MISSION.md")).status, 200);
-    assert.equal((await raw(srv.port, "/files/assets/x.css")).status, 200);
-    for (const p of ["/files/secret.txt", "/files/curriculum.json", "/files/..%2fsecret.txt", "/files/courses/..%2f..%2fsecret.txt", "/files/courses/..%5csecret.txt", "/files/courses/%00"]) {
-      assert.equal((await raw(srv.port, p)).status, 404, p);
-    }
-    for (const p of ["/files/../secret.txt", "/files/%2e%2e/secret.txt"]) {
-      assert.ok(!(await raw(srv.port, p)).body.includes("TOPSECRET"), p);
-    }
-  });
-
-  it("lists courses and the knowledge map", async () => {
-    const courses = JSON.parse((await raw(srv.port, "/api/courses")).body);
-    assert.ok(Array.isArray(courses));
-    assert.equal(courses[0].slug, "demo");
+  it("lists the knowledge map", async () => {
     const map = JSON.parse((await raw(srv.port, "/api/map")).body);
     assert.ok(Array.isArray(map.nodes) && Array.isArray(map.edges));
-  });
-
-  it("serves a lesson's data island under /api/lesson, only for lesson artifacts", async () => {
-    const island = { metadata: { title: "Prima" }, nodes: [{ nodeId: "a", title: "A", content: "x" }] };
-    fs.writeFileSync(path.join(root, "courses", "demo", "lessons", "0001-prima.html"), `<html><script type="application/json" id="lesson-data">${JSON.stringify(island)}</script></html>`);
-    fs.writeFileSync(path.join(root, "courses", "demo", "lessons", "0002-prosa.html"), "<html>prosa</html>");
-    const ok = await raw(srv.port, "/api/lesson?path=courses/demo/lessons/0001-prima.html");
-    assert.equal(ok.status, 200);
-    assert.equal(JSON.parse(ok.body).nodes[0].nodeId, "a");
-    assert.equal((await raw(srv.port, "/api/lesson?path=courses/demo/lessons/0009-no.html")).status, 404);
-    assert.equal((await raw(srv.port, "/api/lesson?path=courses/demo/lessons/0002-prosa.html")).status, 422);
-    for (const p of ["../secret.txt", "courses/demo/MISSION.md", "courses/demo/lessons/..%2f..%2fMISSION.md", "courses/demo/lessons/../../../secret.html", ""]) {
-      assert.equal((await raw(srv.port, "/api/lesson?path=" + p)).status, 400, p);
-    }
   });
 
   it("serves opencode models and manages opencode settings", async () => {

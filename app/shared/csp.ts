@@ -12,3 +12,7 @@ export function withDemoCsp(html: string): string {
   const m = /^\s*<!doctype[^>]*>/i.exec(html);
   return m ? m[0] + meta + html.slice(m[0].length) : meta + html;
 }
+
+/** Sandbox for LLM-authored lesson files served under /files; the Rust twin is
+ *  crates/proxi/src/files.rs::LESSON_FILE_CSP. */
+export const LESSON_FILE_CSP = "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox; frame-ancestors 'self'";
