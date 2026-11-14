@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use std::ffi::OsStr;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Component, Path, PathBuf};
@@ -125,6 +126,58 @@ pub fn start_node(repo: &Path) -> NodeServer {
         if let Some(raw) = line.trim().strip_prefix("PORT ") {
             server.port = raw.trim().parse().expect("PORT line has a number");
             return server;
+        }
+    }
+}
+
+/// The `proxi serve` binary, killed on drop so a failing test never leaks a process.
+pub struct ServeChild {
+    child: Child,
+}
+
+impl Drop for ServeChild {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Spawns the binary with a fixed `PATH` and waits for its URL: the AC3 seam (no Node on PATH).
+pub fn spawn_serve_with_path(args: &[&str], path: &OsStr) -> (ServeChild, String) {
+    let mut child = Command::new(proxi_bin())
+        .args(args)
+        .env("PATH", path)
+        .env_remove("LEARNER_PORT")
+        .env_remove("LEARNER_DATA_ROOT")
+        .env_remove("LEARNER_NPM_BIN")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("spawn proxi serve");
+
+    let stdout = child.stdout.take().expect("stdout pipe");
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            let Ok(line) = line else { break };
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        assert!(
+            !remaining.is_zero(),
+            "proxi serve did not print `Proxi: <url>` in 30 s"
+        );
+        let line = rx
+            .recv_timeout(remaining)
+            .expect("proxi serve exited before printing the URL");
+        if let Some(url) = line.trim().strip_prefix("Proxi: ") {
+            return (ServeChild { child }, url.to_string());
         }
     }
 }

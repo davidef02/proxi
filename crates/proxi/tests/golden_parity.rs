@@ -284,3 +284,8 @@ async fn lesson_reading_matches_the_node_golden() {
 async fn graph_matches_the_node_golden() {
     replay("graph", false).await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn exercises_match_the_node_golden() {
+    replay("exercises", true).await;
+}
