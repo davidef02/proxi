@@ -71,7 +71,7 @@ the binary uses only HTTP/SSE and is listed in `RUST_PORTED` of `scripts/test-ru
 | Card generation, TSV export, Anki sync | `extensions/anki-sync.ts` |
 | AnkiConnect calls for the board | `extensions/anki-client.ts` (`anki-sync.ts` still has its own copy) |
 | Data folder resolution | `extensions/data-root.ts` |
-| Sync (engine, providers, secrets, service) | `app/server/sync/` (Node, until the cutover); Rust: `crates/proxi/src/sync/` (GitHub; secrets in the OS keychain) |
+| Sync (engine, providers, secrets, service) | `app/server/sync/` (Node, until the cutover); Rust: `crates/proxi/src/sync/` (GitHub and Google Drive; secrets in the OS keychain) |
 | The app (server, web UI, desktop, engine prompts) | `app/`: read [`app/README.md`](../../app/README.md) first |
 
 Server data modules (`courses.ts`, `knowledge.ts`, `lesson.ts`, `exercises.ts`, `graph/store.ts`) take the

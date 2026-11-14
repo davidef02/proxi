@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { driveBody, installFakeDrive, type FakeDriveSeed } from "./fake-drive.ts";
 import type { FakeGithubSeed } from "./fake-github.ts";
 import { installFakeGithub } from "./fake-github.ts";
 import { FakeHttpServer, type RecordedRequest } from "./fake-servers.ts";
@@ -30,6 +31,7 @@ export interface GoldenFile {
   /** Raw file contents written verbatim under the data folder (lessons, JSONL ledgers): the replay's input, never normalised. */
   dataSeed?: Record<string, string>;
   github?: FakeGithubSeed;
+  drive?: FakeDriveSeed;
   cases: GoldenCase[];
 }
 
@@ -83,6 +85,8 @@ export interface Script {
   dataSeed?: Record<string, string>;
   /** Start a fake GitHub with this seed and point the server at it. */
   github?: FakeGithubSeed;
+  /** Start a fake Google Drive with this seed and point the server at it. */
+  drive?: FakeDriveSeed;
   cases: ScriptedCase[];
 }
 
@@ -97,24 +101,106 @@ function parseBody(text: string): unknown {
   }
 }
 
-/** Non-GET requests with their JSON body, the commit hostname swapped for `<host>` so the fixture is portable. */
-function remoteRequests(requests: RecordedRequest[]): { method: string; path: string; body: unknown }[] {
+/** Non-GET requests with their body, mapped by the fake that received them. */
+function remoteRequests(
+  requests: RecordedRequest[],
+  body: (r: RecordedRequest) => unknown,
+): { method: string; path: string; body: unknown }[] {
   return requests
     .filter((r) => r.method !== "GET")
-    .map((r) => {
-      const body = parseBody(r.body);
-      if (body && typeof body === "object" && "message" in body) {
-        const { message } = body as { message?: unknown };
-        if (typeof message === "string" && message.endsWith(HOST_SUFFIX)) {
-          (body as { message: string }).message = message.slice(0, -HOST_SUFFIX.length) + "(<host>)";
-        }
-      }
-      return { method: r.method, path: r.path, body };
-    });
+    .map((r) => ({ method: r.method, path: r.path, body: body(r) }));
 }
+
+/** A JSON body, with the commit hostname swapped for `<host>` so the fixture is portable. */
+function githubBody(r: RecordedRequest): unknown {
+  const body = parseBody(r.body);
+  if (body && typeof body === "object" && "message" in body) {
+    const { message } = body as { message?: unknown };
+    if (typeof message === "string" && message.endsWith(HOST_SUFFIX)) {
+      (body as { message: string }).message = message.slice(0, -HOST_SUFFIX.length) + "(<host>)";
+    }
+  }
+  return body;
+}
+
+type RemoteLog = { server: FakeHttpServer; body: (r: RecordedRequest) => unknown };
 
 // Low entropy and no `sk` prefix: neither gitleaks nor the JSON fixtures may read it as a key (L12/L13).
 const KEY = "x".repeat(16) + "abcd";
+
+/** A lesson artifact as the engine writes it: the document as one JSON data island. */
+function islandHtml(doc: unknown): string {
+  return `<html><body><script type="application/json" id="lesson-data">${JSON.stringify(doc)}</script></body></html>`;
+}
+
+/** A minimal FullLessonDocument with `count` one-line nodes. */
+function lessonDoc(num: number, slug: string, title: string, count: number, dag = "", topic = title) {
+  return {
+    metadata: { lessonNumber: num, topic, title, slug, dateCreated: "", dateModified: "", version: "1", initialDag: dag },
+    nodes: Array.from({ length: count }, (_, i) => ({
+      nodeId: `n${i + 1}`,
+      title: `Nodo ${i + 1}`,
+      tier: "axiom",
+      content: "x",
+      math: [],
+    })),
+  };
+}
+
+// 13 lines, one of them entity-escaped: the reader truncates the snippet and unescapes it.
+const pythonLines = Array.from({ length: 13 }, (_, i) => `l${i + 1}`);
+pythonLines[2] = "l3 &lt;";
+
+const secondaDoc = {
+  metadata: {
+    lessonNumber: 4,
+    topic: "Seconda",
+    title: "",
+    slug: "seconda",
+    dateCreated: "",
+    dateModified: "",
+    version: "1",
+    initialDag: "graph TD\nN1[a]",
+  },
+  nodes: [
+    { nodeId: "n1", title: "Nodo 1", tier: "axiom", content: "", summary: "  Fatto uno  ", math: ["a^2"] },
+    {
+      nodeId: "n2",
+      title: "Nodo 2",
+      tier: "axiom",
+      content: "",
+      ankiParams: { targetFact: "Fatto due" },
+      steps: [{ stepId: "s1", content: "<p>x</p>", math: ["b"], codeBlocks: [{ language: "js", code: "1" }] }],
+    },
+    { nodeId: "n3", title: "Nodo 3", tier: "axiom", content: "<p><strong>La verità da tenere senza caveat.</strong> Il punto fermo.</p>" },
+    {
+      nodeId: "n4",
+      title: "Nodo 4",
+      tier: "axiom",
+      content: `<p>Prima frase. Seconda frase! Terza.</p><pre><code class="language-python">${pythonLines.join("\n")}</code></pre>`,
+    },
+    { nodeId: "n5", title: "Nodo 5", tier: "axiom", content: "Testo\n```rust\nfn x() {}\n```" },
+    { nodeId: "n6", tier: "axiom", content: "" },
+  ],
+};
+
+const primaDoc = {
+  metadata: {
+    lessonNumber: 1,
+    topic: "Prima",
+    title: "Prima",
+    slug: "prima",
+    dateCreated: "",
+    dateModified: "",
+    version: "1",
+    initialDag: "",
+  },
+  nodes: [{ nodeId: "n1", title: "Nodo 1", tier: "axiom", content: "<p>La <b>verità</b> pesa </b> poco.</p>", math: [] }],
+  weight: "__float__",
+  zeta: "sconosciuta",
+};
+
+const primaReferenceDoc = { title: "Sintesi prima", slug: "prima", nodes: [], formulas: [], misconceptions: [] };
 
 const GRAPH_AT = "2026-01-01T00:00:00.000Z";
 
@@ -160,6 +246,95 @@ export const SCRIPTS: Script[] = [
     seed: {},
     cases: [
       { name: "limits-off", request: { method: "POST", path: "/api/settings", body: { provider: "opencode" } }, awaitEvent: true },
+    ],
+  },
+  {
+    route: "courses",
+    seed: {},
+    dataSeed: {
+      "curriculum.json": JSON.stringify({
+        chapters: [
+          {
+            title: "Algebra",
+            slug: "algebra",
+            lessons: [
+              { title: "Vettori nel piano", slug: "vettori-nel-piano", plannedNodes: 3 },
+              { title: "Prodotto scalare", slug: "prodotto-scalare" },
+              { title: "Matrici", slug: "matrici", plannedNodes: 2 },
+            ],
+          },
+          { title: "Lezioni singole", slug: "lezioni-singole", lessons: [] },
+          { title: "Vuoto", slug: "vuoto", lessons: [] },
+        ],
+      }),
+      "courses/algebra/MISSION.md": "# Algebra\n\n## Why\n\nCapire **vettori** e `matrici` con [esempi](http://x) concreti.\n\nSecondo paragrafo.\n",
+      "courses/algebra/exercises/package.json": "{}",
+      "courses/algebra/lessons/0001-vettori-nel-piano.html": islandHtml(
+        lessonDoc(1, "vettori-nel-piano", "Vettori", 1, "graph TD\nN1[a] --> N2[b]\nN2 --> N3[c]"),
+      ),
+      "courses/algebra/reference/vettori-nel-piano.html": "<html></html>",
+      "courses/algebra/lessons/0002-prodotto-scalare.html": islandHtml(
+        lessonDoc(2, "prodotto-scalare", "Prodotto scalare", 2, "graph TD\nN1[a] --> N2[b]\nN2 --> N3[c]"),
+      ),
+      // Marker-less record: closes 0002 by number.
+      "courses/algebra/learning-records/0002-chiusa.md": "# chiusa\n",
+      "courses/algebra/lessons/0003-extra.html": islandHtml(lessonDoc(3, "extra", "Extra", 1)),
+      "courses/algebra/lessons/0004-prosa.html": "<html>solo prosa</html>",
+      "courses/algebra/lessons/0005-rotta.html": '<script type="application/json" id="lesson-data">{nope</script>',
+      "courses/sciolto/MISSION.md": "# Sciolto\n\nIntro senza sezione Why: " + "parola ".repeat(50) + "\n",
+      "courses/sciolto/lessons/0001-solo.html": islandHtml(lessonDoc(1, "solo", "", 1, "", "Solo topic")),
+      "courses/lezioni-singole/lessons/0001-fourier.html": islandHtml(lessonDoc(1, "fourier", "Fourier", 1)),
+      "courses/lezioni-singole/reference/fourier.html": "<html></html>",
+      "courses/lezioni-singole/learning-records/0001-a.md": "# a\n\n<!-- lesson: fourier -->\n",
+      "courses/lezioni-singole/lessons/0002-entropia.html": islandHtml(lessonDoc(2, "entropia", "Entropia", 0, "graph TD\nN1[a] --> N2[b]")),
+    },
+    cases: [
+      { name: "courses", request: { method: "GET", path: "/api/courses" } },
+      { name: "standalone", request: { method: "GET", path: "/api/standalone-lessons" } },
+      { name: "courses-again", request: { method: "GET", path: "/api/courses" } },
+    ],
+  },
+  {
+    route: "lesson",
+    seed: {},
+    dataSeed: {
+      // JSON.stringify would print 1: the island writes the float literally, so a replay must normalise it to 1.
+      "courses/demo/lessons/0001-prima.html": `<html><body><script type="application/json" id="lesson-data">${JSON.stringify(primaDoc).replace('"__float__"', "1.0")}</script></body></html>`,
+      "courses/demo/lessons/0002-prosa.html": "<html>solo prosa</html>",
+      "courses/demo/lessons/0003-rotta.html": '<script type="application/json" id="lesson-data">{nope</script>',
+      "courses/demo/reference/prima.html": [
+        "<!doctype html>",
+        "<html><head>",
+        "<title> Sintesi prima </title>",
+        "<style>a{}</style>",
+        "<link rel=x>",
+        "</head><body>",
+        "<script>1</script>",
+        "<main><h2>Ciao</h2></main>",
+        `<script type="application/json" id="reference-data">${JSON.stringify(primaReferenceDoc)}</script>`,
+        "</body></html>",
+      ].join("\n"),
+      "courses/demo/lessons/0004-seconda.html": islandHtml(secondaDoc),
+      "courses/demo/learning-records/0004-x.md":
+        "# x\r\n\r\n## Evidence\r\n\r\n- Confonde il Nodo 2 con il 3\r\n* Slip sul node abc-1\r\n\r\n<!-- lesson: seconda -->\r\n",
+      "courses/demo/lessons/0005-terza.html": islandHtml(lessonDoc(5, "terza", "Terza", 1)),
+      "courses/demo/learning-records/0005-y.md": "# y\n\n## Evidence\n\nTutto bene. Un errore sul segno. Fine\n\n## Next\n",
+    },
+    cases: [
+      { name: "lesson-ok", request: { method: "GET", path: "/api/lesson?path=courses/demo/lessons/0001-prima.html" } },
+      { name: "lesson-missing", request: { method: "GET", path: "/api/lesson?path=courses/demo/lessons/0099-no.html" } },
+      { name: "lesson-prose", request: { method: "GET", path: "/api/lesson?path=courses/demo/lessons/0002-prosa.html" } },
+      { name: "lesson-malformed", request: { method: "GET", path: "/api/lesson?path=courses/demo/lessons/0003-rotta.html" } },
+      { name: "lesson-bad-path", request: { method: "GET", path: "/api/lesson?path=courses/demo/MISSION.md" } },
+      { name: "doc-reference", request: { method: "GET", path: "/api/doc?path=courses/demo/reference/prima.html" } },
+      { name: "doc-lesson", request: { method: "GET", path: "/api/doc?path=courses/demo/lessons/0002-prosa.html" } },
+      { name: "doc-missing", request: { method: "GET", path: "/api/doc?path=courses/demo/reference/nope.html" } },
+      { name: "doc-bad-path", request: { method: "GET", path: "/api/doc?path=courses/demo/exercises/x.html" } },
+      { name: "reference-island", request: { method: "GET", path: "/api/reference?path=courses/demo/reference/prima.html" } },
+      { name: "reference-fallback", request: { method: "GET", path: "/api/reference?path=courses/demo/reference/seconda.html" } },
+      { name: "reference-fallback-sentences", request: { method: "GET", path: "/api/reference?path=courses/demo/reference/terza.html" } },
+      { name: "reference-missing", request: { method: "GET", path: "/api/reference?path=courses/demo/reference/nope.html" } },
+      { name: "reference-lesson-path", request: { method: "GET", path: "/api/reference?path=courses/demo/lessons/0004-seconda.html" } },
     ],
   },
   {
@@ -271,6 +446,41 @@ export const SCRIPTS: Script[] = [
       { name: "disconnect", request: { method: "POST", path: "/api/sync/disconnect", body: { provider: "github" } } },
     ],
   },
+  {
+    route: "sync-gdrive",
+    // "local" on purpose: the 1 s start pass of startAuto then does nothing, and POST /api/settings emits no event.
+    seed: {
+      ".learner/settings.json": { syncProvider: "local" },
+      ".learner/secrets.json": {
+        v: 1,
+        encrypted: false,
+        data: JSON.stringify({
+          gdrive: { refreshToken: "rt-1", folderId: "folder-1", email: "tester@example.com" },
+        }),
+      },
+    },
+    dataSeed: {
+      "curriculum.json": "{\"chapters\":[]}\n",
+      "courses/algebra/notes.md": "# algebra\n",
+      "courses/algebra/lessons/0001-intro.html": "<p>locale</p>\n",
+      "graph/nodes.jsonl": "{\"id\":\"n1\"}\n",
+    },
+    drive: {
+      folderId: "folder-1",
+      files: {
+        "courses/algebra/lessons/0001-intro.html": "<p>remoto</p>\n",
+        "decks/algebra.tsv": "q\ta\n",
+      },
+    },
+    cases: [
+      { name: "status-connected", request: { method: "GET", path: "/api/sync" } },
+      { name: "provider-gdrive", request: { method: "POST", path: "/api/settings", body: { syncProvider: "gdrive" } } },
+      { name: "run-first", request: { method: "POST", path: "/api/sync/run", body: {} }, remote: true },
+      { name: "run-again", request: { method: "POST", path: "/api/sync/run", body: {} }, remote: true },
+      // No remote log: a late auto pass could add a token request.
+      { name: "disconnect", request: { method: "POST", path: "/api/sync/disconnect", body: { provider: "gdrive" } } },
+    ],
+  },
 ];
 
 /** Writes `<outDir>/<route>.json` for every scripted route and returns the file paths. Always Node mode. */
@@ -305,22 +515,32 @@ export async function captureScript(script: Script, mode: ServerMode = "node"): 
   }
   const roots = { repoRoot: rootVariants(repo), dataRoot: rootVariants(data) };
   const github = script.github;
+  const drive = script.drive;
   const fake = github ? new FakeHttpServer("github") : undefined;
+  const google = drive ? new FakeHttpServer("google") : undefined;
   try {
     if (fake && github) {
       await fake.start();
       installFakeGithub(fake, github);
     }
-    const server = await startServer({ repoRoot: repo, dataRoot: data, mode, fakes: fake ? { github: fake.url } : undefined });
+    if (google && drive) {
+      await google.start();
+      installFakeDrive(google, drive);
+    }
+    const fakes = { ...(fake ? { github: fake.url } : {}), ...(google ? { google: google.url } : {}) };
+    const server = await startServer({ repoRoot: repo, dataRoot: data, mode, fakes: fake || google ? fakes : undefined });
+    const remote: RemoteLog | undefined =
+      fake && github ? { server: fake, body: githubBody } : google && drive ? { server: google, body: driveBody } : undefined;
     try {
       const cases: GoldenCase[] = [];
-      for (const c of script.cases) cases.push(await captureCase(server.url, c, roots, fake));
+      for (const c of script.cases) cases.push(await captureCase(server.url, c, roots, remote));
       // The seed and the data files are the replay's input, so they stay raw; only the captured output is normalised.
       return {
         route: script.route,
         seed: script.seed,
         ...(script.dataSeed ? { dataSeed: script.dataSeed } : {}),
         ...(github ? { github } : {}),
+        ...(drive ? { drive } : {}),
         cases,
       };
     } finally {
@@ -328,13 +548,14 @@ export async function captureScript(script: Script, mode: ServerMode = "node"): 
     }
   } finally {
     await fake?.close();
+    await google?.close();
     fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
   }
 }
 
-async function captureCase(base: string, c: ScriptedCase, roots: Roots, fake?: FakeHttpServer): Promise<GoldenCase> {
+async function captureCase(base: string, c: ScriptedCase, roots: Roots, remote?: RemoteLog): Promise<GoldenCase> {
   const events = c.awaitEvent ? openEvents(base) : undefined;
-  const seen = c.remote && fake ? fake.requests.length : 0;
+  const seen = c.remote && remote ? remote.server.requests.length : 0;
   try {
     if (events) await events.ready;
     const res = await send(base, c.request);
@@ -343,7 +564,7 @@ async function captureCase(base: string, c: ScriptedCase, roots: Roots, fake?: F
     // Node stamps the event with the current time: normalise it like any other field (app/server/main.ts:293).
     if (events) out.firstEvent = normalise(await events.first(5000), roots);
     // Read the log only after the response: the run has committed by then.
-    if (c.remote && fake) out.remote = normalise(remoteRequests(fake.requests.slice(seen)), roots) as GoldenCase["remote"];
+    if (c.remote && remote) out.remote = normalise(remoteRequests(remote.server.requests.slice(seen), remote.body), roots) as GoldenCase["remote"];
     return out;
   } finally {
     events?.close();

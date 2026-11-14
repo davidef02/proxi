@@ -4,11 +4,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, describe, it } from "node:test";
+import { GOOGLE_CLIENT_ID } from "../server/sync/gdrive.ts";
 import { captureGolden, GOLDEN_DIR, ISO_RE, normalise, rootVariants } from "./capture-golden.ts";
 import { captureLessonGolden, LESSON_GOLDEN } from "./capture-lesson-golden.ts";
 import { REPO_ROOT } from "./harness.ts";
 
-const ROUTES = ["settings", "limits", "events", "graph", "sync"];
+const ROUTES = ["settings", "limits", "events", "courses", "lesson", "graph", "sync", "sync-gdrive"];
 const ALL_GOLDENS = [...ROUTES, LESSON_GOLDEN];
 
 const dirs: string[] = [];
@@ -96,6 +97,25 @@ it("events golden holds the normalised first event", () => {
   assert.deepStrictEqual(file.cases[0]?.firstEvent, { type: "limits", limits: { at: "<iso>" } });
 });
 
+it("courses golden holds the provisioned standalone exclusion and the lesson echo", () => {
+  const courses = JSON.parse(goldenText("courses")) as {
+    cases: Array<{ name: string; response: { body: Array<{ slug: string }> } }>;
+  };
+  const list = courses.cases.find((c) => c.name === "courses");
+  assert.deepStrictEqual(
+    list?.response.body.map((c) => c.slug),
+    ["algebra", "vuoto", "sciolto"],
+  );
+
+  const lesson = JSON.parse(goldenText("lesson")) as {
+    cases: Array<{ name: string; response: { body: Record<string, unknown> } }>;
+  };
+  const ok = lesson.cases.find((c) => c.name === "lesson-ok");
+  assert.ok(ok, "missing lesson-ok case");
+  assert.ok("zeta" in ok.response.body, "the lesson echo keeps the unknown island key");
+  assert.equal(ok.response.body.weight, 1);
+});
+
 it("graph golden holds the graph event and JS-shaped positions", () => {
   interface GraphBody {
     nodes: Array<{ id: string }>;
@@ -136,6 +156,35 @@ it("sync golden records one commit with the normalised host", () => {
   const commit = first.remote.find((r) => r.path === `${base}/git/commits`);
   assert.equal((commit?.body as { message?: string } | undefined)?.message, "sync: 3 sent, 0 deleted (<host>)");
   assert.deepEqual(again?.remote, []);
+});
+
+it("sync-gdrive golden uploads the local files and refreshes the token", () => {
+  interface Remote {
+    method: string;
+    path: string;
+    body: unknown;
+  }
+  interface UploadBody {
+    meta: { modifiedTime?: string };
+    data: string;
+  }
+  const file = JSON.parse(goldenText("sync-gdrive")) as { cases: Array<{ name: string; remote?: Remote[] }> };
+  const first = file.cases.find((c) => c.name === "run-first");
+  assert.ok(first?.remote, "run-first has no remote log");
+  const token = first.remote.find((r) => r.path === "/token");
+  assert.deepEqual(token?.body, { client_id: GOOGLE_CLIENT_ID, refresh_token: "rt-1", grant_type: "refresh_token" });
+  const uploads = first.remote.filter((r) => r.path.startsWith("/upload/drive/v3/files"));
+  assert.ok(uploads.length > 0, "no upload recorded");
+  for (const upload of uploads) {
+    const body = upload.body as UploadBody;
+    assert.equal(body.meta.modifiedTime, "<iso>");
+    assert.equal(typeof body.data, "string"); // the boundary is parsed away, the bytes stay utf8
+  }
+  // A pass builds a fresh provider, so it refreshes the token even when it writes nothing.
+  const again = file.cases.find((c) => c.name === "run-again");
+  assert.ok(again?.remote?.some((r) => r.path === "/token"), "run-again has no token refresh");
+  assert.equal(again?.remote?.some((r) => r.path.startsWith("/upload/")), false);
+  for (const c of file.cases) if (c.remote) assert.doesNotMatch(JSON.stringify(c.remote), /boundary/);
 });
 
 it("golden fixtures hold no raw timestamps", () => {
