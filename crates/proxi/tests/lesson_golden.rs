@@ -372,8 +372,39 @@ fn golden_covers_every_acceptance_case() {
         "list-missing",
         "usage-unknown",
         "usage-none",
+        "append-for-reference",
+        "rebuild-lesson",
+        "rebuild-slug-default-dir",
+        "rebuild-dir-slug",
+        "rebuild-out-dir-wins",
+        "rebuild-missing-lesson",
+        "rebuild-slug-miss",
+        "rebuild-no-target",
+        "rebuild-corrupted",
+        "compile-ref-default",
+        "reference-alias-record",
+        "compile-ref-base-dir-record-fallback",
+        "compile-ref-empty-lesson",
+        "compile-ref-missing-lesson",
+        "compile-ref-slug-miss",
+        "compile-ref-corrupted",
+        "rebuild-base-dir-slug",
+        "rebuild-file-alias",
     ];
     assert_eq!(names, expected, "golden case names");
+
+    let compile_ref = cases
+        .iter()
+        .find(|case| case["name"].as_str() == Some("compile-ref-default"))
+        .expect("compile-ref-default case");
+    assert!(
+        compile_ref["files"]
+            .as_object()
+            .expect("compile-ref-default files")
+            .contains_key("reference/il-modello-osi.html"),
+        "compile-ref-default must write the reference file: {}",
+        compile_ref["files"]
+    );
 
     let init = cases
         .iter()
