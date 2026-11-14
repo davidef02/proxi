@@ -1,5 +1,6 @@
 //! JavaScript semantics the Node port depends on: JSON parsing, number shapes, string and regex helpers.
 
+use std::cmp::Ordering;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -116,6 +117,58 @@ pub fn find_ci(hay: &str, needle: &str, from: usize) -> Option<usize> {
             .zip(needle)
             .all(|(a, b)| a.eq_ignore_ascii_case(b))
     })
+}
+
+/// `String.prototype.localeCompare` with the default locale: an ASCII approximation of ICU root
+/// collation. Punctuation sorts before digits, digits before letters; case breaks ties, lowercase
+/// first. Non-ASCII characters sort after `z` by their lowercase code point; full ICU is out of scope.
+pub fn locale_compare(a: &str, b: &str) -> Ordering {
+    let mut left = a.chars();
+    let mut right = b.chars();
+    loop {
+        match (left.next(), right.next()) {
+            (None, None) => break,
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (Some(x), Some(y)) => match primary_key(x).cmp(&primary_key(y)) {
+                Ordering::Equal => {}
+                other => return other,
+            },
+        }
+    }
+    for (x, y) in a.chars().zip(b.chars()) {
+        match case_rank(x).cmp(&case_rank(y)) {
+            Ordering::Equal => {}
+            other => return other,
+        }
+    }
+    a.chars().cmp(b.chars())
+}
+
+/// ICU order for ASCII punctuation/symbols (`localeCompare` puts `_` first, `$` last).
+const PUNCTUATION_ORDER: &str = "_-,;:!?.'\"()[]{}@*/\\&#%`^+<=>|~$";
+
+fn primary_key(c: char) -> (i8, u32) {
+    if c.is_whitespace() {
+        return (-1, 0);
+    }
+    if c.is_ascii_punctuation() {
+        let index = PUNCTUATION_ORDER.find(c).expect("every ASCII punctuation is listed");
+        return (0, index as u32);
+    }
+    if c.is_ascii_digit() {
+        return (1, c as u32 - '0' as u32);
+    }
+    let lower = c.to_lowercase().next().unwrap_or(c);
+    (2, lower as u32)
+}
+
+fn case_rank(c: char) -> u8 {
+    if c.is_uppercase() {
+        1
+    } else {
+        0
+    }
 }
 
 /// JS truthiness: only null, false, 0, NaN and "" are falsy (empty arrays and objects are true).
@@ -483,6 +536,24 @@ mod tests {
         assert_eq!(find_ci("xx<MAIN>", "<main", 3), None);
         assert_eq!(find_ci("abc", "abc", 4), None);
         assert_eq!(find_ci("abc", "", 1), Some(1));
+    }
+
+    #[test]
+    fn locale_compare_approximates_icu_root_order() {
+        let mut names = ["Esercizio.vue", "app.js"];
+        names.sort_by(|a, b| locale_compare(a, b));
+        assert_eq!(names, ["app.js", "Esercizio.vue"]);
+
+        assert_eq!(locale_compare("a", "B"), std::cmp::Ordering::Less);
+        assert_eq!(locale_compare("a", "A"), std::cmp::Ordering::Less);
+        assert_eq!(locale_compare("_x", "1"), std::cmp::Ordering::Less);
+        assert_eq!(locale_compare("1", "a"), std::cmp::Ordering::Less);
+
+        let mut names = ["zz-v", "02-a", "01-b", "01-a"];
+        names.sort_by(|a, b| locale_compare(a, b));
+        assert_eq!(names, ["01-a", "01-b", "02-a", "zz-v"]);
+
+        assert_eq!(locale_compare("a-b", "a.b"), std::cmp::Ordering::Less);
     }
 
     #[test]

@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use std::ffi::OsStr;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Component, Path, PathBuf};
@@ -8,6 +9,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use serde_json::Value;
+
+use proxi::server::ServerOptions;
 
 pub mod anki_seed;
 pub mod cli_golden;
@@ -52,6 +57,80 @@ pub fn temp_dir(tag: &str) -> TempDir {
     ));
     fs::create_dir_all(&path).expect("create temp dir");
     TempDir(path)
+}
+
+/// A temp repo and data folder; the files on disk are the fixture.
+pub struct Fixture {
+    pub root: TempDir,
+    pub repo: PathBuf,
+    pub data: PathBuf,
+}
+
+impl Fixture {
+    pub fn new(tag: &str) -> Self {
+        let root = temp_dir(tag);
+        let repo = root.0.join("repo");
+        let data = root.0.join("data");
+        fs::create_dir_all(&repo).expect("create repo");
+        fs::create_dir_all(&data).expect("create data");
+        Self { root, repo, data }
+    }
+
+    /// No build: a read outside /files answers MISSING_UI, so a /files 200 proves the exemption.
+    pub fn options(&self) -> ServerOptions {
+        let mut options = ServerOptions::new(self.repo.clone());
+        options.data_root = Some(self.data.clone());
+        options.dist_dir = Some(self.root.0.join("missing-dist"));
+        options
+    }
+
+    /// Long enough that only a request's own event can appear in the stream.
+    pub fn options_with_keep_alive(&self, keep_alive: Duration) -> ServerOptions {
+        let mut options = self.options();
+        options.keep_alive = keep_alive;
+        options
+    }
+
+    pub fn data_file(&self, rel: &str, content: &str) {
+        write(&self.data, rel, content);
+    }
+
+    pub fn repo_file(&self, rel: &str, content: &str) {
+        write(&self.repo, rel, content);
+    }
+}
+
+/// Writes `content` to `root/rel`, creating the parent directories.
+pub fn write(root: &Path, rel: &str, content: &str) {
+    let path = root.join(rel);
+    fs::create_dir_all(path.parent().expect("a parent")).expect("create parent dir");
+    fs::write(path, content).expect("write fixture file");
+}
+
+/// Waits for the first complete `data:` block of an SSE stream.
+pub async fn first_event(stream: &mut reqwest::Response) -> Value {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let mut buffer = String::new();
+    loop {
+        if let Some(index) = buffer.find("\n\n") {
+            let block = buffer[..index].to_string();
+            let data: String = block
+                .lines()
+                .filter_map(|line| line.strip_prefix("data:"))
+                .map(str::trim)
+                .collect();
+            assert!(!data.is_empty(), "first SSE block has no data: {block:?}");
+            return serde_json::from_str(&data)
+                .unwrap_or_else(|error| panic!("SSE event is not JSON ({error}): {data}"));
+        }
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let chunk = tokio::time::timeout(remaining, stream.chunk())
+            .await
+            .unwrap_or_else(|_| panic!("no SSE event within 10 s; got {buffer:?}"))
+            .expect("read SSE chunk")
+            .expect("SSE stream closed before the first event");
+        buffer.push_str(&String::from_utf8_lossy(&chunk));
+    }
 }
 
 pub fn require_node() {
@@ -211,6 +290,58 @@ pub fn start_node(repo: &Path) -> NodeServer {
         if let Some(raw) = line.trim().strip_prefix("PORT ") {
             server.port = raw.trim().parse().expect("PORT line has a number");
             return server;
+        }
+    }
+}
+
+/// The `proxi serve` binary, killed on drop so a failing test never leaks a process.
+pub struct ServeChild {
+    child: Child,
+}
+
+impl Drop for ServeChild {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Spawns the binary with a fixed `PATH` and waits for its URL: the AC3 seam (no Node on PATH).
+pub fn spawn_serve_with_path(args: &[&str], path: &OsStr) -> (ServeChild, String) {
+    let mut child = Command::new(proxi_bin())
+        .args(args)
+        .env("PATH", path)
+        .env_remove("LEARNER_PORT")
+        .env_remove("LEARNER_DATA_ROOT")
+        .env_remove("LEARNER_NPM_BIN")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("spawn proxi serve");
+
+    let stdout = child.stdout.take().expect("stdout pipe");
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            let Ok(line) = line else { break };
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        assert!(
+            !remaining.is_zero(),
+            "proxi serve did not print `Proxi: <url>` in 30 s"
+        );
+        let line = rx
+            .recv_timeout(remaining)
+            .expect("proxi serve exited before printing the URL");
+        if let Some(url) = line.trim().strip_prefix("Proxi: ") {
+            return (ServeChild { child }, url.to_string());
         }
     }
 }

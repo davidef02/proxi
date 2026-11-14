@@ -82,7 +82,7 @@ time budget: the app fetches the model in the background after the restart.
 | `LEARNER_CLAUDE_BIN` / `LEARNER_CLAUDE_BIN_ARGS` | `claude` / `[]` | tests point these at `app/test/fake-claude.mjs` |
 | `LEARNER_AGY_BIN` / `LEARNER_AGY_BIN_ARGS` | `agy` / `[]` | engine binary for provider `agy`; tests point these at `app/test/fake-agy.mjs` |
 | `LEARNER_ADD_DIRS` | `[<parent of repo>]` | extra read-only dirs for the teacher (work repos) |
-| `LEARNER_NPM_BIN` | `npm` | tests: a node script run instead of `npm install` when an exercise's dependencies are missing |
+| `LEARNER_NPM_BIN` | `npm` | tests: a node script run instead of `npm install` when an exercise's dependencies are missing; the Rust binary also takes `--npm-bin <exe>` (an npm-like executable, wins over the env) and needs `node` on PATH to run exercises |
 | `LEARNER_ANKI_URL` | `http://127.0.0.1:8765` | AnkiConnect |
 | `LEARNER_NO_OPEN` | unset | `1` = don't open the browser |
 
