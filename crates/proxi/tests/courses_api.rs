@@ -418,6 +418,19 @@ async fn lesson_route_statuses_and_messages() {
     let message = parsed["error"].as_str().expect("a string error");
     assert!(message.starts_with("Malformed #lesson-data island:"), "{message}");
 
+    // A directory named like a lesson: Node's readFileSync gives EISDIR -> 500.
+    fs::create_dir_all(fixture.data.join("courses/demo/lessons/0004-dir.html"))
+        .expect("directory lesson");
+    let dir = get_text(
+        &client,
+        &server,
+        "/api/lesson?path=courses/demo/lessons/0004-dir.html",
+    )
+    .await;
+    assert_eq!(dir.0, StatusCode::INTERNAL_SERVER_ERROR);
+    let parsed: Value = serde_json::from_str(&dir.1).expect("directory JSON error");
+    assert!(parsed["error"].is_string(), "{}", dir.1);
+
     for path in [
         "../secret.txt",
         "courses/demo/MISSION.md",
@@ -597,6 +610,19 @@ async fn files_bypass_missing_ui_and_harden_headers() {
         head,
         "{body}"
     );
+
+    // The route answers HEAD too: same headers, no body.
+    let head_response = client
+        .head(url(&server, "/files/courses/demo/lessons/0001-a.html"))
+        .send()
+        .await
+        .expect("lesson file HEAD");
+    assert_eq!(head_response.status(), StatusCode::OK);
+    assert_eq!(
+        header(&head_response, CONTENT_SECURITY_POLICY).as_deref(),
+        Some(proxi::files::LESSON_FILE_CSP)
+    );
+    assert_eq!(body_text(head_response).await, "");
 
     let css = client
         .get(url(&server, "/files/assets/x.css"))
