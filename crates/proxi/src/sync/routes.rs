@@ -3,12 +3,12 @@
 use std::time::Duration;
 
 use axum::body::Bytes;
-use axum::extract::State;
-use axum::http::StatusCode;
+use axum::extract::{RawQuery, State};
+use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::events::EventBus;
 use crate::sync::secrets::{GDRIVE_ACCOUNT, GITHUB_ACCOUNT};
@@ -20,6 +20,8 @@ const START_DELAY: Duration = Duration::from_secs(1);
 const CHANGE_DELAY: Duration = Duration::from_secs(5);
 
 const PROVIDER_OPTIONS: &str = "provider: Invalid option: expected one of \"github\"|\"gdrive\"";
+const CHOICE_OPTIONS: &str =
+    "choice: Invalid option: expected one of \"local\"|\"remote\"|\"both\"";
 
 /// Same routes as `mountSync` in `service.ts`, plus a 404 fallback on each path.
 pub fn router<S: Clone + Send + Sync + 'static>(svc: SyncService) -> Router<S> {
@@ -35,8 +37,33 @@ pub fn router<S: Clone + Send + Sync + 'static>(svc: SyncService) -> Router<S> {
             post(post_github_cancel).fallback(not_found),
         )
         .route(
+            "/api/sync/google/start",
+            post(post_google_start).fallback(not_found),
+        )
+        .route(
+            "/oauth/google/callback",
+            get(get_google_callback).fallback(not_found),
+        )
+        .route(
             "/api/sync/disconnect",
             post(post_disconnect).fallback(not_found),
+        )
+        .route(
+            "/api/sync/data-root",
+            post(post_data_root).fallback(not_found),
+        )
+        .route(
+            "/api/sync/conflicts",
+            get(get_conflicts).fallback(not_found),
+        )
+        .route(
+            "/api/sync/conflicts/resolve",
+            post(post_resolve_conflict).fallback(not_found),
+        )
+        .route("/api/sync/trash", get(get_trash).fallback(not_found))
+        .route(
+            "/api/sync/trash/restore",
+            post(post_restore).fallback(not_found),
         )
         .with_state(svc)
 }
@@ -103,6 +130,62 @@ fn invalid_object(value: &Value) -> Response {
     ))
 }
 
+/// `z.string().min(min).max(max)`: counts UTF-16 code units, like JS `.length`.
+fn zod_string(
+    object: &Map<String, Value>,
+    key: &str,
+    min: usize,
+    max: usize,
+) -> Result<String, String> {
+    let text = match object.get(key) {
+        Some(Value::String(text)) => text,
+        Some(other) => {
+            return Err(format!(
+                "{key}: Invalid input: expected string, received {}",
+                js_type(other)
+            ));
+        }
+        None => {
+            return Err(format!(
+                "{key}: Invalid input: expected string, received undefined"
+            ));
+        }
+    };
+    let length = text.encode_utf16().count();
+    if length < min {
+        return Err(format!(
+            "{key}: Too small: expected string to have >={min} characters"
+        ));
+    }
+    if length > max {
+        return Err(format!(
+            "{key}: Too big: expected string to have <={max} characters"
+        ));
+    }
+    Ok(text.clone())
+}
+
+/// `z.enum(["local", "remote", "both"])` reports a missing, non-string or unknown value the same way.
+fn zod_choice(object: &Map<String, Value>) -> Result<String, String> {
+    match object.get("choice") {
+        Some(Value::String(choice)) if matches!(choice.as_str(), "local" | "remote" | "both") => {
+            Ok(choice.clone())
+        }
+        _ => Err(CHOICE_OPTIONS.to_string()),
+    }
+}
+
+/// Keeps a field's error in schema order while the other fields are still validated.
+fn checked<T>(result: Result<T, String>, issues: &mut Vec<String>) -> Option<T> {
+    match result {
+        Ok(value) => Some(value),
+        Err(issue) => {
+            issues.push(issue);
+            None
+        }
+    }
+}
+
 async fn post_run(State(svc): State<SyncService>, body: Bytes) -> Response {
     let value = request_json(&body);
     let Some(object) = value.as_object() else {
@@ -138,6 +221,40 @@ async fn post_github_cancel(State(svc): State<SyncService>) -> Response {
     }
 }
 
+async fn post_google_start(State(svc): State<SyncService>) -> Response {
+    match blocking(move || svc.google_start()).await {
+        Ok(Ok(url)) => Json(json!({ "url": url })).into_response(),
+        Ok(Err(message)) => bad_request(&message),
+        Err(response) => response,
+    }
+}
+
+/// The loopback redirect: Hono's `c.req.query` reads the first occurrence of each name.
+async fn get_google_callback(State(svc): State<SyncService>, RawQuery(raw): RawQuery) -> Response {
+    let query = raw.unwrap_or_default();
+    let pairs: Vec<(String, String)> = form_urlencoded::parse(query.as_bytes())
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    let first = |name: &str| {
+        pairs
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.clone())
+    };
+    let (code, state, error) = (first("code"), first("state"), first("error"));
+    match blocking(move || svc.google_callback(code.as_deref(), state.as_deref(), error.as_deref()))
+        .await
+    {
+        Ok((status, html)) => (
+            StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            [(header::CONTENT_TYPE, "text/html; charset=UTF-8")],
+            html,
+        )
+            .into_response(),
+        Err(response) => response,
+    }
+}
+
 async fn post_disconnect(State(svc): State<SyncService>, body: Bytes) -> Response {
     let value = request_json(&body);
     let Some(object) = value.as_object() else {
@@ -152,6 +269,73 @@ async fn post_disconnect(State(svc): State<SyncService>, body: Bytes) -> Respons
     match blocking(move || svc.disconnect(&provider)).await {
         Ok(Ok(status)) => status_response(status),
         Ok(Err(message)) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &message),
+        Err(response) => response,
+    }
+}
+
+async fn post_data_root(State(svc): State<SyncService>, body: Bytes) -> Response {
+    let value = request_json(&body);
+    let Some(object) = value.as_object() else {
+        return invalid_object(&value);
+    };
+    let dir = match zod_string(object, "dataRoot", 1, 500) {
+        Ok(dir) => dir,
+        Err(issue) => return bad_request(&issue),
+    };
+    match blocking(move || svc.set_data_root(&dir)).await {
+        Ok(Ok(status)) => status_response(status),
+        Ok(Err((code, message))) => json_error(
+            StatusCode::from_u16(code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            &message,
+        ),
+        Err(response) => response,
+    }
+}
+
+async fn get_conflicts(State(svc): State<SyncService>) -> Response {
+    match blocking(move || svc.conflicts()).await {
+        Ok(entries) => Json(entries).into_response(),
+        Err(response) => response,
+    }
+}
+
+async fn post_resolve_conflict(State(svc): State<SyncService>, body: Bytes) -> Response {
+    let value = request_json(&body);
+    let Some(object) = value.as_object() else {
+        return invalid_object(&value);
+    };
+    let mut issues = Vec::new();
+    let id = checked(zod_string(object, "id", 1, 1000), &mut issues);
+    let choice = checked(zod_choice(object), &mut issues);
+    let (Some(id), Some(choice)) = (id, choice) else {
+        return bad_request(&issues.join("; "));
+    };
+    match blocking(move || svc.resolve_conflict(&id, &choice)).await {
+        Ok(Ok(())) => Json(json!({ "ok": true })).into_response(),
+        Ok(Err(message)) => bad_request(&message),
+        Err(response) => response,
+    }
+}
+
+async fn get_trash(State(svc): State<SyncService>) -> Response {
+    match blocking(move || svc.trash()).await {
+        Ok(entries) => Json(entries).into_response(),
+        Err(response) => response,
+    }
+}
+
+async fn post_restore(State(svc): State<SyncService>, body: Bytes) -> Response {
+    let value = request_json(&body);
+    let Some(object) = value.as_object() else {
+        return invalid_object(&value);
+    };
+    let id = match zod_string(object, "id", 1, 1000) {
+        Ok(id) => id,
+        Err(issue) => return bad_request(&issue),
+    };
+    match blocking(move || svc.restore(&id)).await {
+        Ok(Ok(())) => Json(json!({ "ok": true })).into_response(),
+        Ok(Err(message)) => bad_request(&message),
         Err(response) => response,
     }
 }
