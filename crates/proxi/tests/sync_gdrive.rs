@@ -780,6 +780,22 @@ fn drive_errors_use_the_node_message() {
 }
 
 #[test]
+fn a_non_json_200_from_drive_is_an_error_not_an_empty_listing() {
+    let fake = FakeHttp::start(|request| {
+        if request.method == "POST" && request.path == "/token" {
+            Reply::json(200, json!({ "access_token": "at-1", "expires_in": 3600 }))
+        } else {
+            Reply::text(200, "<html>")
+        }
+    });
+    let deps = GoogleDeps::new(GoogleEndpoints::from_override(Some(&fake.url)));
+    let mut provider = GdriveProvider::new(deps, GoogleAuth::new("cid", "", "rt-1"), "folder-1");
+    // Node's `await res.json()` throws: an empty listing here would trash the local files.
+    let error = provider.list().unwrap_err();
+    assert!(matches!(error, ProviderError::Other(_)), "{error:?}");
+}
+
+#[test]
 fn modified_time_truncates_fractional_ms() {
     let d = FakeDrive::start(FakeDriveOpts::default());
     let folder = d.add_folder("app", None);

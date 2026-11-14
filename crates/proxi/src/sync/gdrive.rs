@@ -453,9 +453,10 @@ fn drive_call(
     Ok(response)
 }
 
+/// Node's `await res.json()`: an unparsable 2xx body is an error, never an empty answer.
 fn response_json(response: reqwest::blocking::Response) -> Result<Value, String> {
     let text = response.text().map_err(|e| e.to_string())?;
-    Ok(serde_json::from_str(&text).unwrap_or(Value::Null))
+    serde_json::from_str(&text).map_err(|error| error.to_string())
 }
 
 pub fn ensure_folder(d: &GoogleDeps, auth: &mut GoogleAuth) -> Result<String, String> {

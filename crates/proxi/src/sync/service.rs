@@ -16,7 +16,9 @@ use serde_json::json;
 
 use crate::data_root::{data_root_problem, has_data, resolve_path, write_data_root_pointer};
 use crate::events::{iso_from_millis, iso_now};
-use crate::protocol::{GdriveStatus, GithubPending, GithubStatus, SyncLast, SyncStatus};
+use crate::protocol::{
+    GdriveStatus, GithubPending, GithubStatus, LearnerSettings, SyncLast, SyncStatus,
+};
 use crate::settings::{read_settings, write_settings};
 use crate::sync::engine::{
     SyncPassOptions, manifest_path, now_ms, read_manifest, sync_pass, write_manifest,
@@ -115,6 +117,21 @@ pub struct SyncService {
 /// JS strings in a query are truthy only when non-empty.
 fn non_empty(value: Option<&str>) -> Option<&str> {
     value.filter(|text| !text.is_empty())
+}
+
+/// Google client credentials: the settings override, else the embedded defaults.
+fn google_client(settings: &LearnerSettings) -> (String, String) {
+    let client_id = if settings.google_client_id.is_empty() {
+        GOOGLE_CLIENT_ID.to_string()
+    } else {
+        settings.google_client_id.clone()
+    };
+    let client_secret = if settings.google_client_secret.is_empty() {
+        GOOGLE_CLIENT_SECRET.to_string()
+    } else {
+        settings.google_client_secret.clone()
+    };
+    (client_id, client_secret)
 }
 
 /// Node's loopback page; `text` is escaped like `text.replace(/[&<>"']/g, ...)`.
@@ -366,19 +383,10 @@ impl SyncService {
                 )),
                 ProviderSecret::Gdrive(secret) => {
                     let settings = read_settings(&cfg.repo_root);
-                    let client_id = if settings.google_client_id.is_empty() {
-                        GOOGLE_CLIENT_ID
-                    } else {
-                        settings.google_client_id.as_str()
-                    };
-                    let client_secret = if settings.google_client_secret.is_empty() {
-                        GOOGLE_CLIENT_SECRET
-                    } else {
-                        settings.google_client_secret.as_str()
-                    };
+                    let (client_id, client_secret) = google_client(&settings);
                     Box::new(GdriveProvider::new(
                         GoogleDeps::new(cfg.google.clone()),
-                        GoogleAuth::new(client_id, client_secret, &secret.refresh_token),
+                        GoogleAuth::new(&client_id, &client_secret, &secret.refresh_token),
                         &secret.folder_id,
                     ))
                 }
@@ -546,17 +554,13 @@ impl SyncService {
     pub fn google_start(&self) -> Result<String, String> {
         let cfg = &self.inner.cfg;
         let settings = read_settings(&cfg.repo_root);
-        let client_id = if settings.google_client_id.is_empty() {
-            GOOGLE_CLIENT_ID
-        } else {
-            settings.google_client_id.as_str()
-        };
+        let (client_id, _) = google_client(&settings);
         let redirect_uri = format!("http://127.0.0.1:{}/oauth/google/callback", cfg.port);
         let state = random_hex(16);
         let pair = pkce_pair();
         let url = auth_url(
             &cfg.google,
-            client_id,
+            &client_id,
             &redirect_uri,
             &pair.challenge,
             &state,
@@ -607,16 +611,7 @@ impl SyncService {
         let cfg = &self.inner.cfg;
         let outcome = (|| -> Result<(), String> {
             let settings = read_settings(&cfg.repo_root);
-            let client_id = if settings.google_client_id.is_empty() {
-                GOOGLE_CLIENT_ID.to_string()
-            } else {
-                settings.google_client_id.clone()
-            };
-            let client_secret = if settings.google_client_secret.is_empty() {
-                GOOGLE_CLIENT_SECRET.to_string()
-            } else {
-                settings.google_client_secret.clone()
-            };
+            let (client_id, client_secret) = google_client(&settings);
             let deps = GoogleDeps::new(cfg.google.clone());
             let tokens = exchange_code(
                 &deps,
