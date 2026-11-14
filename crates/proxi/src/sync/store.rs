@@ -1,9 +1,14 @@
 //! Trash and conflict bookkeeping under `.learner/` (port of `app/server/sync/store.ts`).
 
 use std::fs;
-use std::path::Path;
+use std::io;
+use std::path::{Path, PathBuf};
 
+use serde::Serialize;
+
+use crate::data_root::resolve_path;
 use crate::events::iso_from_millis;
+use crate::sync::engine::{TMP, in_sync_set};
 
 pub const TRASH_DAYS: i64 = 30;
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
@@ -76,7 +81,8 @@ pub fn purge_trash(trash_dir: &Path, now_ms: i64) {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Serialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct TrashEntry {
     pub id: String,
     pub rel: String,
@@ -121,7 +127,8 @@ pub fn list_trash(trash_dir: &Path) -> Vec<TrashEntry> {
     out
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Serialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct ConflictEntry {
     pub id: String,
     pub rel: String,
@@ -164,4 +171,116 @@ pub fn list_conflicts(conflicts_dir: &Path) -> Vec<ConflictEntry> {
     }
     out.sort_by(|a, b| b.at.cmp(&a.at).then_with(|| a.id.cmp(&b.id)));
     out
+}
+
+/// Is `child` strictly inside `parent`? Both resolved first, like Node's `path.resolve`.
+fn inside(parent: &Path, child: &Path) -> bool {
+    let parent = resolve_path(parent);
+    let child = resolve_path(child);
+    child != parent && child.starts_with(&parent)
+}
+
+fn move_file(from: &Path, to: &Path) -> io::Result<()> {
+    if let Some(dir) = to.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    if fs::rename(from, to).is_err() {
+        fs::copy(from, to)?;
+        fs::remove_file(from)?;
+    }
+    Ok(())
+}
+
+/// Removes `dir` and its empty ancestors, stopping at (and never removing) `stop`.
+fn prune_up(dir: &Path, stop: &Path) {
+    let stop = resolve_path(stop);
+    let mut dir = resolve_path(dir);
+    while dir != stop && dir.starts_with(&stop) {
+        if fs::remove_dir(&dir).is_err() {
+            return;
+        }
+        match dir.parent() {
+            Some(parent) => dir = parent.to_path_buf(),
+            None => return,
+        }
+    }
+}
+
+/// `<ms>/<rel>`, the shape `list_trash` hands out.
+fn parse_trash_id(id: &str) -> Option<&str> {
+    let (stamp, rel) = id.split_once('/')?;
+    if !is_digits(stamp) || rel.is_empty() {
+        return None;
+    }
+    Some(rel)
+}
+
+/// Moves a trashed file back into dataRoot. Refuses to overwrite.
+pub fn restore_trash(trash_dir: &Path, data_root: &Path, id: &str) -> Result<(), String> {
+    let Some(rel) = parse_trash_id(id) else {
+        return Err("Identificatore non valido.".to_string());
+    };
+    if !in_sync_set(rel) {
+        return Err("Identificatore non valido.".to_string());
+    }
+    let src = trash_dir.join(id);
+    if !inside(trash_dir, &src) {
+        return Err("Identificatore non valido.".to_string());
+    }
+    let dst = data_root.join(rel);
+    if dst.exists() {
+        return Err(format!("Esiste già un file con questo nome: {rel}"));
+    }
+    move_file(&src, &dst).map_err(|e| e.to_string())?;
+    if let Some(dir) = src.parent() {
+        prune_up(dir, trash_dir);
+    }
+    Ok(())
+}
+
+/// Settles one conflict copy: `local`/`remote` keep the chosen side (the copy is written back into dataRoot when it
+/// is that side, pushed by the next sync), `both` moves the copy to `<dataRoot>/conflitti/<id>`, outside SYNC_ROOTS.
+pub fn resolve_conflict(
+    conflicts_dir: &Path,
+    data_root: &Path,
+    id: &str,
+    choice: &str,
+) -> Result<(), String> {
+    if choice != "local" && choice != "remote" && choice != "both" {
+        return Err("Scelta non valida.".to_string());
+    }
+    let Some((rel, side, _)) = parse_conflict(id) else {
+        return Err("Conflitto non valido.".to_string());
+    };
+    let copy = conflicts_dir.join(id);
+    if !inside(conflicts_dir, &copy) {
+        return Err("Conflitto non valido.".to_string());
+    }
+    if !in_sync_set(&rel) {
+        return Err("Conflitto non valido.".to_string());
+    }
+    if !copy.exists() {
+        return Err("Conflitto non trovato.".to_string());
+    }
+    if choice == "both" {
+        move_file(&copy, &data_root.join("conflitti").join(id)).map_err(|e| e.to_string())?;
+    } else if (choice == "local" && side == "locale") || (choice == "remote" && side == "remoto") {
+        let dst = data_root.join(&rel);
+        if let Some(dir) = dst.parent() {
+            fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        // `dst + TMP`: a sibling that a rename can put in place atomically.
+        let mut os = dst.clone().into_os_string();
+        os.push(TMP);
+        let tmp = PathBuf::from(os);
+        fs::copy(&copy, &tmp).map_err(|e| e.to_string())?;
+        fs::rename(&tmp, &dst).map_err(|e| e.to_string())?;
+        fs::remove_file(&copy).map_err(|e| e.to_string())?;
+    } else {
+        fs::remove_file(&copy).map_err(|e| e.to_string())?;
+    }
+    if let Some(dir) = copy.parent() {
+        prune_up(dir, conflicts_dir);
+    }
+    Ok(())
 }

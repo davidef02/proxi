@@ -191,7 +191,7 @@ fn handle(state: &Arc<Mutex<GhState>>, request: &Recorded) -> Reply {
         return Reply {
             status: 403,
             headers: vec![("retry-after".to_string(), "1".to_string())],
-            body: "{}".to_string(),
+            body: b"{}".to_vec(),
         };
     }
     if let Some(reset) = st.rate_limit_reset_once.take() {
@@ -201,7 +201,7 @@ fn handle(state: &Arc<Mutex<GhState>>, request: &Recorded) -> Reply {
                 ("x-ratelimit-remaining".to_string(), "0".to_string()),
                 ("x-ratelimit-reset".to_string(), reset.to_string()),
             ],
-            body: "{}".to_string(),
+            body: b"{}".to_vec(),
         };
     }
 

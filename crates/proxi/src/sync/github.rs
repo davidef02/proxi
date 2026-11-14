@@ -410,7 +410,7 @@ pub fn setup_repo(d: &GithubDeps, token: &str) -> Result<RepoInfo, String> {
 
 /// `Date.parse` for the two shapes GitHub sends: `2026-03-01T10:00:00Z` and a fractional second.
 /// Milliseconds since the Unix epoch, `NaN` when the text is not such a timestamp.
-fn parse_rfc3339_ms(text: &str) -> f64 {
+pub(crate) fn parse_rfc3339_ms(text: &str) -> f64 {
     let Some((date, time)) = text.split_once('T') else {
         return f64::NAN;
     };

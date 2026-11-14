@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
 
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crate::data_root::has_data;
 use crate::events::{iso_from_millis, iso_now};
@@ -162,11 +162,7 @@ impl SyncService {
         };
         let gdrive = GdriveStatus {
             connected: gdrive_connected,
-            email: gdrive_secret
-                .as_ref()
-                .and_then(|value| value.get("email"))
-                .and_then(Value::as_str)
-                .map(str::to_string),
+            email: gdrive_secret.as_ref().and_then(|s| s.email.clone()),
             pending: false,
             error: gdrive_secrets_error,
         };

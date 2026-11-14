@@ -956,7 +956,7 @@ fn a_plaintext_legacy_file_is_migrated_at_service_start() {
     let gdrive = get_gdrive(store.as_ref())
         .expect("gdrive")
         .expect("gdrive migrated");
-    assert_eq!(gdrive["email"], json!("a@example.com"));
+    assert_eq!(gdrive.email.as_deref(), Some("a@example.com"));
     assert!(!file.exists());
 }
 
