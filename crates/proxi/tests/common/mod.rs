@@ -10,6 +10,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub mod anki_seed;
+pub mod cli_golden;
 pub mod fake_anki;
 pub mod fake_hf;
 

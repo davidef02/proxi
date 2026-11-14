@@ -172,7 +172,7 @@ export const CASES: LessonCase[] = [
 ];
 
 /** Every file under `data` as `<dir>/<name>` → text, board files at the root excluded. */
-function snapshot(data: string): Map<string, string> {
+export function snapshot(data: string): Map<string, string> {
   const out = new Map<string, string>();
   const walk = (dir: string, prefix: string): void => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {

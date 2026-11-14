@@ -1,3 +1,4 @@
+pub mod anki;
 pub mod anki_client;
 pub mod anki_import;
 pub mod anki_status;
