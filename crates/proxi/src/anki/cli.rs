@@ -10,6 +10,7 @@ use crate::lesson::js::stringify_pretty;
 
 use super::cards::{self, ExportOptions};
 use super::ping;
+use super::sync;
 
 /// Verbatim from `extensions/anki-sync.ts:813-838`: A5 keeps Node's text even when it names tsx.
 pub const HELP: &str = concat!(
@@ -95,14 +96,7 @@ pub fn run_in_cwd(
             },
         },
         "export" => run_export(args, stdin, out, err),
-        // The agents keep using `npm run anki` for sync until #17 ports it.
-        "sync" => {
-            let _ = writeln!(
-                err,
-                "Error: sync is not ported to proxi yet: run npm run anki -- sync"
-            );
-            1
-        }
+        "sync" => run_sync(args, stdin, out, err),
         unknown => {
             let _ = writeln!(err, "Unknown command: {unknown}");
             1
@@ -146,6 +140,72 @@ fn run_export(
                 "✅ Exported {} cards to {}",
                 result.card_count, result.file_path
             );
+            0
+        }
+        Err(message) => {
+            let _ = writeln!(err, "Fatal error: {message}");
+            1
+        }
+    }
+}
+
+fn run_sync(
+    args: &[String],
+    stdin: &mut dyn Read,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> i32 {
+    // Node reads the payload before it looks at anything else: bad JSON fails first.
+    let payload = match read_payload(args, stdin) {
+        Ok(payload) => payload,
+        Err(message) => {
+            let _ = writeln!(err, "Fatal error: SyntaxError: {message}");
+            return 1;
+        }
+    };
+    let payload = payload.as_ref();
+
+    let options = sync::SyncOptions {
+        cards: payload.and_then(|value| value.get("cards")).cloned(),
+        nodes: payload.and_then(|value| value.get("nodes")).cloned(),
+        lesson_path: get_flag(args, "--lesson").map(str::to_string),
+        topic: flag_string(args, "--topic")
+            .or_else(|| payload.and_then(|value| value.get("topic")).cloned()),
+        slug: flag_string(args, "--slug")
+            .or_else(|| payload.and_then(|value| value.get("slug")).cloned()),
+        deck_name: flag_string(args, "--deck")
+            .or_else(|| payload.and_then(|value| value.get("deck")).cloned()),
+        anki_url: get_flag(args, "--anki-url").map(str::to_string),
+        timeout: get_flag(args, "--timeout").map(str::to_string),
+        allow_duplicates: has_flag(args, "--allow-duplicates"),
+        base_dir: get_flag(args, "--base-dir").map(str::to_string),
+    };
+
+    match sync::sync_to_anki_connect(&options, err) {
+        Ok(result) => {
+            if result.synced {
+                let _ = writeln!(
+                    out,
+                    "✅ Synced {} cards to deck '{}' ({} duplicates skipped)",
+                    result.added_count, result.deck_name, result.duplicate_count
+                );
+                if let Some(path) = result.tsv_export_path.as_deref() {
+                    let _ = writeln!(out, "📁 Backup TSV saved to {path}");
+                }
+            } else {
+                let _ = writeln!(
+                    out,
+                    "⚠️ Sync incomplete: {}",
+                    result
+                        .warning
+                        .as_deref()
+                        .or(result.error.as_deref())
+                        .unwrap_or_default()
+                );
+                if let Some(path) = result.tsv_export_path.as_deref() {
+                    let _ = writeln!(out, "📁 Deck TSV exported to {path}");
+                }
+            }
             0
         }
         Err(message) => {
