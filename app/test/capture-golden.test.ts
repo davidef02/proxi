@@ -7,7 +7,7 @@ import { after, describe, it } from "node:test";
 import { captureGolden, GOLDEN_DIR, ISO_RE, normalise, rootVariants } from "./capture-golden.ts";
 import { REPO_ROOT } from "./harness.ts";
 
-const ROUTES = ["settings", "limits", "events"];
+const ROUTES = ["settings", "limits", "events", "courses", "lesson"];
 
 const dirs: string[] = [];
 function tempDir(prefix: string): string {
@@ -91,6 +91,25 @@ it("events golden holds the normalised first event", () => {
   const file = JSON.parse(goldenText("events")) as { cases: Array<{ name: string; firstEvent?: unknown }> };
   assert.equal(file.cases[0]?.name, "limits-off");
   assert.deepStrictEqual(file.cases[0]?.firstEvent, { type: "limits", limits: { at: "<iso>" } });
+});
+
+it("courses golden holds the provisioned standalone exclusion and the lesson echo", () => {
+  const courses = JSON.parse(goldenText("courses")) as {
+    cases: Array<{ name: string; response: { body: Array<{ slug: string }> } }>;
+  };
+  const list = courses.cases.find((c) => c.name === "courses");
+  assert.deepStrictEqual(
+    list?.response.body.map((c) => c.slug),
+    ["algebra", "vuoto", "sciolto"],
+  );
+
+  const lesson = JSON.parse(goldenText("lesson")) as {
+    cases: Array<{ name: string; response: { body: Record<string, unknown> } }>;
+  };
+  const ok = lesson.cases.find((c) => c.name === "lesson-ok");
+  assert.ok(ok, "missing lesson-ok case");
+  assert.ok("zeta" in ok.response.body, "the lesson echo keeps the unknown island key");
+  assert.equal(ok.response.body.weight, 1);
 });
 
 it("golden fixtures hold no raw timestamps", () => {

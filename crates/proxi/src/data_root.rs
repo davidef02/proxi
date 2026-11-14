@@ -1,6 +1,7 @@
 //! Data folder resolution and the `data` command.
 
 use std::env;
+use std::fs;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
@@ -67,6 +68,17 @@ pub fn is_node_absolute(p: &Path) -> bool {
 
 pub fn default_data_root(home: &Path) -> PathBuf {
     home.join("Documents").join(DATA_DIR_NAME)
+}
+
+/// True when `dir` already holds learner data (courses/ or curriculum.json).
+pub fn has_data(dir: &Path) -> bool {
+    if fs::metadata(dir.join("courses"))
+        .map(|meta| meta.is_dir())
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    dir.join("curriculum.json").exists()
 }
 
 pub fn read_data_root_pointer(repo_root: &Path) -> Option<PathBuf> {
@@ -433,6 +445,33 @@ mod tests {
             default_data_root(&t.0),
             t.0.join("Documents").join("proxi-data")
         );
+    }
+
+    #[test]
+    fn has_data_false_on_empty_dir() {
+        let t = temp_dir("has-data-empty");
+        assert!(!has_data(&t.0));
+    }
+
+    #[test]
+    fn has_data_true_with_courses_dir() {
+        let t = temp_dir("has-data-courses");
+        fs::create_dir_all(t.0.join("courses")).expect("create courses");
+        assert!(has_data(&t.0));
+    }
+
+    #[test]
+    fn has_data_false_when_courses_is_a_file() {
+        let t = temp_dir("has-data-courses-file");
+        fs::write(t.0.join("courses"), "").expect("write courses file");
+        assert!(!has_data(&t.0));
+    }
+
+    #[test]
+    fn has_data_true_with_curriculum_only() {
+        let t = temp_dir("has-data-curriculum");
+        fs::write(t.0.join("curriculum.json"), "{}").expect("write curriculum");
+        assert!(has_data(&t.0));
     }
 
     #[test]

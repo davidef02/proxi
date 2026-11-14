@@ -1,5 +1,10 @@
+pub mod courses;
 pub mod data_root;
 pub mod events;
+pub mod files;
+pub mod html_lesson;
+pub mod js;
+pub mod lesson;
 pub mod limits;
 pub mod protocol;
 pub mod server;
