@@ -258,9 +258,11 @@ it("anki golden pins ping, LaTeX and the data/stdin parity", () => {
     byName("export-stdin-nodes").files["decks/from-stdin.tsv"],
   );
   // The JSON-escaped `\(\frac`: the LaTeX pass ran, and the extract dump keeps V8's number printing.
+  // normaliseStream turns every backslash into `/`, so the pinned escape reads `/(/frac` in the golden.
+  const latex = JSON.stringify("\\(\\frac").slice(1, -1).split("\\\\").join("/").split("\\").join("/");
   const extract = byName("extract-course").stdout;
   assert.ok(extract.includes('"vue-js-vetrine"'));
   assert.ok(extract.includes('"tier::undefined"'));
-  assert.ok(extract.includes(JSON.stringify("\\(\\frac").slice(1, -1)));
+  assert.ok(extract.includes(latex));
   assert.ok(extract.includes('"lessonNumber": 1,'));
 });

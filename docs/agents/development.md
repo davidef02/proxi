@@ -53,9 +53,8 @@ runs it after changing teach/plan prompts.
 `npm run golden:capture` is manual, never in CI: it rewrites the HTTP goldens in
 `crates/proxi/tests/fixtures/golden/*.json` from the Node server, and `lesson-cli.json` / `anki-cli.json`
 from the Node `lesson` and `anki` CLIs (`app/test/capture-lesson-golden.ts`, `app/test/capture-anki-golden.ts`).
-Run it only when a ported route's Node behaviour
-changes on purpose, before the cutover, and commit the fixtures with that change;
-`app/test/capture-golden.test.ts` fails until you do.
+Run it only when a ported route's Node behaviour changes on purpose, before the cutover, and commit the
+fixtures with that change; `app/test/capture-golden.test.ts` fails until you do.
 
 Server tests start servers through `startServer` in `app/test/harness.ts` (`PROXI_TEST_SERVER=node|binary`,
 default node) with the external services faked by `app/test/fake-servers.ts`; a test file that runs against
