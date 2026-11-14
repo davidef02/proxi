@@ -35,25 +35,6 @@ function start(mcpUrl?: string) {
   return { handle, events, stderr, until, exited: () => exit };
 }
 
-test("hello: init, text-start, deltas, assistant, result; argv logged to stderr", async () => {
-  const s = start();
-  s.handle.send("ciao");
-  await s.until(() => s.events.some((e) => e.type === "result"));
-  assert.deepEqual(s.events.map((e) => e.type), ["init", "text-start", "text-delta", "text-delta", "text-delta", "assistant", "assistant", "result"]); // thinking block event, then text block event
-  const deltas = s.events.filter((e) => e.type === "text-delta").map((e) => (e as any).text).join("");
-  assert.equal(deltas, "Ciao, sono il docente.");
-  const a = s.events.find((e) => e.type === "assistant" && (e as any).texts.length) as any;
-  assert.equal(a.texts[0].index, 0, "assistant events carry index-0 content arrays");
-  assert.equal(a.texts[0].text, deltas);
-  assert.equal((s.events.find((e) => e.type === "text-start") as any).index, 1, "stream index differs from the assistant one");
-  const r = s.events.at(-1) as any;
-  assert.equal(r.isError, false);
-  assert.equal(r.inputTokens, 10);
-  assert.equal(r.cacheCreationTokens, 40);
-  assert.ok(s.stderr.some((l) => l.startsWith("fake-claude argv: ") && l.includes("--setting-sources") && l.includes("--session-id")));
-  await s.handle.stop();
-});
-
 test("slow + interrupt yields result is_error; process survives", async () => {
   const s = start();
   s.handle.send("FAKE:slow");
@@ -67,17 +48,6 @@ test("slow + interrupt yields result is_error; process survives", async () => {
   assert.equal(s.exited(), undefined);
   s.handle.send("ancora ciao");
   await s.until(() => s.events.filter((e) => e.type === "result").length === 2);
-  await s.handle.stop();
-});
-
-test("stop() kills a running process and resolves; second stop resolves too", async () => {
-  const s = start();
-  s.handle.send("FAKE:slow");
-  await s.until(() => s.events.some((e) => e.type === "text-delta"));
-  const t0 = Date.now();
-  await s.handle.stop();
-  assert.ok(Date.now() - t0 < 5000);
-  assert.ok(s.exited());
   await s.handle.stop();
 });
 

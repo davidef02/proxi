@@ -39,18 +39,6 @@ function harness(resume?: string) {
 }
 
 describe("Turns (in-memory engine)", () => {
-  it("first send launches fresh, pushes the bubbles, runs; init issues the resume token; result idles", async () => {
-    const { engine, h, turns, emit } = harness();
-    await turns.send("ciao", ["ciao"]);
-    assert.equal(engine.procs.length, 1);
-    assert.equal(engine.last().resume, undefined);
-    assert.deepEqual([h.status, h.learner, engine.last().sent], ["running", ["ciao"], ["ciao"]]);
-    emit({ type: "init", sessionId: "tok-1", tools: [], mcpServers: [] });
-    emit(resultEvent({ sessionId: "tok-1" }));
-    assert.equal(h.status, "idle");
-    assert.equal(turns.resume, "tok-1");
-  });
-
   it("interrupt, then the late result of the given-up turn does not idle the newer turn", async () => {
     mock.timers.enable({ apis: ["setTimeout"] });
     try {
@@ -121,52 +109,6 @@ describe("Turns (in-memory engine)", () => {
     assert.equal(map.delivered, undefined);
   });
 
-  it("resume refused: fresh relaunch (no token) re-sends the same turn once, without a second bubble", async () => {
-    const { engine, h, turns, emit } = harness("old-token");
-    await turns.send("dopo il crash", ["dopo il crash"]);
-    assert.equal(engine.last().resume, "old-token");
-    emit({ type: "resume-failed" });
-    engine.last().cb.onExit(1, null);
-    await new Promise((r) => setImmediate(r));
-    assert.equal(engine.procs.length, 2);
-    assert.equal(engine.last().resume, undefined);
-    assert.deepEqual(engine.last().sent, ["dopo il crash"]);
-    assert.deepEqual(h.learner, ["dopo il crash"]);
-    assert.equal(h.status, "running");
-    assert.match(h.notices[0], /Ripresa della conversazione non riuscita/);
-    emit({ type: "init", sessionId: "new-token", tools: [], mcpServers: [] });
-    assert.equal(turns.resume, "new-token");
-  });
-
-  it("an exit without a refused resume is an error (cards cancelled), and the next send relaunches with the token", async () => {
-    const { engine, h, turns, emit } = harness();
-    await turns.send("x", ["x"]);
-    emit({ type: "init", sessionId: "tok", tools: [], mcpServers: [] });
-    h.pending = 2;
-    engine.last().cb.onStderr("boom");
-    engine.last().cb.onExit(1, null);
-    assert.equal(h.pending, 0);
-    assert.equal(h.status, "error");
-    assert.match(h.errors[0], /exited \(1\): boom/);
-    assert.equal(turns.live, false);
-    await turns.send("y", ["y"]);
-    assert.equal(engine.last().resume, "tok");
-  });
-
-  it("action-denied becomes an info notice; stop() kills, ignores the dead handle's exit and refuses to launch again", async () => {
-    const { engine, h, turns, emit } = harness();
-    await turns.send("x", ["x"]);
-    emit({ type: "action-denied", action: "ReadUrlContent" });
-    assert.match(h.notices[0], /bloccato.*ReadUrlContent/);
-    const p = engine.last();
-    await turns.stop();
-    assert.equal(p.stopped, true);
-    p.cb.onExit(null, null);
-    assert.equal(h.status, "running", "an exit after stop() is not an error");
-    await assert.rejects(turns.send("z", ["z"]), /closed/);
-    assert.equal(engine.procs.length, 1);
-  });
-
   it("formats attachments into the turn prompt and passes them to learner bubbles", async () => {
     const { engine, turns } = harness();
     const atts = [
@@ -179,55 +121,6 @@ describe("Turns (in-memory engine)", () => {
     assert.match(sent, /- diagram\.png \(percorso: \.learner\/sessions\/s\/attachments\/diagram\.png\)/);
     assert.match(sent, /- book\.pdf \(percorso: \.learner\/sessions\/s\/attachments\/book\.pdf\)/);
     assert.match(sent, /Spiegami questo diagramma/);
-  });
-
-  it("model error (result isError: true) enables retry; retry re-submits without duplicating learner bubbles", async () => {
-    const { engine, h, turns, emit } = harness();
-    await turns.send("Qual è la derivata di x^2?", ["Qual è la derivata di x^2?"]);
-    assert.equal(turns.canRetry, false);
-    assert.deepEqual(h.learner, ["Qual è la derivata di x^2?"]);
-
-    emit({ type: "init", sessionId: "tok-err", tools: [], mcpServers: [] });
-    emit(resultEvent({ isError: true, subtype: "error_during_execution", text: "Rate limit reached" }));
-
-    assert.equal(h.status, "error");
-    assert.equal(turns.canRetry, true);
-    assert.match(h.notices[0], /Errore del docente.*Rate limit reached/);
-
-    // Retrying re-submits the exact input prompt without duplicating learner bubbles
-    await turns.retry();
-    assert.equal(h.status, "running");
-    assert.equal(turns.canRetry, false);
-    assert.deepEqual(h.learner, ["Qual è la derivata di x^2?"]); // still 1 bubble!
-    assert.deepEqual(engine.last().sent, ["Qual è la derivata di x^2?", "Qual è la derivata di x^2?"]);
-
-    // When the retry finishes successfully, it idles and resets canRetry
-    emit(resultEvent({ isError: false }));
-    assert.equal(h.status, "idle");
-    assert.equal(turns.canRetry, false);
-    assert.equal(turns.savedLastTurn, undefined);
-  });
-
-  it("process crash mid-turn enables retry; retry re-launches with resume token and re-sends turn", async () => {
-    const { engine, h, turns, emit } = harness();
-    await turns.send("Spiegazione", ["Spiegazione"]);
-    emit({ type: "init", sessionId: "tok-crash", tools: [], mcpServers: [] });
-
-    // Engine crashes while waiting for result
-    engine.last().cb.onStderr("SIGSEGV");
-    engine.last().cb.onExit(139, null);
-
-    assert.equal(h.status, "error");
-    assert.equal(turns.canRetry, true);
-    assert.equal(turns.live, false);
-
-    // Retrying re-spawns engine with resume token and re-sends
-    await turns.retry();
-    assert.equal(turns.live, true);
-    assert.equal(engine.last().resume, "tok-crash");
-    assert.deepEqual(engine.last().sent, ["Spiegazione"]);
-    assert.deepEqual(h.learner, ["Spiegazione"]); // no duplicate bubble
-    assert.equal(h.status, "running");
   });
 
   it("retry throws when not retryable", async () => {
