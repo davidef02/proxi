@@ -1,0 +1,213 @@
+{
+  "route": "courses",
+  "seed": {},
+  "dataSeed": {
+    "curriculum.json": "{\"chapters\":[{\"title\":\"Algebra\",\"slug\":\"algebra\",\"lessons\":[{\"title\":\"Vettori nel piano\",\"slug\":\"vettori-nel-piano\",\"plannedNodes\":3},{\"title\":\"Prodotto scalare\",\"slug\":\"prodotto-scalare\"},{\"title\":\"Matrici\",\"slug\":\"matrici\",\"plannedNodes\":2}]},{\"title\":\"Lezioni singole\",\"slug\":\"lezioni-singole\",\"lessons\":[]},{\"title\":\"Vuoto\",\"slug\":\"vuoto\",\"lessons\":[]}]}",
+    "courses/algebra/MISSION.md": "# Algebra\n\n## Why\n\nCapire **vettori** e `matrici` con [esempi](http://x) concreti.\n\nSecondo paragrafo.\n",
+    "courses/algebra/exercises/package.json": "{}",
+    "courses/algebra/lessons/0001-vettori-nel-piano.html": "<html><body><script type=\"application/json\" id=\"lesson-data\">{\"metadata\":{\"lessonNumber\":1,\"topic\":\"Vettori\",\"title\":\"Vettori\",\"slug\":\"vettori-nel-piano\",\"dateCreated\":\"\",\"dateModified\":\"\",\"version\":\"1\",\"initialDag\":\"graph TD\\nN1[a] --> N2[b]\\nN2 --> N3[c]\"},\"nodes\":[{\"nodeId\":\"n1\",\"title\":\"Nodo 1\",\"tier\":\"axiom\",\"content\":\"x\",\"math\":[]}]}</script></body></html>",
+    "courses/algebra/reference/vettori-nel-piano.html": "<html></html>",
+    "courses/algebra/lessons/0002-prodotto-scalare.html": "<html><body><script type=\"application/json\" id=\"lesson-data\">{\"metadata\":{\"lessonNumber\":2,\"topic\":\"Prodotto scalare\",\"title\":\"Prodotto scalare\",\"slug\":\"prodotto-scalare\",\"dateCreated\":\"\",\"dateModified\":\"\",\"version\":\"1\",\"initialDag\":\"graph TD\\nN1[a] --> N2[b]\\nN2 --> N3[c]\"},\"nodes\":[{\"nodeId\":\"n1\",\"title\":\"Nodo 1\",\"tier\":\"axiom\",\"content\":\"x\",\"math\":[]},{\"nodeId\":\"n2\",\"title\":\"Nodo 2\",\"tier\":\"axiom\",\"content\":\"x\",\"math\":[]}]}</script></body></html>",
+    "courses/algebra/learning-records/0002-chiusa.md": "# chiusa\n",
+    "courses/algebra/lessons/0003-extra.html": "<html><body><script type=\"application/json\" id=\"lesson-data\">{\"metadata\":{\"lessonNumber\":3,\"topic\":\"Extra\",\"title\":\"Extra\",\"slug\":\"extra\",\"dateCreated\":\"\",\"dateModified\":\"\",\"version\":\"1\",\"initialDag\":\"\"},\"nodes\":[{\"nodeId\":\"n1\",\"title\":\"Nodo 1\",\"tier\":\"axiom\",\"content\":\"x\",\"math\":[]}]}</script></body></html>",
+    "courses/algebra/lessons/0004-prosa.html": "<html>solo prosa</html>",
+    "courses/algebra/lessons/0005-rotta.html": "<script type=\"application/json\" id=\"lesson-data\">{nope</script>",
+    "courses/sciolto/MISSION.md": "# Sciolto\n\nIntro senza sezione Why: parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola \n",
+    "courses/sciolto/lessons/0001-solo.html": "<html><body><script type=\"application/json\" id=\"lesson-data\">{\"metadata\":{\"lessonNumber\":1,\"topic\":\"Solo topic\",\"title\":\"\",\"slug\":\"solo\",\"dateCreated\":\"\",\"dateModified\":\"\",\"version\":\"1\",\"initialDag\":\"\"},\"nodes\":[{\"nodeId\":\"n1\",\"title\":\"Nodo 1\",\"tier\":\"axiom\",\"content\":\"x\",\"math\":[]}]}</script></body></html>",
+    "courses/lezioni-singole/lessons/0001-fourier.html": "<html><body><script type=\"application/json\" id=\"lesson-data\">{\"metadata\":{\"lessonNumber\":1,\"topic\":\"Fourier\",\"title\":\"Fourier\",\"slug\":\"fourier\",\"dateCreated\":\"\",\"dateModified\":\"\",\"version\":\"1\",\"initialDag\":\"\"},\"nodes\":[{\"nodeId\":\"n1\",\"title\":\"Nodo 1\",\"tier\":\"axiom\",\"content\":\"x\",\"math\":[]}]}</script></body></html>",
+    "courses/lezioni-singole/reference/fourier.html": "<html></html>",
+    "courses/lezioni-singole/learning-records/0001-a.md": "# a\n\n<!-- lesson: fourier -->\n",
+    "courses/lezioni-singole/lessons/0002-entropia.html": "<html><body><script type=\"application/json\" id=\"lesson-data\">{\"metadata\":{\"lessonNumber\":2,\"topic\":\"Entropia\",\"title\":\"Entropia\",\"slug\":\"entropia\",\"dateCreated\":\"\",\"dateModified\":\"\",\"version\":\"1\",\"initialDag\":\"graph TD\\nN1[a] --> N2[b]\"},\"nodes\":[]}</script></body></html>"
+  },
+  "cases": [
+    {
+      "name": "courses",
+      "request": {
+        "method": "GET",
+        "path": "/api/courses"
+      },
+      "response": {
+        "status": 200,
+        "body": [
+          {
+            "slug": "algebra",
+            "title": "Algebra",
+            "lessons": [
+              {
+                "title": "Vettori nel piano",
+                "slug": "vettori-nel-piano",
+                "lessonPath": "courses/algebra/lessons/0001-vettori-nel-piano.html",
+                "lessonNumber": 1,
+                "nodeCount": 1,
+                "referencePath": "courses/algebra/reference/vettori-nel-piano.html",
+                "inProgress": true,
+                "plannedNodes": 3
+              },
+              {
+                "title": "Prodotto scalare",
+                "slug": "prodotto-scalare",
+                "lessonPath": "courses/algebra/lessons/0002-prodotto-scalare.html",
+                "lessonNumber": 2,
+                "nodeCount": 2,
+                "inProgress": false
+              },
+              {
+                "title": "Matrici",
+                "slug": "matrici",
+                "plannedNodes": 2
+              }
+            ],
+            "orphans": [
+              {
+                "title": "Extra",
+                "slug": "extra",
+                "lessonPath": "courses/algebra/lessons/0003-extra.html",
+                "lessonNumber": 3,
+                "nodeCount": 1,
+                "inProgress": false
+              }
+            ],
+            "hasExercises": true,
+            "hasMission": true,
+            "destination": "Capire vettori e matrici con esempi concreti."
+          },
+          {
+            "slug": "vuoto",
+            "title": "Vuoto",
+            "lessons": [],
+            "orphans": [],
+            "hasExercises": false,
+            "hasMission": false
+          },
+          {
+            "slug": "sciolto",
+            "title": "sciolto",
+            "lessons": [],
+            "orphans": [
+              {
+                "title": "Solo topic",
+                "slug": "solo",
+                "lessonPath": "courses/sciolto/lessons/0001-solo.html",
+                "lessonNumber": 1,
+                "nodeCount": 1,
+                "inProgress": false
+              }
+            ],
+            "hasExercises": false,
+            "hasMission": true,
+            "destination": "Intro senza sezione Why: parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola…"
+          }
+        ]
+      }
+    },
+    {
+      "name": "standalone",
+      "request": {
+        "method": "GET",
+        "path": "/api/standalone-lessons"
+      },
+      "response": {
+        "status": 200,
+        "body": [
+          {
+            "title": "Fourier",
+            "slug": "fourier",
+            "lessonPath": "courses/lezioni-singole/lessons/0001-fourier.html",
+            "lessonNumber": 1,
+            "nodeCount": 1,
+            "referencePath": "courses/lezioni-singole/reference/fourier.html",
+            "inProgress": false
+          },
+          {
+            "title": "Entropia",
+            "slug": "entropia",
+            "lessonPath": "courses/lezioni-singole/lessons/0002-entropia.html",
+            "lessonNumber": 2,
+            "nodeCount": 0,
+            "inProgress": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "courses-again",
+      "request": {
+        "method": "GET",
+        "path": "/api/courses"
+      },
+      "response": {
+        "status": 200,
+        "body": [
+          {
+            "slug": "algebra",
+            "title": "Algebra",
+            "lessons": [
+              {
+                "title": "Vettori nel piano",
+                "slug": "vettori-nel-piano",
+                "lessonPath": "courses/algebra/lessons/0001-vettori-nel-piano.html",
+                "lessonNumber": 1,
+                "nodeCount": 1,
+                "referencePath": "courses/algebra/reference/vettori-nel-piano.html",
+                "inProgress": true,
+                "plannedNodes": 3
+              },
+              {
+                "title": "Prodotto scalare",
+                "slug": "prodotto-scalare",
+                "lessonPath": "courses/algebra/lessons/0002-prodotto-scalare.html",
+                "lessonNumber": 2,
+                "nodeCount": 2,
+                "inProgress": false
+              },
+              {
+                "title": "Matrici",
+                "slug": "matrici",
+                "plannedNodes": 2
+              }
+            ],
+            "orphans": [
+              {
+                "title": "Extra",
+                "slug": "extra",
+                "lessonPath": "courses/algebra/lessons/0003-extra.html",
+                "lessonNumber": 3,
+                "nodeCount": 1,
+                "inProgress": false
+              }
+            ],
+            "hasExercises": true,
+            "hasMission": true,
+            "destination": "Capire vettori e matrici con esempi concreti."
+          },
+          {
+            "slug": "vuoto",
+            "title": "Vuoto",
+            "lessons": [],
+            "orphans": [],
+            "hasExercises": false,
+            "hasMission": false
+          },
+          {
+            "slug": "sciolto",
+            "title": "sciolto",
+            "lessons": [],
+            "orphans": [
+              {
+                "title": "Solo topic",
+                "slug": "solo",
+                "lessonPath": "courses/sciolto/lessons/0001-solo.html",
+                "lessonNumber": 1,
+                "nodeCount": 1,
+                "inProgress": false
+              }
+            ],
+            "hasExercises": false,
+            "hasMission": true,
+            "destination": "Intro senza sezione Why: parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola parola…"
+          }
+        ]
+      }
+    }
+  ]
+}

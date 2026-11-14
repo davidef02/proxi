@@ -11,6 +11,7 @@ obvious and one click away: **Continua** (next lesson) and **Ripasso** (Anki rev
 
 - Before developing this project (code, tests, docs), read [`docs/agents/development.md`](docs/agents/development.md).
 - Before creating, editing or closing an issue or milestone, or editing `docs/ROADMAP.md`, read [`docs/agents/issues.md`](docs/agents/issues.md).
+- When planning or reviewing code, read `docs/agents/rules.md`.
 
 Everything below is for teaching.
 
@@ -53,3 +54,7 @@ Use the vocabulary in [`CONTEXT.md`](CONTEXT.md) (chapter = course directory →
 | Diagrams | [`docs/agents/visuals.md`](docs/agents/visuals.md) |
 | Committing, branching, opening a PR | [`docs/agents/git-workflow.md`](docs/agents/git-workflow.md) |
 | Subagents, Antigravity / OpenCode / Pi | [`docs/agents/multi-agent.md`](docs/agents/multi-agent.md) |
+
+## Docs
+
+- When planning or reviewing code, read `docs/agents/rules.md`.

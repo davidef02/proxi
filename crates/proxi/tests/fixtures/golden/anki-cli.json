@@ -1,0 +1,400 @@
+{
+  "route": "anki-cli",
+  "ankiError": "collection is not available",
+  "seed": {
+    "curriculum.json": "{\"chapters\":[{\"title\":\"Vue.js & Vetrine\",\"slug\":\"vue-vetrine\",\"lessons\":[]}]}",
+    "courses/vue-vetrine/lessons/0001-reattivita.html": "<!doctype html>\n<html><body>\n  <script type=\"application/json\" id=\"lesson-data\">\n{\"metadata\":{\"topic\":\"Vue.js & Vetrine\",\"title\":\"Reattività\",\"slug\":\"reattivita\",\"lessonNumber\":1.0,\"weight\":1e21},\"nodes\":[{\"nodeId\":\"n-basic\",\"tier\":\"axiom\",\"ankiParams\":{\"targetQuestion\":\"Quanto vale $\\\\frac{d}{dx} x^2$?\",\"targetFact\":\"﻿  $$ 2x $$ sempre\\tvero  \",\"tags\":[\"Reattività & Co\",\"vue-js-vetrine\",\"Già__Fatto\"]}},{\"nodeId\":\"n-cloze\",\"tier\":\"derivation\",\"ankiParams\":{\"suggestedCloze\":\"Il ref {{c1::\\\\(\\\\frac{a}{b}\\\\)}} traccia\\tchi\\r\\nlo legge\",\"clozeExtra\":\"Riga 1\\nRiga 2 $x$\\rfine\"}},{\"nodeId\":\"n-cloze-bare\",\"tier\":\"derivation\",\"ankiParams\":{\"suggestedCloze\":\"La formula {{c1:\\\\frac{a}{b}}} costa \\\\$5 e $y$\"}},{\"nodeId\":\"n-both\",\"tier\":\"axiom\",\"ankiParams\":{\"targetQuestion\":\"Q?\",\"targetFact\":\"A.\",\"suggestedCloze\":\"La risposta è {{c1::A}}.\"}},{\"title\":\"Senza id\",\"ankiParams\":{\"suggestedCloze\":\"Nodo {{c1::anonimo}}\"}},{\"nodeId\":\"n-none\",\"tier\":\"axiom\"},{\"nodeId\":\"n-fact-only\",\"tier\":\"axiom\",\"ankiParams\":{\"targetFact\":\"Solo fatto\"}}]}\n  </script>\n</body></html>\n",
+    "lessons-sciolte/0001-entropia.html": "<!doctype html>\n<html><body>\n  <script type=\"application/json\" id=\"lesson-data\">\n{\"metadata\":{\"title\":\"Entropia\",\"slug\":\"entropia\"},\"nodes\":[{\"nodeId\":\"n1\",\"tier\":\"axiom\",\"ankiParams\":{\"targetQuestion\":\"Che cos'è l'entropia?\",\"targetFact\":\"Una misura del disordine.\"}}]}\n  </script>\n</body></html>\n",
+    "courses/lezioni-singole/lessons/0001-microstati.html": "<!doctype html>\n<html><body>\n  <script type=\"application/json\" id=\"lesson-data\">\n{\"metadata\":{\"topic\":\"Entropia\",\"slug\":\"microstati\"},\"nodes\":[{\"nodeId\":\"n1\",\"tier\":\"axiom\",\"ankiParams\":{\"targetQuestion\":\"Quanti microstati?\",\"targetFact\":\"$W$ li conta.\"}}]}\n  </script>\n</body></html>\n",
+    "broken/upper.html": "<!doctype html>\n<html><body>\n  <SCRIPT TYPE='application/json'  ID='lesson-data'>\n{\"metadata\":{\"topic\":\"Maiuscole\",\"slug\":\"upper\"},\"nodes\":[{\"nodeId\":\"n1\",\"tier\":\"axiom\",\"ankiParams\":{\"suggestedCloze\":\"Il tag si legge {{c1::case-insensitive}}\"}}]}\n  </SCRIPT>\n</body></html>\n",
+    "broken/no-island.html": "<html><body>niente</body></html>",
+    "broken/empty-island.html": "<html><body><script type=\"application/json\" id=\"lesson-data\"></script></body></html>",
+    "broken/blank-island.html": "<html><body><script type=\"application/json\" id=\"lesson-data\">   </script></body></html>",
+    "broken/bad-json.html": "<html><body><script type=\"application/json\" id=\"lesson-data\">{ nope</script></body></html>"
+  },
+  "cases": [
+    {
+      "name": "help",
+      "args": [
+        "--help"
+      ],
+      "stdout": "\nProxi Anki Sync & Deck Exporter\n\nUsage:\n  npx tsx extensions/anki-sync.ts <command> [options]\n\nCommands:\n  export     Export cards to ./decks/<slug>.tsv (lesson slug with --lesson, else topic slug)\n  sync       Synchronize cards to local AnkiConnect (http://127.0.0.1:8765)\n  extract    Extract cards from an HTML lesson file as JSON\n  ping       Test connection to local AnkiConnect server\n\nOptions:\n  --lesson <path>       Path to standalone HTML lesson file\n  --topic <name>        Topic or subject title\n  --slug <slug>         Topic slug\n  --deck <name>         Target Anki deck name (default: Proxi::<Topic>)\n  --data <json>         Direct JSON payload containing cards or lessonDoc\n  --stdin               Read JSON payload from stdin\n  --out <file>          Custom output TSV file path\n  --base-dir <dir>      Workspace root directory\n  --anki-url <url>      AnkiConnect URL (default: http://127.0.0.1:8765)\n  --timeout <ms>        Network timeout in milliseconds (default: 2000)\n  --allow-duplicates    Allow duplicate cards in AnkiConnect\n\n",
+      "stderr": "",
+      "exitCode": 0,
+      "files": {}
+    },
+    {
+      "name": "usage-none",
+      "args": [],
+      "stdout": "\nProxi Anki Sync & Deck Exporter\n\nUsage:\n  npx tsx extensions/anki-sync.ts <command> [options]\n\nCommands:\n  export     Export cards to ./decks/<slug>.tsv (lesson slug with --lesson, else topic slug)\n  sync       Synchronize cards to local AnkiConnect (http://127.0.0.1:8765)\n  extract    Extract cards from an HTML lesson file as JSON\n  ping       Test connection to local AnkiConnect server\n\nOptions:\n  --lesson <path>       Path to standalone HTML lesson file\n  --topic <name>        Topic or subject title\n  --slug <slug>         Topic slug\n  --deck <name>         Target Anki deck name (default: Proxi::<Topic>)\n  --data <json>         Direct JSON payload containing cards or lessonDoc\n  --stdin               Read JSON payload from stdin\n  --out <file>          Custom output TSV file path\n  --base-dir <dir>      Workspace root directory\n  --anki-url <url>      AnkiConnect URL (default: http://127.0.0.1:8765)\n  --timeout <ms>        Network timeout in milliseconds (default: 2000)\n  --allow-duplicates    Allow duplicate cards in AnkiConnect\n\n",
+      "stderr": "",
+      "exitCode": 0,
+      "files": {}
+    },
+    {
+      "name": "unknown",
+      "args": [
+        "frobnicate"
+      ],
+      "stdout": "",
+      "stderr": "Unknown command: frobnicate\n",
+      "exitCode": 1,
+      "files": {}
+    },
+    {
+      "name": "ping-online",
+      "args": [
+        "ping",
+        "--anki-url",
+        "<ankiUrl>"
+      ],
+      "stdout": "✅ AnkiConnect is ONLINE (<ankiUrl>) — Version 6 (<ms>ms)\n",
+      "stderr": "",
+      "exitCode": 0,
+      "files": {}
+    },
+    {
+      "name": "ping-error",
+      "args": [
+        "ping",
+        "--anki-url",
+        "<errorUrl>"
+      ],
+      "stdout": "⚠️ AnkiConnect is OFFLINE (<errorUrl>): collection is not available (<ms>ms)\n",
+      "stderr": "",
+      "exitCode": 0,
+      "files": {}
+    },
+    {
+      "name": "ping-timeout",
+      "args": [
+        "ping",
+        "--anki-url",
+        "<slowUrl>",
+        "--timeout",
+        "200"
+      ],
+      "stdout": "⚠️ AnkiConnect is OFFLINE (<slowUrl>): Connection timed out (<ms>ms)\n",
+      "stderr": "",
+      "exitCode": 0,
+      "files": {}
+    },
+    {
+      "name": "ping-offline",
+      "args": [
+        "ping",
+        "--anki-url",
+        "<deadUrl>",
+        "--timeout",
+        "1000"
+      ],
+      "stdout": "⚠️ AnkiConnect is OFFLINE (<deadUrl>): fetch failed (<ms>ms)\n",
+      "stderr": "",
+      "exitCode": 0,
+      "files": {}
+    },
+    {
+      "name": "extract-course",
+      "args": [
+        "extract",
+        "--lesson",
+        "courses/vue-vetrine/lessons/0001-reattivita.html"
+      ],
+      "stdout": "{\n  \"metadata\": {\n    \"topic\": \"Vue.js & Vetrine\",\n    \"title\": \"Reattività\",\n    \"slug\": \"reattivita\",\n    \"lessonNumber\": 1,\n    \"weight\": 1e+21\n  },\n  \"deckName\": \"Proxi::Vue.js & Vetrine\",\n  \"cards\": [\n    {\n      \"id\": \"n-basic-fact\",\n      \"nodeId\": \"n-basic\",\n      \"type\": \"basic\",\n      \"deck\": \"Proxi::Vue.js & Vetrine\",\n      \"front\": \"Quanto vale /(/frac{d}{dx} x^2/)?\",\n      \"back\": \"﻿  /[2x/] sempre/tvero  \",\n      \"tags\": [\n        \"learn-forme\",\n        \"vuejs-vetrine\",\n        \"axiom\",\n        \"tier::axiom\",\n        \"node::n-basic\",\n        \"reattivita-co\",\n        \"vue-js-vetrine\",\n        \"gia-fatto\",\n        \"course::vue-vetrine\",\n        \"lesson::reattivita\"\n      ]\n    },\n    {\n      \"id\": \"n-cloze-cloze\",\n      \"nodeId\": \"n-cloze\",\n      \"type\": \"cloze\",\n      \"deck\": \"Proxi::Vue.js & Vetrine\",\n      \"text\": \"Il ref {{c1::/(/frac{a}{b}/) }} traccia/tchi/r/nlo legge\",\n      \"extra\": \"Riga 1/nRiga 2 /(x/)/rfine\",\n      \"tags\": [\n        \"learn-forme\",\n        \"vuejs-vetrine\",\n        \"derivation\",\n        \"tier::derivation\",\n        \"node::n-cloze\",\n        \"course::vue-vetrine\",\n        \"lesson::reattivita\"\n      ]\n    },\n    {\n      \"id\": \"n-cloze-bare-cloze\",\n      \"nodeId\": \"n-cloze-bare\",\n      \"type\": \"cloze\",\n      \"deck\": \"Proxi::Vue.js & Vetrine\",\n      \"text\": \"La formula {{c1:/frac{a}{b}}} costa /$5 e /(y/)\",\n      \"tags\": [\n        \"learn-forme\",\n        \"vuejs-vetrine\",\n        \"derivation\",\n        \"tier::derivation\",\n        \"node::n-cloze-bare\",\n        \"course::vue-vetrine\",\n        \"lesson::reattivita\"\n      ]\n    },\n    {\n      \"id\": \"n-both-fact\",\n      \"nodeId\": \"n-both\",\n      \"type\": \"basic\",\n      \"deck\": \"Proxi::Vue.js & Vetrine\",\n      \"front\": \"Q?\",\n      \"back\": \"A.\",\n      \"tags\": [\n        \"learn-forme\",\n        \"vuejs-vetrine\",\n        \"axiom\",\n        \"tier::axiom\",\n        \"node::n-both\",\n        \"course::vue-vetrine\",\n        \"lesson::reattivita\"\n      ]\n    },\n    {\n      \"id\": \"undefined-cloze\",\n      \"type\": \"cloze\",\n      \"deck\": \"Proxi::Vue.js & Vetrine\",\n      \"text\": \"Nodo {{c1::anonimo}}\",\n      \"tags\": [\n        \"learn-forme\",\n        \"vuejs-vetrine\",\n        null,\n        \"tier::undefined\",\n        \"node::undefined\",\n        \"course::vue-vetrine\",\n        \"lesson::reattivita\"\n      ]\n    }\n  ]\n}\n",
+      "stderr": "",
+      "exitCode": 0,
+      "files": {}
+    },
+    {
+      "name": "extract-loose",
+      "args": [
+        "extract",
+        "--lesson",
+        "lessons-sciolte/0001-entropia.html"
+      ],
+      "stdout": "{\n  \"metadata\": {\n    \"title\": \"Entropia\",\n    \"slug\": \"entropia\"\n  },\n  \"deckName\": \"Proxi::Entropia\",\n  \"cards\": [\n    {\n      \"id\": \"n1-fact\",\n      \"nodeId\": \"n1\",\n      \"type\": \"basic\",\n      \"deck\": \"Proxi::Entropia\",\n      \"front\": \"Che cos'è l'entropia?\",\n      \"back\": \"Una misura del disordine.\",\n      \"tags\": [\n        \"learn-forme\",\n        \"entropia\",\n        \"axiom\",\n        \"tier::axiom\",\n        \"node::n1\"\n      ]\n    }\n  ]\n}\n",
+      "stderr": "",
+      "exitCode": 0,
+      "files": {}
+    },
+    {
+      "name": "extract-standalone",
+      "args": [
+        "extract",
+        "--lesson",
+        "courses/lezioni-singole/lessons/0001-microstati.html"
+      ],
+      "stdout": "{\n  \"metadata\": {\n    \"topic\": \"Entropia\",\n    \"slug\": \"microstati\"\n  },\n  \"deckName\": \"Proxi::Lezioni singole\",\n  \"cards\": [\n    {\n      \"id\": \"n1-fact\",\n      \"nodeId\": \"n1\",\n      \"type\": \"basic\",\n      \"deck\": \"Proxi::Lezioni singole\",\n      \"front\": \"Quanti microstati?\",\n      \"back\": \"/(W/) li conta.\",\n      \"tags\": [\n        \"learn-forme\",\n        \"entropia\",\n        \"axiom\",\n        \"tier::axiom\",\n        \"node::n1\",\n        \"course::lezioni-singole\",\n        \"lesson::microstati\"\n      ]\n    }\n  ]\n}\n",
+      "stderr": "",
+      "exitCode": 0,
+      "files": {}
+    },
+    {
+      "name": "extract-upper",
+      "args": [
+        "extract",
+        "--lesson",
+        "broken/upper.html"
+      ],
+      "stdout": "{\n  \"metadata\": {\n    \"topic\": \"Maiuscole\",\n    \"slug\": \"upper\"\n  },\n  \"deckName\": \"Proxi::Maiuscole\",\n  \"cards\": [\n    {\n      \"id\": \"n1-cloze\",\n      \"nodeId\": \"n1\",\n      \"type\": \"cloze\",\n      \"deck\": \"Proxi::Maiuscole\",\n      \"text\": \"Il tag si legge {{c1::case-insensitive}}\",\n      \"tags\": [\n        \"learn-forme\",\n        \"maiuscole\",\n        \"axiom\",\n        \"tier::axiom\",\n        \"node::n1\"\n      ]\n    }\n  ]\n}\n",
+      "stderr": "",
+      "exitCode": 0,
+      "files": {}
+    },
+    {
+      "name": "extract-missing-flag",
+      "args": [
+        "extract"
+      ],
+      "stdout": "",
+      "stderr": "Error: --lesson <path> is required for extract command\n",
+      "exitCode": 1,
+      "files": {}
+    },
+    {
+      "name": "extract-not-found",
+      "args": [
+        "extract",
+        "--lesson",
+        "broken/nope.html"
+      ],
+      "stderrPrefix": "Fatal error: Error: Lesson file not found at path: broken/nope.html\n",
+      "stdout": "",
+      "stderr": "Fatal error: Error: Lesson file not found at path: broken/nope.html\n",
+      "exitCode": 1,
+      "files": {}
+    },
+    {
+      "name": "extract-no-island",
+      "args": [
+        "extract",
+        "--lesson",
+        "broken/no-island.html"
+      ],
+      "stderrPrefix": "Fatal error: Error: Could not find embedded #lesson-data JSON block in broken/no-island.html\n",
+      "stdout": "",
+      "stderr": "Fatal error: Error: Could not find embedded #lesson-data JSON block in broken/no-island.html\n",
+      "exitCode": 1,
+      "files": {}
+    },
+    {
+      "name": "extract-empty-island",
+      "args": [
+        "extract",
+        "--lesson",
+        "broken/empty-island.html"
+      ],
+      "stderrPrefix": "Fatal error: Error: Could not find embedded #lesson-data JSON block in broken/empty-island.html\n",
+      "stdout": "",
+      "stderr": "Fatal error: Error: Could not find embedded #lesson-data JSON block in broken/empty-island.html\n",
+      "exitCode": 1,
+      "files": {}
+    },
+    {
+      "name": "extract-blank-island",
+      "args": [
+        "extract",
+        "--lesson",
+        "broken/blank-island.html"
+      ],
+      "stderrPrefix": "Fatal error: Error: Failed to parse lesson-data JSON in broken/blank-island.html: ",
+      "stdout": "",
+      "stderr": "Fatal error: Error: Failed to parse lesson-data JSON in broken/blank-island.html: ",
+      "exitCode": 1,
+      "files": {}
+    },
+    {
+      "name": "extract-bad-json",
+      "args": [
+        "extract",
+        "--lesson",
+        "broken/bad-json.html"
+      ],
+      "stderrPrefix": "Fatal error: Error: Failed to parse lesson-data JSON in broken/bad-json.html: ",
+      "stdout": "",
+      "stderr": "Fatal error: Error: Failed to parse lesson-data JSON in broken/bad-json.html: ",
+      "exitCode": 1,
+      "files": {}
+    },
+    {
+      "name": "export-lesson",
+      "args": [
+        "export",
+        "--lesson",
+        "courses/vue-vetrine/lessons/0001-reattivita.html"
+      ],
+      "stdout": "✅ Exported 5 cards to <dataRoot>/decks/reattivita.tsv\n",
+      "stderr": "",
+      "exitCode": 0,
+      "files": {
+        "decks/reattivita.tsv": "#separator:tab\n#html:true\n#tags column:3\n#deck:Proxi::Vue.js & Vetrine\n#notetype:Basic\nQuanto vale \\(\\frac{d}{dx} x^2\\)?\t\\[2x\\] sempre vero\tlearn-forme vuejs-vetrine axiom tier::axiom node::n-basic reattivita-co vue-js-vetrine gia-fatto course::vue-vetrine lesson::reattivita\nIl ref {{c1::\\(\\frac{a}{b}\\) }} traccia chi<br>lo legge\tRiga 1<br>Riga 2 \\(x\\)<br>fine\tlearn-forme vuejs-vetrine derivation tier::derivation node::n-cloze course::vue-vetrine lesson::reattivita\nLa formula {{c1:\\frac{a}{b}}} costa \\$5 e \\(y\\)\t\tlearn-forme vuejs-vetrine derivation tier::derivation node::n-cloze-bare course::vue-vetrine lesson::reattivita\nQ?\tA.\tlearn-forme vuejs-vetrine axiom tier::axiom node::n-both course::vue-vetrine lesson::reattivita\nNodo {{c1::anonimo}}\t\tlearn-forme vuejs-vetrine  tier::undefined node::undefined course::vue-vetrine lesson::reattivita\n"
+      }
+    },
+    {
+      "name": "export-lesson-wins",
+      "args": [
+        "export",
+        "--data",
+        "{\"topic\":\"Ignorato\",\"cards\":[{\"id\":\"c1\",\"nodeId\":\"x\",\"type\":\"basic\",\"deck\":\"D\",\"front\":\"Riga\\tuno\\r\\ndue\",\"back\":\"﻿ retro \",\"tags\":[\"a\",null,\"b\"]},{\"id\":\"c2\",\"type\":\"cloze\",\"text\":\"Il {{c1::ciclo}}\",\"tags\":[\"c\"]},{\"id\":\"c3\",\"type\":\"altro\",\"tags\":[\"z\"]}]}",
+        "--lesson",
+        "lessons-sciolte/0001-entropia.html"
+      ],
+      "stdout": "✅ Exported 1 cards to <dataRoot>/decks/entropia.tsv\n",
+      "stderr": "",
+      "exitCode": 0,
+      "files": {
+        "decks/entropia.tsv": "#separator:tab\n#html:true\n#tags column:3\n#deck:Proxi::Entropia\n#notetype:Basic\nChe cos'è l'entropia?\tUna misura del disordine.\tlearn-forme entropia axiom tier::axiom node::n1\n"
+      }
+    },
+    {
+      "name": "export-data-nodes",
+      "args": [
+        "export",
+        "--data",
+        "{\"topic\":\"Algebra lineare\",\"nodes\":[{\"nodeId\":\"n-eigen\",\"tier\":\"axiom\",\"ankiParams\":{\"targetQuestion\":\"Quanto vale $\\\\lambda$?\",\"targetFact\":\"Lo spettro\\tcompleto\"}},{\"nodeId\":\"n-det\",\"tier\":\"derivation\",\"ankiParams\":{\"suggestedCloze\":\"Il determinante {{c1::\\\\(A\\\\)}} è nullo\"}}]}",
+        "--out",
+        "decks/from-data.tsv"
+      ],
+      "stdout": "✅ Exported 2 cards to decks/from-data.tsv\n",
+      "stderr": "",
+      "exitCode": 0,
+      "files": {
+        "decks/from-data.tsv": "#separator:tab\n#html:true\n#tags column:3\n#deck:Proxi::Algebra lineare\n#notetype:Basic\nQuanto vale \\(\\lambda\\)?\tLo spettro completo\tlearn-forme algebra-lineare axiom tier::axiom node::n-eigen\nIl determinante {{c1::\\(A\\)}} è nullo\t\tlearn-forme algebra-lineare derivation tier::derivation node::n-det\n"
+      }
+    },
+    {
+      "name": "export-stdin-nodes",
+      "args": [
+        "export",
+        "--stdin",
+        "--out",
+        "decks/from-stdin.tsv"
+      ],
+      "stdin": "{\"topic\":\"Algebra lineare\",\"nodes\":[{\"nodeId\":\"n-eigen\",\"tier\":\"axiom\",\"ankiParams\":{\"targetQuestion\":\"Quanto vale $\\\\lambda$?\",\"targetFact\":\"Lo spettro\\tcompleto\"}},{\"nodeId\":\"n-det\",\"tier\":\"derivation\",\"ankiParams\":{\"suggestedCloze\":\"Il determinante {{c1::\\\\(A\\\\)}} è nullo\"}}]}",
+      "stdout": "✅ Exported 2 cards to decks/from-stdin.tsv\n",
+      "stderr": "",
+      "exitCode": 0,
+      "files": {
+        "decks/from-stdin.tsv": "#separator:tab\n#html:true\n#tags column:3\n#deck:Proxi::Algebra lineare\n#notetype:Basic\nQuanto vale \\(\\lambda\\)?\tLo spettro completo\tlearn-forme algebra-lineare axiom tier::axiom node::n-eigen\nIl determinante {{c1::\\(A\\)}} è nullo\t\tlearn-forme algebra-lineare derivation tier::derivation node::n-det\n"
+      }
+    },
+    {
+      "name": "export-data-cards",
+      "args": [
+        "export",
+        "--data",
+        "{\"topic\":\"Ignorato\",\"cards\":[{\"id\":\"c1\",\"nodeId\":\"x\",\"type\":\"basic\",\"deck\":\"D\",\"front\":\"Riga\\tuno\\r\\ndue\",\"back\":\"﻿ retro \",\"tags\":[\"a\",null,\"b\"]},{\"id\":\"c2\",\"type\":\"cloze\",\"text\":\"Il {{c1::ciclo}}\",\"tags\":[\"c\"]},{\"id\":\"c3\",\"type\":\"altro\",\"tags\":[\"z\"]}]}",
+        "--topic",
+        "Algoritmi",
+        "--slug",
+        "algo"
+      ],
+      "stdout": "✅ Exported 3 cards to <dataRoot>/decks/algo.tsv\n",
+      "stderr": "",
+      "exitCode": 0,
+      "files": {
+        "decks/algo.tsv": "#separator:tab\n#html:true\n#tags column:3\n#deck:Proxi::Algoritmi\n#notetype:Basic\nRiga uno<br>due\tretro\ta  b\nIl {{c1::ciclo}}\t\tc\n"
+      }
+    },
+    {
+      "name": "export-cloze-only",
+      "args": [
+        "export",
+        "--data",
+        "{\"topic\":\"Fisica/Meccanica\",\"cards\":[{\"id\":\"k\",\"type\":\"cloze\",\"text\":\"a {{c1::b}}\",\"extra\":\"x\\ty\",\"tags\":[]}]}"
+      ],
+      "stdout": "✅ Exported 1 cards to <dataRoot>/decks/fisicameccanica.tsv\n",
+      "stderr": "",
+      "exitCode": 0,
+      "files": {
+        "decks/fisicameccanica.tsv": "#separator:tab\n#html:true\n#tags column:3\n#deck:Proxi::Fisica::Meccanica\n#notetype:Cloze\na {{c1::b}}\tx y\t\n"
+      }
+    },
+    {
+      "name": "export-nodes-win",
+      "args": [
+        "export",
+        "--data",
+        "{\"topic\":\"Proxi::Già\",\"nodes\":[],\"cards\":[{\"id\":\"q\",\"type\":\"basic\",\"front\":\"f\",\"back\":\"b\",\"tags\":[]}]}"
+      ],
+      "stdout": "✅ Exported 0 cards to <dataRoot>/decks/proxigia.tsv\n",
+      "stderr": "",
+      "exitCode": 0,
+      "files": {
+        "decks/proxigia.tsv": "#separator:tab\n#html:true\n#tags column:3\n#deck:Proxi::Già\n#notetype:Basic\n"
+      }
+    },
+    {
+      "name": "export-empty-data-falls-through",
+      "args": [
+        "export",
+        "--data",
+        "",
+        "--stdin"
+      ],
+      "stdin": "{\"topic\":\"Da stdin\",\"cards\":[]}",
+      "stdout": "✅ Exported 0 cards to <dataRoot>/decks/da-stdin.tsv\n",
+      "stderr": "",
+      "exitCode": 0,
+      "files": {
+        "decks/da-stdin.tsv": "#separator:tab\n#html:true\n#tags column:3\n#deck:Proxi::Da stdin\n#notetype:Basic\n"
+      }
+    },
+    {
+      "name": "export-base-dir",
+      "args": [
+        "export",
+        "--data",
+        "{\"topic\":\"Base\"}",
+        "--base-dir",
+        "out"
+      ],
+      "stdout": "✅ Exported 0 cards to out/decks/base.tsv\n",
+      "stderr": "",
+      "exitCode": 0,
+      "files": {
+        "out/decks/base.tsv": "#separator:tab\n#html:true\n#tags column:3\n#deck:Proxi::Base\n#notetype:Basic\n"
+      }
+    },
+    {
+      "name": "export-no-payload",
+      "args": [
+        "export"
+      ],
+      "stdout": "✅ Exported 0 cards to <dataRoot>/decks/lesson.tsv\n",
+      "stderr": "",
+      "exitCode": 0,
+      "files": {
+        "decks/lesson.tsv": "#separator:tab\n#html:true\n#tags column:3\n#deck:Proxi::Lesson\n#notetype:Basic\n"
+      }
+    },
+    {
+      "name": "export-invalid-data",
+      "args": [
+        "export",
+        "--data",
+        "{"
+      ],
+      "stderrPrefix": "Fatal error: SyntaxError: ",
+      "stdout": "",
+      "stderr": "Fatal error: SyntaxError: ",
+      "exitCode": 1,
+      "files": {}
+    },
+    {
+      "name": "export-invalid-stdin-with-lesson",
+      "args": [
+        "export",
+        "--stdin",
+        "--lesson",
+        "courses/vue-vetrine/lessons/0001-reattivita.html"
+      ],
+      "stdin": "nope",
+      "stderrPrefix": "Fatal error: SyntaxError: ",
+      "stdout": "",
+      "stderr": "Fatal error: SyntaxError: ",
+      "exitCode": 1,
+      "files": {}
+    }
+  ]
+}

@@ -1,13 +1,14 @@
 mod common;
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use reqwest::{Client, Response};
+use reqwest::Client;
 use serde_json::Value;
 
-use proxi::server::{start, ServerOptions};
+use common::{Fixture, first_event};
+use proxi::server::start;
 
 fn golden_file(route: &str) -> PathBuf {
     common::repo_root()
@@ -19,19 +20,18 @@ fn golden_file(route: &str) -> PathBuf {
         .join(format!("{route}.json"))
 }
 
-/// Replays one captured route against a fresh Rust server and compares status and body.
-async fn replay(route: &str) {
+/// Replays one captured route against a fresh Rust server and compares status and body. `ordered`
+/// also compares the serialised bodies, so key order has to match Node's.
+async fn replay(route: &str, ordered: bool) {
     let file = golden_file(route);
     let raw = fs::read_to_string(&file)
         .unwrap_or_else(|error| panic!("read {}: {error}", file.display()));
     let golden: Value = serde_json::from_str(&raw)
         .unwrap_or_else(|error| panic!("parse {}: {error}", file.display()));
 
-    let dir = common::temp_dir(route);
-    let repo = dir.0.join("repo");
-    let data = dir.0.join("data");
-    fs::create_dir_all(&repo).expect("create repo");
-    fs::create_dir_all(&data).expect("create data");
+    let fixture = Fixture::new(route);
+    let repo = fixture.repo.clone();
+    let data = fixture.data.clone();
 
     for (rel, seed) in golden["seed"].as_object().expect("seed object") {
         let target = repo.join(rel);
@@ -40,11 +40,10 @@ async fn replay(route: &str) {
         fs::write(&target, serde_json::to_vec_pretty(seed).expect("serialise seed"))
             .unwrap_or_else(|error| panic!("write seed {rel}: {error}"));
     }
+    write_data_seed(&data, &golden["dataSeed"]);
 
-    let mut options = ServerOptions::new(repo.clone());
-    options.data_root = Some(data.clone());
     // Long enough that only the request's event can appear in the stream.
-    options.keep_alive = Duration::from_secs(120);
+    let options = fixture.options_with_keep_alive(Duration::from_secs(120));
     let server = start(options).await.expect("start Rust server");
     let client = Client::new();
     let repo_root = proxi::data_root::resolve_path(&repo).display().to_string();
@@ -106,11 +105,15 @@ async fn replay(route: &str) {
         let expected_body = case["response"]["body"].clone();
 
         if (200..300).contains(&expected_status) {
-            assert_eq!(
-                normalise(body, &repo_root, &data_root),
-                expected_body,
-                "{label}"
-            );
+            let normalised = normalise(body, &repo_root, &data_root);
+            assert_eq!(normalised, expected_body, "{label}");
+            if ordered {
+                assert_eq!(
+                    serde_json::to_string(&normalised).expect("serialise Rust body"),
+                    serde_json::to_string(&expected_body).expect("serialise golden body"),
+                    "{label}: key order"
+                );
+            }
         } else {
             // Error messages differ word for word; only the shape is shared.
             assert!(
@@ -133,29 +136,22 @@ async fn replay(route: &str) {
     server.close();
 }
 
-/// Waits for the first complete `data:` block of an SSE stream.
-async fn first_event(stream: &mut Response) -> Value {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    let mut buffer = String::new();
-    loop {
-        if let Some(index) = buffer.find("\n\n") {
-            let block = buffer[..index].to_string();
-            let data: String = block
-                .lines()
-                .filter_map(|line| line.strip_prefix("data:"))
-                .map(str::trim)
-                .collect();
-            assert!(!data.is_empty(), "first SSE block has no data: {block:?}");
-            return serde_json::from_str(&data)
-                .unwrap_or_else(|error| panic!("SSE event is not JSON ({error}): {data}"));
-        }
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        let chunk = tokio::time::timeout(remaining, stream.chunk())
-            .await
-            .unwrap_or_else(|_| panic!("no SSE event within 10 s; got {buffer:?}"))
-            .expect("read SSE chunk")
-            .expect("SSE stream closed before the first event");
-        buffer.push_str(&String::from_utf8_lossy(&chunk));
+/// Writes a golden's `dataSeed` verbatim under the data folder: raw input, never normalised.
+fn write_data_seed(data: &Path, seed: &Value) {
+    let Some(files) = seed.as_object() else {
+        return;
+    };
+    for (rel, text) in files {
+        let target = data.join(rel);
+        fs::create_dir_all(target.parent().expect("data seed file has a parent"))
+            .unwrap_or_else(|error| panic!("create parents of {rel}: {error}"));
+        fs::write(
+            &target,
+            text.as_str()
+                .expect("data seed value is a string")
+                .as_bytes(),
+        )
+        .unwrap_or_else(|error| panic!("write data seed {rel}: {error}"));
     }
 }
 
@@ -232,15 +228,35 @@ fn is_iso_accepts_only_utc_timestamps() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn settings_match_the_node_golden() {
-    replay("settings").await;
+    replay("settings", false).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn limits_match_the_node_golden() {
-    replay("limits").await;
+    replay("limits", false).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn events_match_the_node_golden() {
-    replay("events").await;
+    replay("events", false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn courses_match_the_node_golden() {
+    replay("courses", true).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn lesson_reading_matches_the_node_golden() {
+    replay("lesson", true).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn graph_matches_the_node_golden() {
+    replay("graph", false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn exercises_match_the_node_golden() {
+    replay("exercises", true).await;
 }

@@ -15,6 +15,7 @@ import { courseDeckNameFor } from "../../extensions/anki-sync.ts";
 import { DEFAULT_ANKI_URL, invoke } from "../../extensions/anki-client.ts";
 import { DEFAULT_PORT, type AnkiImportResult, type AnkiStatusResponse, type AnswerBody, type LearnerSettings, type SettingsResponse } from "../shared/protocol.ts";
 import { APP_NAME } from "../shared/identity.mjs";
+import { LESSON_FILE_CSP } from "../shared/csp.ts";
 import { CODE_ROOT, resolveDataRoot } from "../../extensions/data-root.ts";
 import { listCourses, listStandaloneLessons } from "./courses.ts";
 import { docRel, lessonRel, readDocBody, readLesson, readLessonHtml, readReferenceDocument } from "./lesson.ts";
@@ -130,7 +131,7 @@ function fileResponse(abs: string, hardened = false): Response {
   if (hardened) {
     headers["x-content-type-options"] = "nosniff";
     // Lesson HTML is LLM-authored and may run script: sandbox it into an opaque origin so it cannot call /api (same-origin otherwise).
-    if (type.startsWith("text/html")) headers["content-security-policy"] = "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox; frame-ancestors 'self'";
+    if (type.startsWith("text/html")) headers["content-security-policy"] = LESSON_FILE_CSP;
     // Fonts/modules requested from the opaque origin are cross-origin and need CORS (static read-only assets).
     if (/^(font\/|text\/javascript|text\/css)/.test(type)) headers["access-control-allow-origin"] = "*";
   }

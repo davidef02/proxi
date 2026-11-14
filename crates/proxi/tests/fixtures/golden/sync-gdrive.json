@@ -1,0 +1,278 @@
+{
+  "route": "sync-gdrive",
+  "seed": {
+    ".learner/settings.json": {
+      "syncProvider": "local"
+    },
+    ".learner/secrets.json": {
+      "v": 1,
+      "encrypted": false,
+      "data": "{\"gdrive\":{\"refreshToken\":\"rt-1\",\"folderId\":\"folder-1\",\"email\":\"tester@example.com\"}}"
+    }
+  },
+  "dataSeed": {
+    "curriculum.json": "{\"chapters\":[]}\n",
+    "courses/algebra/notes.md": "# algebra\n",
+    "courses/algebra/lessons/0001-intro.html": "<p>locale</p>\n",
+    "graph/nodes.jsonl": "{\"id\":\"n1\"}\n"
+  },
+  "drive": {
+    "folderId": "folder-1",
+    "files": {
+      "courses/algebra/lessons/0001-intro.html": "<p>remoto</p>\n",
+      "decks/algebra.tsv": "q\ta\n"
+    }
+  },
+  "cases": [
+    {
+      "name": "status-connected",
+      "request": {
+        "method": "GET",
+        "path": "/api/sync"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "state": "idle",
+          "provider": "local",
+          "dataRoot": "<dataRoot>",
+          "dataRootFromEnv": false,
+          "needsData": false,
+          "encrypted": false,
+          "github": {
+            "connected": false
+          },
+          "gdrive": {
+            "connected": true,
+            "email": "tester@example.com",
+            "pending": false
+          },
+          "conflictCount": 0,
+          "trashCount": 0
+        }
+      }
+    },
+    {
+      "name": "provider-gdrive",
+      "request": {
+        "method": "POST",
+        "path": "/api/settings",
+        "body": {
+          "syncProvider": "gdrive"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "provider": "claude",
+          "claudeAuth": "subscription",
+          "anthropicApiKey": "",
+          "agyModels": {
+            "teacher": "gemini-3.8-flash-high",
+            "subagent": "gemini-3.8-flash-medium",
+            "map": "gemini-3.8-flash-medium"
+          },
+          "opencodeModels": {
+            "teacher": "omniroute/auto/best-coding",
+            "subagent": "omniroute/auto/fast",
+            "map": "omniroute/auto/fast"
+          },
+          "teacherModel": "sonnet",
+          "subagentModel": "sonnet",
+          "mapModel": "sonnet",
+          "effort": {
+            "teacher": "default",
+            "subagent": "default",
+            "map": "default"
+          },
+          "autoMap": true,
+          "sttProvider": "groq",
+          "sttApiKey": "",
+          "dictationLanguage": "it",
+          "syncProvider": "gdrive",
+          "githubClientId": "",
+          "googleClientId": "",
+          "googleClientSecret": "",
+          "repoRoot": "<repoRoot>",
+          "dataRoot": "<dataRoot>"
+        }
+      }
+    },
+    {
+      "name": "run-first",
+      "request": {
+        "method": "POST",
+        "path": "/api/sync/run",
+        "body": {}
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "state": "idle",
+          "at": "<iso>",
+          "pushed": 3,
+          "pulled": 2,
+          "deleted": 0,
+          "conflicts": 1,
+          "provider": "gdrive",
+          "dataRoot": "<dataRoot>",
+          "dataRootFromEnv": false,
+          "needsData": false,
+          "encrypted": false,
+          "github": {
+            "connected": false
+          },
+          "gdrive": {
+            "connected": true,
+            "email": "tester@example.com",
+            "pending": false
+          },
+          "conflictCount": 1,
+          "trashCount": 0
+        }
+      },
+      "remote": [
+        {
+          "method": "POST",
+          "path": "/token",
+          "body": {
+            "client_id": "596427399450-dbi9kfci4g4hfmdic4l5o8shr6vetbna.apps.googleusercontent.com",
+            "refresh_token": "rt-1",
+            "grant_type": "refresh_token"
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/upload/drive/v3/files?uploadType=multipart&fields=id,size,md5Checksum,modifiedTime",
+          "body": {
+            "meta": {
+              "name": "courses/algebra/notes.md",
+              "parents": [
+                "folder-1"
+              ],
+              "appProperties": {
+                "proxi": "file"
+              },
+              "modifiedTime": "<iso>"
+            },
+            "data": "# algebra\n"
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/upload/drive/v3/files?uploadType=multipart&fields=id,size,md5Checksum,modifiedTime",
+          "body": {
+            "meta": {
+              "name": "graph/nodes.jsonl",
+              "parents": [
+                "folder-1"
+              ],
+              "appProperties": {
+                "proxi": "file"
+              },
+              "modifiedTime": "<iso>"
+            },
+            "data": "{\"id\":\"n1\"}\n"
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/upload/drive/v3/files?uploadType=multipart&fields=id,size,md5Checksum,modifiedTime",
+          "body": {
+            "meta": {
+              "name": "curriculum.json",
+              "parents": [
+                "folder-1"
+              ],
+              "appProperties": {
+                "proxi": "file"
+              },
+              "modifiedTime": "<iso>"
+            },
+            "data": "{\"chapters\":[]}\n"
+          }
+        }
+      ]
+    },
+    {
+      "name": "run-again",
+      "request": {
+        "method": "POST",
+        "path": "/api/sync/run",
+        "body": {}
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "state": "idle",
+          "at": "<iso>",
+          "pushed": 0,
+          "pulled": 0,
+          "deleted": 0,
+          "conflicts": 0,
+          "provider": "gdrive",
+          "dataRoot": "<dataRoot>",
+          "dataRootFromEnv": false,
+          "needsData": false,
+          "encrypted": false,
+          "github": {
+            "connected": false
+          },
+          "gdrive": {
+            "connected": true,
+            "email": "tester@example.com",
+            "pending": false
+          },
+          "conflictCount": 1,
+          "trashCount": 0
+        }
+      },
+      "remote": [
+        {
+          "method": "POST",
+          "path": "/token",
+          "body": {
+            "client_id": "596427399450-dbi9kfci4g4hfmdic4l5o8shr6vetbna.apps.googleusercontent.com",
+            "refresh_token": "rt-1",
+            "grant_type": "refresh_token"
+          }
+        }
+      ]
+    },
+    {
+      "name": "disconnect",
+      "request": {
+        "method": "POST",
+        "path": "/api/sync/disconnect",
+        "body": {
+          "provider": "gdrive"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "state": "idle",
+          "at": "<iso>",
+          "pushed": 0,
+          "pulled": 0,
+          "deleted": 0,
+          "conflicts": 0,
+          "provider": "local",
+          "dataRoot": "<dataRoot>",
+          "dataRootFromEnv": false,
+          "needsData": false,
+          "encrypted": false,
+          "github": {
+            "connected": false
+          },
+          "gdrive": {
+            "connected": false,
+            "pending": false
+          },
+          "conflictCount": 1,
+          "trashCount": 0
+        }
+      }
+    }
+  ]
+}

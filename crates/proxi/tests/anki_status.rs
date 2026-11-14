@@ -1,352 +1,230 @@
+//! Anki status and review start against the fake AnkiConnect: Node's exact response text.
+
 mod common;
 
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
-
+use common::anki_seed::{open_state, seed};
+use common::fake_anki::{FakeAnki, FakeState};
+use common::TempDir;
+use proxi::anki_client::{AnkiClient, FETCH_FAILED, TIMED_OUT};
+use proxi::anki_status::{start_review, status_all, status_for_course, ReviewStart};
+use proxi::protocol::AnkiStatusResponse;
 use serde_json::json;
 
-use proxi::anki::{fetch_anki_status, invoke, CourseCounts, DEFAULT_TIMEOUT};
-
-fn zero() -> CourseCounts {
-    CourseCounts {
-        due: 0,
-        learning: 0,
-        new_cards: 0,
-    }
+async fn setup(state: FakeState) -> (TempDir, FakeAnki, AnkiClient) {
+    let data = common::temp_dir("anki-status");
+    seed(&data.0);
+    let fake = FakeAnki::start(state).await;
+    let client = AnkiClient::new(&fake.url).expect("build anki client");
+    (data, fake, client)
 }
 
-#[tokio::test]
-async fn counts_due_new_learning_from_the_root_deck_only() {
-    let anki = common::fake_anki(|request| {
-        let action = request["action"].as_str().unwrap_or("");
-        let result = if action == "deckNamesAndIds" {
-            json!({ "Altro": 9, "Proxi": 1, "Proxi::Vue": 2, "Proxi::Vue::Proxi": 3 })
-        } else {
-            json!({
-                "3": { "deck_id": 3, "name": "Proxi", "new_count": 0, "learn_count": 0, "review_count": 0, "total_in_deck": 1 },
-                "1": { "deck_id": 1, "name": "Proxi", "new_count": 2, "learn_count": 1, "review_count": 3, "total_in_deck": 0 },
-                "2": { "deck_id": 2, "name": "Vue", "new_count": 2, "learn_count": 1, "review_count": 3, "total_in_deck": 7 }
-            })
-        };
-        common::FakeReply {
-            status: 200,
-            body: json!({ "result": result, "error": null }).to_string(),
-            delay: Duration::ZERO,
-        }
-    });
-
-    let status = fetch_anki_status(
-        &anki.url,
-        DEFAULT_TIMEOUT,
-        || Vec::<String>::new(),
-        |course| format!("Proxi::{course}"),
-    )
-    .await
-    .expect("status");
-
-    assert_eq!(status.due, 3);
-    assert_eq!(status.new_cards, 2);
-    assert_eq!(status.learning, 1);
-    assert_eq!(status.total, 8);
-    assert_eq!(status.deck_count, 3);
-    assert!(status.by_course.is_empty());
+/// A port nothing listens on: Anki is closed.
+fn closed_client() -> AnkiClient {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a port to drop");
+    let port = listener.local_addr().expect("addr").port();
+    drop(listener);
+    AnkiClient::new(format!("http://127.0.0.1:{port}")).expect("build anki client")
 }
 
-#[tokio::test]
-async fn maps_one_get_deck_stats_batch_to_by_course_and_zero_fills() {
-    let anki = common::fake_anki_scripted(&json!({
-        "deckNamesAndIds": { "result": { "Proxi::vue": 2 }, "error": null },
-        "getDeckStats": {
-            "result": {
-                "2": { "deck_id": 2, "name": "Vue", "new_count": 2, "learn_count": 1, "review_count": 3, "total_in_deck": 9 }
-            },
-            "error": null
-        }
-    }));
+fn serialise(status: &AnkiStatusResponse) -> String {
+    serde_json::to_string(status).expect("serialise status")
+}
 
-    let status = fetch_anki_status(
-        &anki.url,
-        DEFAULT_TIMEOUT,
-        || vec!["vue".to_string(), "rust".to_string()],
-        |course| format!("Proxi::{course}"),
-    )
-    .await
-    .expect("status");
+#[tokio::test(flavor = "multi_thread")]
+async fn open_anki_reports_the_root_totals_and_every_course() {
+    let (data, fake, client) = setup(open_state()).await;
+
+    let text = serialise(&status_all(&client, &data.0).await);
 
     assert_eq!(
-        status.by_course,
+        text,
+        r#"{"online":true,"due":4,"newCards":5,"learning":2,"total":13,"byCourse":{"demo":{"due":4,"learning":2,"newCards":5},"vuoto":{"due":0,"learning":0,"newCards":0},"orfano":{"due":0,"learning":0,"newCards":0}}}"#
+    );
+    // `params` is absent from deckNamesAndIds, as in Node.
+    assert_eq!(
+        fake.requests(),
         vec![
-            (
-                "vue".to_string(),
-                CourseCounts {
-                    due: 3,
-                    learning: 1,
-                    new_cards: 2,
-                },
-            ),
-            ("rust".to_string(), zero()),
+            json!({"action": "deckNamesAndIds", "version": 6}),
+            json!({
+                "action": "getDeckStats",
+                "version": 6,
+                "params": {"decks": ["Proxi", "Proxi::Demo", "Proxi::Altro"]},
+            }),
         ]
     );
-    let requests = anki.requests();
-    let stats: Vec<_> = requests
-        .iter()
-        .filter(|request| request["action"] == "getDeckStats")
-        .collect();
-    assert_eq!(
-        stats.len(),
-        1,
-        "one batch for every course, never one call per course"
-    );
-    assert_eq!(stats[0]["params"]["decks"], json!(["Proxi::vue"]));
 }
 
-#[tokio::test]
-async fn zero_fills_planned_courses_when_no_proxi_deck_exists() {
-    let anki = common::fake_anki_scripted(&json!({
-        "deckNamesAndIds": { "result": { "Altro": 9 }, "error": null }
+#[tokio::test(flavor = "multi_thread")]
+async fn without_the_root_deck_the_due_counts_sum_every_proxi_entry() {
+    let mut state = open_state();
+    state.deck_names_and_ids = Some(json!({ "Proxi::Demo": 2, "Proxi::Altro": 3 }));
+    state.deck_stats = Some(json!({
+        "2": { "deck_id": 2, "name": "Demo", "new_count": 5, "learn_count": 2, "review_count": 4, "total_in_deck": 10 },
+        "3": { "deck_id": 3, "name": "Altro", "new_count": 1, "learn_count": 0, "review_count": 0, "total_in_deck": 3 },
     }));
+    let (data, _fake, client) = setup(state).await;
 
-    let status = fetch_anki_status(
-        &anki.url,
-        DEFAULT_TIMEOUT,
-        || vec!["vue".to_string(), "rust".to_string()],
-        |course| format!("Proxi::{course}"),
-    )
-    .await
-    .expect("status");
+    let text = serialise(&status_all(&client, &data.0).await);
 
-    assert_eq!(status.deck_count, 0);
-    // A course whose deck does not exist yet still gets an entry, so the board can hide its badge.
     assert_eq!(
-        status.by_course,
-        vec![("vue".to_string(), zero()), ("rust".to_string(), zero())]
+        text,
+        r#"{"online":true,"due":4,"newCards":6,"learning":2,"total":13,"byCourse":{"demo":{"due":4,"learning":2,"newCards":5},"vuoto":{"due":0,"learning":0,"newCards":0},"orfano":{"due":0,"learning":0,"newCards":0}}}"#
     );
-    let requests = anki.requests();
-    assert_eq!(requests.len(), 1, "no Proxi deck: nothing to ask getDeckStats about");
 }
 
-#[tokio::test]
-async fn ignores_decks_under_another_root() {
-    let anki = common::fake_anki_scripted(&json!({
-        "deckNamesAndIds": {
-            "result": { "Proxi": 1, "Proxi::Demo": 2, "Altro::Demo": 3 },
-            "error": null
-        },
-        "getDeckStats": { "result": {}, "error": null }
+#[tokio::test(flavor = "multi_thread")]
+async fn no_proxi_deck_reports_zeros_without_asking_for_stats() {
+    let mut state = FakeState::default();
+    state.deck_names_and_ids = Some(json!({ "Default": 1 }));
+    let (data, fake, client) = setup(state).await;
+
+    let text = serialise(&status_all(&client, &data.0).await);
+
+    assert_eq!(
+        text,
+        r#"{"online":true,"due":0,"newCards":0,"learning":0,"total":0,"byCourse":{"demo":{"due":0,"learning":0,"newCards":0},"vuoto":{"due":0,"learning":0,"newCards":0},"orfano":{"due":0,"learning":0,"newCards":0}}}"#
+    );
+    assert_eq!(fake.actions(), ["deckNamesAndIds"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn course_status_matches_the_node_text_and_a_missing_deck_is_not_an_error() {
+    let (data, _fake, client) = setup(open_state()).await;
+
+    assert_eq!(
+        serialise(&status_for_course(&client, &data.0, "demo").await),
+        r#"{"online":true,"due":4,"newCards":5,"learning":2,"total":10,"deck":"Proxi::Demo","deckExists":true}"#
+    );
+    assert_eq!(
+        serialise(&status_for_course(&client, &data.0, "vuoto").await),
+        r#"{"online":true,"due":0,"newCards":0,"learning":0,"total":0,"deck":"Proxi::Vuoto","deckExists":false}"#
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stats_keyed_by_another_id_fall_back_to_the_first_entry() {
+    let mut state = open_state();
+    state.deck_stats = Some(json!({
+        "99": { "deck_id": 99, "name": "Whatever", "new_count": 7, "learn_count": 1, "review_count": 2, "total_in_deck": 5 },
     }));
+    let (data, _fake, client) = setup(state).await;
 
-    fetch_anki_status(
-        &anki.url,
-        DEFAULT_TIMEOUT,
-        || Vec::<String>::new(),
-        |course| course.to_string(),
-    )
-    .await
-    .expect("status");
-
-    let requests = anki.requests();
-    assert_eq!(requests.len(), 2);
-    assert_eq!(requests[1]["params"]["decks"], json!(["Proxi", "Proxi::Demo"]));
+    assert_eq!(
+        serialise(&status_for_course(&client, &data.0, "demo").await),
+        r#"{"online":true,"due":2,"newCards":7,"learning":1,"total":5,"deck":"Proxi::Demo","deckExists":true}"#
+    );
 }
 
-#[tokio::test]
-async fn invoke_sends_action_version_and_only_present_params() {
-    let anki = common::fake_anki_scripted(&json!({
-        "deckNamesAndIds": { "result": {}, "error": null },
-        "getDeckStats": { "result": {}, "error": null }
+#[tokio::test(flavor = "multi_thread")]
+async fn stats_fall_back_in_javascript_key_order() {
+    let mut state = open_state();
+    // Demo's deck id is missing from the stats, so Node's Object.values(stats)[0] picks
+    // the smallest canonical array index, not the first inserted key.
+    state.deck_names_and_ids = Some(json!({ "Proxi": 1, "Proxi::Demo": 3 }));
+    state.deck_stats = Some(json!({
+        "10": { "deck_id": 10, "name": "Ten", "new_count": 10, "learn_count": 0, "review_count": 10, "total_in_deck": 1 },
+        "2": { "deck_id": 2, "name": "Two", "new_count": 2, "learn_count": 0, "review_count": 2, "total_in_deck": 1 },
     }));
+    let (data, _fake, client) = setup(state).await;
 
-    let response = invoke(&anki.url, "deckNamesAndIds", None, DEFAULT_TIMEOUT).await;
-    assert_eq!(response.error, None);
-    assert_eq!(response.result, Some(json!({})));
-
-    invoke(
-        &anki.url,
-        "getDeckStats",
-        Some(json!({ "decks": ["Proxi"] })),
-        DEFAULT_TIMEOUT,
-    )
-    .await;
-
-    let requests = anki.requests();
     assert_eq!(
-        requests[0].to_string(),
-        r#"{"action":"deckNamesAndIds","version":6}"#
-    );
-    assert_eq!(
-        requests[1].to_string(),
-        r#"{"action":"getDeckStats","version":6,"params":{"decks":["Proxi"]}}"#
+        serialise(&status_for_course(&client, &data.0, "demo").await),
+        r#"{"online":true,"due":2,"newCards":2,"learning":0,"total":1,"deck":"Proxi::Demo","deckExists":true}"#
     );
 }
 
-#[tokio::test]
-async fn closed_port_is_fetch_failed() {
-    let url = common::closed_port_url();
+#[tokio::test(flavor = "multi_thread")]
+async fn a_closed_anki_is_offline_for_all_and_for_one_course() {
+    let data = common::temp_dir("anki-status-closed");
+    seed(&data.0);
+    let client = closed_client();
 
-    let error = fetch_anki_status(
-        &url,
-        DEFAULT_TIMEOUT,
-        || Vec::<String>::new(),
-        |course| course.to_string(),
-    )
-    .await
-    .expect_err("closed port");
-    assert_eq!(error, "fetch failed");
-
-    let response = invoke(&url, "deckNamesAndIds", None, DEFAULT_TIMEOUT).await;
-    assert_eq!(response.result, None);
-    assert_eq!(response.error.as_deref(), Some("fetch failed"));
-}
-
-#[tokio::test]
-async fn http_error_keeps_node_status_text() {
-    let anki = common::fake_anki(|_| common::FakeReply {
-        status: 500,
-        body: "{}".to_string(),
-        delay: Duration::ZERO,
-    });
-
-    let response = invoke(&anki.url, "deckNamesAndIds", None, DEFAULT_TIMEOUT).await;
+    let all = status_all(&client, &data.0).await;
+    let all_error = all.error.clone().expect("error text");
+    assert!(
+        matches!(all_error.as_str(), FETCH_FAILED | TIMED_OUT),
+        "{all_error}"
+    );
     assert_eq!(
-        response.error.as_deref(),
-        Some("HTTP 500 Internal Server Error")
+        serialise(&all),
+        format!(r#"{{"online":false,"error":"{all_error}"}}"#)
+    );
+
+    let course = status_for_course(&client, &data.0, "demo").await;
+    let course_error = course.error.clone().expect("error text");
+    assert!(
+        matches!(course_error.as_str(), FETCH_FAILED | TIMED_OUT),
+        "{course_error}"
+    );
+    assert_eq!(
+        serialise(&course),
+        format!(r#"{{"online":false,"error":"{course_error}","deck":"Proxi::Demo"}}"#)
     );
 }
 
-#[tokio::test]
-async fn a_connect_that_drops_syns_times_out() {
-    // Node's AbortSignal.timeout reports the deadline, never "fetch failed", when the host drops
-    // SYNs; a connect timeout must not be classified as a refused connection.
-    let blackhole = common::blackhole();
+#[tokio::test(flavor = "multi_thread")]
+async fn an_anki_error_keeps_its_text() {
+    let mut state = open_state();
+    state.response_error = Some("boom".to_string());
+    let (data, fake, client) = setup(state).await;
 
-    let response = invoke(
-        &blackhole.url,
-        "deckNamesAndIds",
-        None,
-        Duration::from_millis(250),
-    )
-    .await;
-
-    assert_eq!(response.result, None);
     assert_eq!(
-        response.error.as_deref(),
-        Some("AnkiConnect request timed out")
+        serialise(&status_all(&client, &data.0).await),
+        r#"{"online":false,"error":"boom"}"#
+    );
+    assert_eq!(fake.actions(), ["deckNamesAndIds"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_review_opens_the_course_deck() {
+    let (_data, fake, client) = setup(open_state()).await;
+
+    assert_eq!(
+        start_review(&client, "Proxi::Demo").await,
+        ReviewStart::Started
+    );
+    assert_eq!(
+        fake.actions(),
+        ["deckNamesAndIds", "getDeckStats", "guiDeckReview"]
+    );
+    assert_eq!(
+        fake.requests().last(),
+        Some(&json!({
+            "action": "guiDeckReview",
+            "version": 6,
+            "params": {"name": "Proxi::Demo"},
+        }))
     );
 }
 
-#[tokio::test]
-async fn an_answer_after_the_deadline_still_times_out() {
-    // The refusal grace only extends how long Windows takes to say ECONNREFUSED; a real answer
-    // that arrives after Node's deadline must still read as a timeout.
-    let anki = common::fake_anki(|_| common::FakeReply {
-        status: 200,
-        body: json!({ "result": {}, "error": null }).to_string(),
-        delay: Duration::from_millis(300),
-    });
+#[tokio::test(flavor = "multi_thread")]
+async fn a_missing_deck_does_not_open_anything() {
+    let (_data, fake, client) = setup(open_state()).await;
 
-    let response = invoke(
-        &anki.url,
-        "deckNamesAndIds",
-        None,
-        Duration::from_millis(250),
-    )
-    .await;
-
-    assert_eq!(response.result, None);
     assert_eq!(
-        response.error.as_deref(),
-        Some("AnkiConnect request timed out")
+        start_review(&client, "Proxi::Vuoto").await,
+        ReviewStart::NoDeck
+    );
+    assert_eq!(fake.actions(), ["deckNamesAndIds"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_gui_deck_review_error_is_reported() {
+    let (_data, fake, client) = setup(open_state()).await;
+    fake.update(|state| state.gui_deck_review_error = Some("boom".to_string()));
+
+    assert_eq!(
+        start_review(&client, "Proxi::Demo").await,
+        ReviewStart::Failed("boom".to_string())
     );
 }
 
-#[tokio::test]
-async fn a_body_that_finishes_after_the_deadline_still_times_out() {
-    // Headers beat the deadline, the body does not: AbortSignal.timeout aborts the whole exchange,
-    // so a body that lands inside the refusal grace must still read as a timeout, not as a result.
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind slow body");
-    let address = listener.local_addr().expect("slow body address");
-    std::thread::spawn(move || {
-        let Ok((mut stream, _)) = listener.accept() else {
-            return;
-        };
-        let mut raw = Vec::new();
-        let mut chunk = [0u8; 1024];
-        while !raw.windows(4).any(|w| w == b"\r\n\r\n") {
-            match std::io::Read::read(&mut stream, &mut chunk) {
-                Ok(0) | Err(_) => return,
-                Ok(n) => raw.extend_from_slice(&chunk[..n]),
-            }
-        }
-        let body = br#"{"result":{},"error":null}"#;
-        let _ = std::io::Write::write_all(
-            &mut stream,
-            format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                body.len()
-            )
-            .as_bytes(),
-        );
-        std::thread::sleep(Duration::from_millis(400));
-        let _ = std::io::Write::write_all(&mut stream, body);
-    });
+#[tokio::test(flavor = "multi_thread")]
+async fn a_closed_anki_fails_the_review() {
+    let client = closed_client();
 
-    let response = invoke(
-        &format!("http://127.0.0.1:{}", address.port()),
-        "deckNamesAndIds",
-        None,
-        Duration::from_millis(250),
-    )
-    .await;
-
-    assert_eq!(response.result, None);
-    assert_eq!(
-        response.error.as_deref(),
-        Some("AnkiConnect request timed out")
-    );
-}
-
-#[tokio::test]
-async fn slow_anki_times_out() {
-    let anki = common::fake_anki(|_| common::FakeReply {
-        status: 200,
-        body: json!({ "result": {}, "error": null }).to_string(),
-        delay: Duration::from_millis(500),
-    });
-
-    let response = invoke(
-        &anki.url,
-        "deckNamesAndIds",
-        None,
-        Duration::from_millis(100),
-    )
-    .await;
-    assert_eq!(
-        response.error.as_deref(),
-        Some("AnkiConnect request timed out")
-    );
-}
-
-#[tokio::test]
-async fn anki_error_fails_the_status_without_scanning_courses() {
-    let anki = common::fake_anki_scripted(&json!({
-        "deckNamesAndIds": { "result": null, "error": "boom" }
-    }));
-    let calls = Arc::new(AtomicUsize::new(0));
-    let seen = Arc::clone(&calls);
-
-    let error = fetch_anki_status(
-        &anki.url,
-        DEFAULT_TIMEOUT,
-        move || {
-            seen.fetch_add(1, Ordering::SeqCst);
-            Vec::<String>::new()
-        },
-        |course| course.to_string(),
-    )
-    .await
-    .expect_err("boom");
-
-    assert_eq!(error, "boom");
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    let ReviewStart::Failed(error) = start_review(&client, "Proxi::Demo").await else {
+        panic!("a closed Anki must fail the review");
+    };
+    assert!(matches!(error.as_str(), FETCH_FAILED | TIMED_OUT), "{error}");
 }

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { ankiCause, ankiStatus, appendProgress, buildKnowledgeMap, purgeProgress, readProgress, reinforceList } from "../server/knowledge.ts";
+import { ankiCause, ankiStatus, appendProgress, purgeProgress, readProgress, reinforceList } from "../server/knowledge.ts";
 import type { ProgressRecord } from "../shared/protocol.ts";
 
 function makeRepo() {
@@ -25,54 +25,6 @@ function makeRepo() {
 }
 const rec = (o: Partial<ProgressRecord>): ProgressRecord => ({ at: "2026-01-01T00:00:00Z", sessionId: "s", course: "demo", lessonSlug: "t", nodeRefs: [], kind: "check", ...o });
 const ankiRec = (o: Partial<ProgressRecord>): ProgressRecord => rec({ kind: "review", source: "anki", sessionId: "anki", nodeRefs: ["demo/t#alpha"], ...o });
-
-test("no progress: taught, edges skip unknown ids, prose lessons skipped", async () => {
-  const root = makeRepo();
-  const m = await buildKnowledgeMap(root);
-  assert.equal(m.nodes.length, 3);
-  assert.ok(m.nodes.every((n) => n.status === "taught" && n.attempts === 0));
-  assert.equal(m.nodes[0].key, "demo/t#alpha");
-  assert.equal(m.nodes[0].lessonPath, "courses/demo/lessons/0001-t.html");
-  assert.deepEqual(m.edges, [{ from: "demo/t#alpha", to: "demo/t#beta" }]);
-});
-
-test("status derived from progress; matching by nodeId, N<i>, key", async () => {
-  const root = makeRepo();
-  await appendProgress(root, rec({ nodeRefs: ["alpha"], correct: true, confidence: 90 }));
-  await appendProgress(root, rec({ nodeRefs: ["N2"], correct: true, confidence: 20, at: "2026-01-02T00:00:00Z" }));
-  await appendProgress(root, rec({ nodeRefs: ["N3"], correct: true }));
-  await appendProgress(root, rec({ nodeRefs: ["N3"], correct: false, dontKnow: true, at: "2026-01-03T00:00:00Z" }));
-  fs.appendFileSync(path.join(root, "courses/demo/progress.jsonl"), "not json\n");
-  const by = Object.fromEntries((await buildKnowledgeMap(root)).nodes.map((n) => [n.nodeId, n]));
-  assert.equal(by.alpha.status, "solid");
-  assert.equal(by.alpha.attempts, 1);
-  assert.equal(by.beta.status, "shaky"); // correct, confidence 20
-  assert.equal(by.beta.lastAt, "2026-01-02T00:00:00Z");
-  assert.equal(by.gamma.status, "missed"); // latest wins
-  assert.equal(by.gamma.attempts, 2);
-  assert.equal((await readProgress(root, "demo")).length, 4);
-});
-
-test("practice/exercise lines never grade a node (AC4)", async () => {
-  const root = makeRepo();
-  const file = path.join(root, "courses", "demo", "progress.jsonl");
-  fs.appendFileSync(
-    file,
-    JSON.stringify({ kind: "practice", nodeRefs: ["demo/t#beta"], outcome: "solved", correct: true, at: "2026-01-01T00:00:00Z", sessionId: "s", course: "demo" }) + "\n",
-  );
-  fs.appendFileSync(
-    file,
-    JSON.stringify({ kind: "exercise", nodeRefs: ["demo/t#gamma"], correct: true, at: "2026-01-01T00:00:00Z", sessionId: "s", course: "demo" }) + "\n",
-  );
-  await appendProgress(root, rec({ nodeRefs: ["alpha"], correct: true }));
-  const by = Object.fromEntries((await buildKnowledgeMap(root)).nodes.map((n) => [n.nodeId, n]));
-  assert.equal(by.alpha.status, "solid");
-  assert.equal(by.beta.status, "taught");
-  assert.equal(by.beta.attempts, 0);
-  assert.equal(by.gamma.status, "taught");
-  assert.equal(by.gamma.attempts, 0);
-  assert.equal((await readProgress(root, "demo")).length, 1);
-});
 
 test("purgeProgress: (a) drops practice and exercise lines, keeps check and malformed lines byte-identical", () => {
   const root = makeRepo();
@@ -142,69 +94,6 @@ test("purgeProgress: (f) keeps blank lines and custom JSON objects intact", () =
 
   purgeProgress(root);
   assert.equal(fs.readFileSync(file, "utf-8"), "\n" + custom + "\n");
-});
-
-test("readProgress on a missing course is empty", async () => {
-  assert.deepEqual(await readProgress(makeRepo(), "nope"), []);
-});
-
-test("(a) AC3 part 1: check correct:false at T1, then Anki review ease 3 at T2 > T1 -> solid", async () => {
-  const root = makeRepo();
-  await appendProgress(root, rec({ nodeRefs: ["alpha"], correct: false, at: "2026-01-01T00:00:00Z" }));
-  await appendProgress(root, ankiRec({ ease: 3, at: "2026-01-02T00:00:00Z" }));
-  const by = Object.fromEntries((await buildKnowledgeMap(root)).nodes.map((n) => [n.nodeId, n]));
-  assert.equal(by.alpha.status, "solid");
-  assert.equal(by.alpha.attempts, 2);
-  assert.equal(by.alpha.lastAt, "2026-01-02T00:00:00Z");
-});
-
-test("(b) AC3 part 2: check correct:true, confidence:90 and no review -> solid", async () => {
-  const root = makeRepo();
-  await appendProgress(root, rec({ nodeRefs: ["alpha"], correct: true, confidence: 90, at: "2026-01-01T00:00:00Z" }));
-  const by = Object.fromEntries((await buildKnowledgeMap(root)).nodes.map((n) => [n.nodeId, n]));
-  assert.equal(by.alpha.status, "solid");
-  assert.equal(by.alpha.attempts, 1);
-});
-
-test("(c) review with ease 3 at 01-01 appended before check correct:false at 01-05 -> still solid (D1)", async () => {
-  const root = makeRepo();
-  await appendProgress(root, ankiRec({ ease: 3, at: "2026-01-01T00:00:00Z" }));
-  await appendProgress(root, rec({ nodeRefs: ["alpha"], correct: false, at: "2026-01-05T00:00:00Z" }));
-  const by = Object.fromEntries((await buildKnowledgeMap(root)).nodes.map((n) => [n.nodeId, n]));
-  assert.equal(by.alpha.status, "solid");
-  assert.equal(by.alpha.attempts, 2);
-  assert.equal(by.alpha.lastAt, "2026-01-05T00:00:00Z");
-});
-
-test("(d) two checks appended out of order (01-05 false first, 01-02 true second) -> missed (A5)", async () => {
-  const root = makeRepo();
-  await appendProgress(root, rec({ nodeRefs: ["alpha"], correct: false, at: "2026-01-05T00:00:00Z" }));
-  await appendProgress(root, rec({ nodeRefs: ["alpha"], correct: true, confidence: 90, at: "2026-01-02T00:00:00Z" }));
-  const by = Object.fromEntries((await buildKnowledgeMap(root)).nodes.map((n) => [n.nodeId, n]));
-  assert.equal(by.alpha.status, "missed");
-  assert.equal(by.alpha.attempts, 2);
-  assert.equal(by.alpha.lastAt, "2026-01-05T00:00:00Z");
-});
-
-test("(e) ankiStatus cases", () => {
-  assert.equal(ankiStatus([ankiRec({ ease: 1 })]), "shaky");
-  assert.equal(ankiStatus([ankiRec({ ease: 3, lapses: 3, interval: 10 })]), "shaky");
-  assert.equal(ankiStatus([ankiRec({ ease: 3, lapses: 3, interval: 30 })]), "solid");
-  assert.equal(ankiStatus([ankiRec({ ease: 2, lapses: 0, interval: 5 })]), "solid");
-  assert.equal(
-    ankiStatus([
-      ankiRec({ cardId: 1, ease: 1 }),
-      ankiRec({ cardId: 2, ease: 3, lapses: 0, interval: 30 }),
-    ]),
-    "shaky",
-  );
-  assert.equal(
-    ankiStatus([
-      ankiRec({ cardId: 1, ease: 1, at: "2026-01-01T00:00:00Z", reviewId: 100 }),
-      ankiRec({ cardId: 1, ease: 3, interval: 30, lapses: 0, at: "2026-01-02T00:00:00Z", reviewId: 101 }),
-    ]),
-    "solid",
-  );
 });
 
 test("(f) readProgress returns review lines, and purgeProgress keeps a review line byte-identical", async () => {

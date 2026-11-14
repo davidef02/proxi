@@ -1,70 +1,12 @@
 mod common;
 
 use std::fs;
-use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Stdio};
-use std::sync::mpsc;
-use std::thread;
-use std::time::{Duration, Instant};
 
 use reqwest::{Client, Method, StatusCode};
 use serde_json::Value;
 
 use proxi::server::{start, RunningServer, ServerOptions};
-
-/// The real Node server, killed on drop so a failing test never leaks a process.
-struct NodeServer {
-    child: Child,
-    port: u16,
-}
-
-impl NodeServer {
-    fn url(&self) -> String {
-        format!("http://127.0.0.1:{}", self.port)
-    }
-}
-
-impl Drop for NodeServer {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
-fn start_node(repo: &Path) -> NodeServer {
-    let repo_arg = repo.display().to_string();
-    let child = common::node(&["crates/proxi/tests/node/serve.ts", &repo_arg])
-        .env_remove("LEARNER_DATA_ROOT")
-        .stdout(Stdio::piped())
-        .spawn()
-        .expect("spawn Node server");
-    let mut server = NodeServer { child, port: 0 };
-
-    let stdout = server.child.stdout.take().expect("stdout pipe");
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        for line in BufReader::new(stdout).lines() {
-            let Ok(line) = line else { break };
-            if tx.send(line).is_err() {
-                break;
-            }
-        }
-    });
-
-    let deadline = Instant::now() + Duration::from_secs(60);
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        assert!(!remaining.is_zero(), "Node server did not print PORT in 60 s");
-        let line = rx
-            .recv_timeout(remaining)
-            .expect("Node server exited before printing PORT");
-        if let Some(raw) = line.trim().strip_prefix("PORT ") {
-            server.port = raw.trim().parse().expect("PORT line has a number");
-            return server;
-        }
-    }
-}
 
 struct Side {
     status: StatusCode,
@@ -79,7 +21,7 @@ struct Same {
 
 struct Pair {
     client: Client,
-    node: NodeServer,
+    node: common::NodeServer,
     rust: RunningServer,
     node_repo: PathBuf,
     rust_repo: PathBuf,
@@ -190,7 +132,7 @@ fn settings_and_limits_match_node() {
 
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
     runtime.block_on(async {
-        let node = start_node(&node_repo.0);
+        let node = common::start_node(&node_repo.0);
         let mut options = ServerOptions::new(rust_repo.0.clone());
         options.data_root = Some(rust_repo.0.clone());
         let rust = start(options).await.expect("start Rust server");

@@ -1,5 +1,6 @@
 mod common;
 
+use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -12,6 +13,9 @@ use reqwest::{Client, StatusCode};
 use serde_json::Value;
 
 use proxi::data_root::resolve_path;
+use proxi::embeddings::EmbeddingConfig;
+
+use common::fake_hf::FakeHf;
 
 /// Every option AC2 requires `proxi serve --help` to list.
 const FLAGS: &[&str] = &[
@@ -45,14 +49,26 @@ impl Drop for ServeProcess {
 
 /// Spawns `proxi serve` and streams its stdout lines to a channel.
 fn spawn_serve(args: &[&str]) -> (ServeProcess, mpsc::Receiver<String>) {
-    let mut child = Command::new(common::proxi_bin())
+    spawn_serve_env(args, &[])
+}
+
+/// Same, with extra env vars set after the inherited-environment cleanups.
+fn spawn_serve_env(
+    args: &[&str],
+    envs: &[(&str, &str)],
+) -> (ServeProcess, mpsc::Receiver<String>) {
+    let mut command = Command::new(common::proxi_bin());
+    command
         .args(args)
         .env_remove("LEARNER_PORT")
         .env_remove("LEARNER_DATA_ROOT")
+        .env_remove("PROXI_SKIP_MODEL")
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .expect("spawn proxi serve");
+        .stderr(Stdio::inherit());
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+    let mut child = command.spawn().expect("spawn proxi serve");
 
     let stdout = child.stdout.take().expect("stdout pipe");
     let (tx, rx) = mpsc::channel();
@@ -156,4 +172,109 @@ fn serve_rejects_an_out_of_range_port_flag() {
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("--port"), "{stderr}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn serve_fetches_the_model_from_the_huggingface_url() {
+    let cfg = EmbeddingConfig::load(&common::repo_root()).expect("embedding config");
+    let fake = FakeHf::start(None, HashMap::new()).await;
+    let root = common::temp_dir("serve-cli-fetch-model");
+    let repo = root.0.join("repo");
+    fs::create_dir_all(&repo).expect("create repo");
+    let repo_arg = repo.display().to_string();
+
+    let (_server, rx) = spawn_serve_env(
+        &[
+            "serve",
+            "--port",
+            "0",
+            "--repo-root",
+            &repo_arg,
+            "--data-root",
+            &repo_arg,
+            "--huggingface-url",
+            &fake.url,
+        ],
+        &[],
+    );
+    let _ = tokio::task::spawn_blocking(move || wait_for_url(&rx))
+        .await
+        .expect("join the URL wait");
+
+    let prefix = format!("/{}/resolve/main/", cfg.model);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !fake.requests().iter().any(|path| path.starts_with(&prefix)) {
+        assert!(
+            Instant::now() < deadline,
+            "no {prefix:?} request in 10 s: {:?}",
+            fake.requests()
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn serve_listens_before_the_model_download_finishes() {
+    // This host never answers: a fetch awaited before listen would hold the `Proxi:` line forever.
+    let fake = FakeHf::start_hanging().await;
+    let root = common::temp_dir("serve-cli-hanging-model");
+    let repo = root.0.join("repo");
+    fs::create_dir_all(&repo).expect("create repo");
+    let repo_arg = repo.display().to_string();
+
+    let started = Instant::now();
+    let (_server, rx) = spawn_serve_env(
+        &[
+            "serve",
+            "--port",
+            "0",
+            "--repo-root",
+            &repo_arg,
+            "--data-root",
+            &repo_arg,
+            "--huggingface-url",
+            &fake.url,
+        ],
+        &[],
+    );
+    let waited = tokio::task::spawn_blocking(move || wait_for_url(&rx))
+        .await
+        .expect("join the URL wait");
+    let (_, port) = waited;
+    assert_ne!(port, 0);
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "the listen line waited for the download: {:?}",
+        started.elapsed()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn serve_skips_the_model_with_proxi_skip_model() {
+    let fake = FakeHf::start(None, HashMap::new()).await;
+    let root = common::temp_dir("serve-cli-skip-model");
+    let repo = root.0.join("repo");
+    fs::create_dir_all(&repo).expect("create repo");
+    let repo_arg = repo.display().to_string();
+
+    let (_server, rx) = spawn_serve_env(
+        &[
+            "serve",
+            "--port",
+            "0",
+            "--repo-root",
+            &repo_arg,
+            "--data-root",
+            &repo_arg,
+            "--huggingface-url",
+            &fake.url,
+        ],
+        &[("PROXI_SKIP_MODEL", "1")],
+    );
+    let _ = tokio::task::spawn_blocking(move || wait_for_url(&rx))
+        .await
+        .expect("join the URL wait");
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert!(fake.requests().is_empty(), "{:?}", fake.requests());
 }

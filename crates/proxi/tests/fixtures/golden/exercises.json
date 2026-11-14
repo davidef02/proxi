@@ -1,0 +1,389 @@
+{
+  "route": "exercises",
+  "seed": {},
+  "dataSeed": {
+    "courses/demo/exercises/package.json": "{}",
+    "courses/demo/exercises/01-somma/Esercizio.js": "export const somma = (a, b) => 0;\n",
+    "courses/demo/exercises/01-somma/Esercizio.test.js": "// test\n",
+    "courses/demo/exercises/01-somma/app.js": "// app\n",
+    "courses/demo/exercises/01-somma/ISTRUZIONI.md": "# Somma\n\nScrivi somma.\n",
+    "courses/demo/exercises/01-somma/SUGGERIMENTI.json": "{\"hints\":[\"Usa +\",\"Ritorna a + b\"],\"final\":true,\"revealed\":1}",
+    "courses/demo/exercises/01-somma/.app-lastrun.json": "{\"ok\":true,\"passed\":1,\"failed\":0,\"total\":1,\"failures\":[],\"tests\":[{\"name\":\"somma\",\"status\":\"passed\"}],\"durationMs\":12,\"at\":\"2026-01-01T00:00:00.000Z\"}",
+    "courses/demo/exercises/01-somma/sub/a/b/ok.js": "// depth 3\n",
+    "courses/demo/exercises/01-somma/sub/a/b/c/no.js": "// too deep\n",
+    "courses/demo/exercises/01-somma/note.txt": "x",
+    "courses/demo/exercises/02-vuoto/README.md": "vuoto\n",
+    "courses/demo/exercises/02-vuoto/SUGGERIMENTI.json": "{\"hints\":[\"a\",\"b\",\"c\"],\"revealed\":1.5}",
+    "courses/demo/exercises/02-vuoto/.app-lastrun.json": "0",
+    "courses/demo/exercises/zz-verifica/Esercizio.vue": "<template />\n",
+    "courses/demo/exercises/zz-verifica/SUGGERIMENTI.json": "{\"hints\":[\"uno\",2],\"final\":\"si\",\"revealed\":\"x\"}",
+    "courses/demo/exercises/zz-verifica/.app-lastrun.json": "{nope",
+    "courses/demo/exercises/misc/x.js": "x"
+  },
+  "cases": [
+    {
+      "name": "list",
+      "request": {
+        "method": "GET",
+        "path": "/api/exercises/demo"
+      },
+      "response": {
+        "status": 200,
+        "body": [
+          {
+            "course": "demo",
+            "name": "01-somma",
+            "dir": "courses/demo/exercises/01-somma",
+            "files": [
+              "Esercizio.js",
+              "Esercizio.test.js",
+              "ISTRUZIONI.md",
+              "app.js",
+              "note.txt"
+            ],
+            "lastRun": {
+              "ok": true,
+              "passed": 1,
+              "failed": 0,
+              "total": 1,
+              "failures": [],
+              "tests": [
+                {
+                  "name": "somma",
+                  "status": "passed"
+                }
+              ],
+              "durationMs": 12,
+              "at": "<iso>"
+            },
+            "hints": [
+              "Usa +",
+              "Ritorna a + b"
+            ],
+            "hintsRevealed": 1,
+            "final": true,
+            "instructions": "# Somma\n\nScrivi somma.\n"
+          },
+          {
+            "course": "demo",
+            "name": "02-vuoto",
+            "dir": "courses/demo/exercises/02-vuoto",
+            "files": [
+              "README.md"
+            ],
+            "hints": [
+              "a",
+              "b",
+              "c"
+            ],
+            "hintsRevealed": 1.5,
+            "final": false
+          },
+          {
+            "course": "demo",
+            "name": "zz-verifica",
+            "dir": "courses/demo/exercises/zz-verifica",
+            "files": [
+              "Esercizio.vue"
+            ],
+            "hints": [
+              "uno",
+              "2"
+            ],
+            "hintsRevealed": 0,
+            "final": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "list-missing",
+      "request": {
+        "method": "GET",
+        "path": "/api/exercises/nessuno"
+      },
+      "response": {
+        "status": 200,
+        "body": []
+      }
+    },
+    {
+      "name": "list-bad",
+      "request": {
+        "method": "GET",
+        "path": "/api/exercises/Bad"
+      },
+      "response": {
+        "status": 400,
+        "body": {
+          "error": ": Invalid string: must match pattern /^[a-z0-9]+(?:-[a-z0-9]+)*$/"
+        }
+      }
+    },
+    {
+      "name": "detail",
+      "request": {
+        "method": "GET",
+        "path": "/api/exercises/demo/01-somma"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "info": {
+            "course": "demo",
+            "name": "01-somma",
+            "dir": "courses/demo/exercises/01-somma",
+            "files": [
+              "Esercizio.js",
+              "Esercizio.test.js",
+              "ISTRUZIONI.md",
+              "app.js",
+              "note.txt"
+            ],
+            "lastRun": {
+              "ok": true,
+              "passed": 1,
+              "failed": 0,
+              "total": 1,
+              "failures": [],
+              "tests": [
+                {
+                  "name": "somma",
+                  "status": "passed"
+                }
+              ],
+              "durationMs": 12,
+              "at": "<iso>"
+            },
+            "hints": [
+              "Usa +",
+              "Ritorna a + b"
+            ],
+            "hintsRevealed": 1,
+            "final": true,
+            "instructions": "# Somma\n\nScrivi somma.\n"
+          },
+          "files": [
+            {
+              "path": "app.js",
+              "content": "// app\n",
+              "version": "e13598571e71c7fbc432dc977bb80160fe4af0e7",
+              "readOnly": false
+            },
+            {
+              "path": "Esercizio.js",
+              "content": "export const somma = (a, b) => 0;\n",
+              "version": "d4481963927f0b1219a6dc4d5f79b9c4fb3b2918",
+              "readOnly": false
+            },
+            {
+              "path": "Esercizio.test.js",
+              "content": "// test\n",
+              "version": "c10a4572b80930ff9c13c4f09269bfe809c06a48",
+              "readOnly": true
+            },
+            {
+              "path": "sub/a/b/ok.js",
+              "content": "// depth 3\n",
+              "version": "052382927e43c6080ce0a2bf9af0101802ffe790",
+              "readOnly": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "detail-missing",
+      "request": {
+        "method": "GET",
+        "path": "/api/exercises/demo/09-no"
+      },
+      "response": {
+        "status": 404,
+        "body": {
+          "error": "Esercizio non trovato"
+        }
+      }
+    },
+    {
+      "name": "detail-not-exercise",
+      "request": {
+        "method": "GET",
+        "path": "/api/exercises/demo/misc"
+      },
+      "response": {
+        "status": 404,
+        "body": {
+          "error": "Esercizio non trovato"
+        }
+      }
+    },
+    {
+      "name": "save",
+      "request": {
+        "method": "POST",
+        "path": "/api/exercises/save",
+        "body": {
+          "course": "demo",
+          "name": "01-somma",
+          "path": "app.js",
+          "content": "// nuovo\n",
+          "baseVersion": "e13598571e71c7fbc432dc977bb80160fe4af0e7"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "version": "9d764b0713db6e238ece073d9bad560ee34df4bd"
+        }
+      },
+      "firstEvent": {
+        "type": "courses"
+      }
+    },
+    {
+      "name": "save-stale",
+      "request": {
+        "method": "POST",
+        "path": "/api/exercises/save",
+        "body": {
+          "course": "demo",
+          "name": "01-somma",
+          "path": "app.js",
+          "content": "x",
+          "baseVersion": "0000000000000000000000000000000000000000"
+        }
+      },
+      "response": {
+        "status": 409,
+        "body": {
+          "error": "Il file è cambiato fuori dall'editor",
+          "code": "stale"
+        }
+      }
+    },
+    {
+      "name": "save-readonly",
+      "request": {
+        "method": "POST",
+        "path": "/api/exercises/save",
+        "body": {
+          "course": "demo",
+          "name": "01-somma",
+          "path": "Esercizio.test.js",
+          "content": "x"
+        }
+      },
+      "response": {
+        "status": 400,
+        "body": {
+          "error": "File di sola lettura"
+        }
+      }
+    },
+    {
+      "name": "hint",
+      "request": {
+        "method": "POST",
+        "path": "/api/exercises/hint",
+        "body": {
+          "course": "demo",
+          "name": "zz-verifica"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "course": "demo",
+          "name": "zz-verifica",
+          "dir": "courses/demo/exercises/zz-verifica",
+          "files": [
+            "Esercizio.vue"
+          ],
+          "hints": [
+            "uno",
+            "2"
+          ],
+          "hintsRevealed": 1,
+          "final": true
+        }
+      },
+      "firstEvent": {
+        "type": "courses"
+      }
+    },
+    {
+      "name": "detail-after",
+      "request": {
+        "method": "GET",
+        "path": "/api/exercises/demo/01-somma"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "info": {
+            "course": "demo",
+            "name": "01-somma",
+            "dir": "courses/demo/exercises/01-somma",
+            "files": [
+              "Esercizio.js",
+              "Esercizio.test.js",
+              "ISTRUZIONI.md",
+              "app.js",
+              "note.txt"
+            ],
+            "lastRun": {
+              "ok": true,
+              "passed": 1,
+              "failed": 0,
+              "total": 1,
+              "failures": [],
+              "tests": [
+                {
+                  "name": "somma",
+                  "status": "passed"
+                }
+              ],
+              "durationMs": 12,
+              "at": "<iso>"
+            },
+            "hints": [
+              "Usa +",
+              "Ritorna a + b"
+            ],
+            "hintsRevealed": 1,
+            "final": true,
+            "instructions": "# Somma\n\nScrivi somma.\n"
+          },
+          "files": [
+            {
+              "path": "app.js",
+              "content": "// nuovo\n",
+              "version": "9d764b0713db6e238ece073d9bad560ee34df4bd",
+              "readOnly": false
+            },
+            {
+              "path": "Esercizio.js",
+              "content": "export const somma = (a, b) => 0;\n",
+              "version": "d4481963927f0b1219a6dc4d5f79b9c4fb3b2918",
+              "readOnly": false
+            },
+            {
+              "path": "Esercizio.test.js",
+              "content": "// test\n",
+              "version": "c10a4572b80930ff9c13c4f09269bfe809c06a48",
+              "readOnly": true
+            },
+            {
+              "path": "sub/a/b/ok.js",
+              "content": "// depth 3\n",
+              "version": "052382927e43c6080ce0a2bf9af0101802ffe790",
+              "readOnly": false
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -4,7 +4,6 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { after, before, describe, it } from "node:test";
-import { startFakeServers } from "./fake-servers.ts";
 
 let mod: typeof import("../server/main.ts") | undefined;
 try {
@@ -70,70 +69,9 @@ describe("server guards and read routes", { skip }, () => {
     assert.equal((await raw(srv.port, "/mcp/abc", { method: "POST", headers: { "x-learner-token": srv.token } })).status, 404);
   });
 
-  it("serves only courses/ and assets/ under /files", async () => {
-    assert.equal((await raw(srv.port, "/files/courses/demo/MISSION.md")).status, 200);
-    assert.equal((await raw(srv.port, "/files/assets/x.css")).status, 200);
-    for (const p of ["/files/secret.txt", "/files/curriculum.json", "/files/..%2fsecret.txt", "/files/courses/..%2f..%2fsecret.txt", "/files/courses/..%5csecret.txt", "/files/courses/%00"]) {
-      assert.equal((await raw(srv.port, p)).status, 404, p);
-    }
-    for (const p of ["/files/../secret.txt", "/files/%2e%2e/secret.txt"]) {
-      assert.ok(!(await raw(srv.port, p)).body.includes("TOPSECRET"), p);
-    }
-  });
-
-  it("lists courses and the knowledge map", async () => {
-    const courses = JSON.parse((await raw(srv.port, "/api/courses")).body);
-    assert.ok(Array.isArray(courses));
-    assert.equal(courses[0].slug, "demo");
+  it("lists the knowledge map", async () => {
     const map = JSON.parse((await raw(srv.port, "/api/map")).body);
     assert.ok(Array.isArray(map.nodes) && Array.isArray(map.edges));
-  });
-
-  it("maps /api/anki to byCourse per course, and to no badges when AnkiConnect is down", async () => {
-    const fakes = await startFakeServers();
-    const stats = { new_count: 5, learn_count: 2, review_count: 4, total_in_deck: 10 };
-    fakes.anki.deckNamesAndIds = { "Proxi": 1, "Proxi::Demo": 2 };
-    fakes.anki.deckStats = { "1": { deck_id: 1, name: "Proxi", ...stats }, "2": { deck_id: 2, name: "Demo", ...stats } };
-    const prev = process.env.LEARNER_ANKI_URL;
-    try {
-      process.env.LEARNER_ANKI_URL = fakes.urls.anki;
-      const online = await raw(srv.port, "/api/anki");
-      assert.equal(online.status, 200);
-      const body = JSON.parse(online.body);
-      assert.equal(body.online, true);
-      assert.deepEqual(body.byCourse.demo, { due: 4, learning: 2, newCards: 5 });
-
-      // The whole map belongs to the batch request only: one course gets its own deck, never every deck.
-      const one = JSON.parse((await raw(srv.port, "/api/anki?course=demo")).body);
-      assert.equal(one.online, true);
-      assert.equal(one.deck, "Proxi::Demo");
-      assert.equal(one.deckExists, true);
-      assert.equal(one.due, 4);
-      assert.equal(one.byCourse, undefined);
-
-      process.env.LEARNER_ANKI_URL = "http://127.0.0.1:9";
-      const offline = JSON.parse((await raw(srv.port, "/api/anki")).body);
-      assert.equal(offline.online, false);
-      assert.equal(offline.byCourse, undefined);
-    } finally {
-      await fakes.close();
-      if (prev === undefined) delete process.env.LEARNER_ANKI_URL;
-      else process.env.LEARNER_ANKI_URL = prev;
-    }
-  });
-
-  it("serves a lesson's data island under /api/lesson, only for lesson artifacts", async () => {
-    const island = { metadata: { title: "Prima" }, nodes: [{ nodeId: "a", title: "A", content: "x" }] };
-    fs.writeFileSync(path.join(root, "courses", "demo", "lessons", "0001-prima.html"), `<html><script type="application/json" id="lesson-data">${JSON.stringify(island)}</script></html>`);
-    fs.writeFileSync(path.join(root, "courses", "demo", "lessons", "0002-prosa.html"), "<html>prosa</html>");
-    const ok = await raw(srv.port, "/api/lesson?path=courses/demo/lessons/0001-prima.html");
-    assert.equal(ok.status, 200);
-    assert.equal(JSON.parse(ok.body).nodes[0].nodeId, "a");
-    assert.equal((await raw(srv.port, "/api/lesson?path=courses/demo/lessons/0009-no.html")).status, 404);
-    assert.equal((await raw(srv.port, "/api/lesson?path=courses/demo/lessons/0002-prosa.html")).status, 422);
-    for (const p of ["../secret.txt", "courses/demo/MISSION.md", "courses/demo/lessons/..%2f..%2fMISSION.md", "courses/demo/lessons/../../../secret.html", ""]) {
-      assert.equal((await raw(srv.port, "/api/lesson?path=" + p)).status, 400, p);
-    }
   });
 
   it("serves opencode models and manages opencode settings", async () => {

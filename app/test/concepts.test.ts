@@ -12,8 +12,6 @@ import {
   openConcept,
   searchConcepts,
 } from "../server/graph/concepts.ts";
-import { EMBEDDING, modelPresent, rankSemantic } from "../server/graph/embeddings.ts";
-import { CODE_ROOT } from "../../extensions/data-root.ts";
 import { deleteNode } from "../server/graph/store.ts";
 
 interface Prop {
@@ -229,80 +227,6 @@ describe("searchConcepts", () => {
     cat = await loadCatalog(root);
     assert.doesNotMatch((await searchConcepts(cat, "nuovo", undefined, ranker)).text, /n_nuovo/);
   });
-
-  test(
-    'semantic: "computed" finds "Proprietà calcolate"',
-    { skip: !modelPresent(CODE_ROOT) && "embedding model not downloaded" },
-    async () => {
-      const root = makeData();
-      writeGraph(root, [
-        {
-          ...prop("n_calc", "Proprietà calcolate"),
-          // no "computed" anywhere: the hit must be semantic, not lexical
-          statement:
-            "Proprietà calcolata in Vue: un valore calcolato dalle dipendenze reattive e messo in cache, ricalcolato solo al loro cambiare.",
-        },
-        prop("n_for", "Ciclo for"),
-        prop("n_promessa", "Promessa"),
-        prop("n_template", "Template Vue"),
-        prop("n_props", "Props"),
-        prop("n_click", "Evento click"),
-        prop("n_array", "Array"),
-      ]);
-      const cat = await loadCatalog(root);
-      const cache = path.join(root, "embeddings-cache.json");
-
-      const out = await searchConcepts(cat, "computed", undefined, (q, nodes) =>
-        rankSemantic(CODE_ROOT, q, nodes, { cacheFile: cache }),
-      );
-      assert.ok(!out.text.includes(SEMANTIC_UNAVAILABLE), out.text);
-      const top = out.text.split("\n").slice(1, 4);
-      assert.ok(
-        top.some((r) => r.includes("n_calc")),
-        out.text,
-      );
-    },
-  );
-
-  test(
-    "AC7 with the real model: added concept found, deleted concept gone",
-    { skip: !modelPresent(CODE_ROOT) && "embedding model not downloaded" },
-    async () => {
-      const root = makeData();
-      writeGraph(root, [prop("n_base", "Concetto base"), prop("n_altro", "Altro argomento")]);
-      const cache = path.join(root, "embeddings-cache.json");
-      const ranker = (q: string, nodes: { id: string; name: string; statement: string; aliases: string[] }[]) =>
-        rankSemantic(CODE_ROOT, q, nodes, { cacheFile: cache });
-
-      let cat = await loadCatalog(root);
-      assert.doesNotMatch(
-        (await searchConcepts(cat, "concetto aggiunto dopo", undefined, ranker)).text,
-        /Concetto aggiunto dopo/,
-      );
-
-      writeGraph(root, [
-        prop("n_base", "Concetto base"),
-        prop("n_altro", "Altro argomento"),
-        prop("n_nuovo", "Concetto aggiunto dopo"),
-      ]);
-      cat = await loadCatalog(root);
-      const added = await searchConcepts(cat, "concetto aggiunto dopo", undefined, ranker);
-      assert.ok(
-        added.text
-          .split("\n")
-          .slice(1, 4)
-          .some((r) => r.includes("n_nuovo")),
-        added.text,
-      );
-
-      await deleteNode(root, "n_nuovo");
-      cat = await loadCatalog(root);
-      assert.doesNotMatch(
-        (await searchConcepts(cat, "concetto aggiunto dopo", undefined, ranker)).text,
-        /Concetto aggiunto dopo/,
-      );
-    },
-  );
 });
 
 describe("openConcept", () => {
