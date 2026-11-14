@@ -21,6 +21,8 @@ enum Command {
     },
     /// Run the local server
     Serve(proxi::server::ServeArgs),
+    /// Embedding benchmark: recall@3 and median query time
+    EmbedBench(proxi::embed_bench::EmbedBenchArgs),
 }
 
 fn main() -> std::process::ExitCode {
@@ -37,6 +39,7 @@ fn main() -> std::process::ExitCode {
                 Command::Data { args } => proxi::data_root::run_cli(&args),
                 Command::Lesson { args } => proxi::lesson::cli::run_cli(&args),
                 Command::Serve(args) => proxi::server::serve_cli(args),
+                Command::EmbedBench(args) => proxi::embed_bench::run_cli(args),
             }
         }
     };
