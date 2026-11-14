@@ -12,6 +12,7 @@ use crate::anki::format::{
 use crate::course_data::{course_deck_name, course_lesson_tags, DECK_ROOT};
 use crate::js::{find_ci, parse_json};
 use crate::lesson::js::{is_js_space, js_concat, js_join_item, js_to_string, js_trim, js_truthy};
+use crate::lesson::node_path;
 
 fn match_ci_at(hay: &str, at: usize, needle: &str) -> bool {
     let hay = hay.as_bytes();
@@ -259,8 +260,11 @@ pub fn extract_cards_from_lesson(source: &str) -> Result<Extracted, String> {
     let slug = slugify_topic(&topic);
     let default_deck = course_deck_name(path).unwrap_or_else(|| format_default_deck_name(&topic));
 
-    let Some(Value::Array(nodes)) = doc.get("nodes") else {
-        return Err("TypeError: doc.nodes is not iterable".to_string());
+    // A string is iterable in JS: its one-char nodes have no tier or ankiParams, so no cards.
+    let nodes: &[Value] = match doc.get("nodes") {
+        Some(Value::Array(items)) => items.as_slice(),
+        Some(Value::String(_)) => &[],
+        _ => return Err("TypeError: doc.nodes is not iterable".to_string()),
     };
     let mut cards = Vec::new();
     for node in nodes {
@@ -398,7 +402,7 @@ pub fn export_deck_tsv(options: &ExportOptions) -> Result<ExportResult, String> 
                 .map(|p| p.display().to_string())
                 .unwrap_or_default()
         });
-    let decks_dir = Path::new(&base).join("decks");
+    let decks_dir = node_path::join(&base, "decks");
 
     let mut cards: Vec<Value> = match &options.cards {
         Some(value) if js_truthy(Some(value)) => match value {
@@ -430,8 +434,11 @@ pub fn export_deck_tsv(options: &ExportOptions) -> Result<ExportResult, String> 
             .unwrap_or_default();
         lesson_deck = Some(extracted.deck_name);
     } else if js_truthy(options.nodes.as_ref()) {
-        let Value::Array(nodes) = options.nodes.as_ref().expect("nodes is Some") else {
-            return Err("TypeError: options.nodes is not iterable".to_string());
+        // A string is iterable in JS: its one-char nodes have no tier or ankiParams, so no cards.
+        let nodes: &[Value] = match options.nodes.as_ref() {
+            Some(Value::Array(items)) => items.as_slice(),
+            Some(Value::String(_)) => &[],
+            _ => return Err("TypeError: options.nodes is not iterable".to_string()),
         };
         let Some(topic_text) = topic.as_ref().and_then(Value::as_str) else {
             return Err("TypeError: topic.toLowerCase is not a function".to_string());
@@ -468,8 +475,8 @@ pub fn export_deck_tsv(options: &ExportOptions) -> Result<ExportResult, String> 
 
     fs::create_dir_all(&decks_dir).map_err(|e| format!("Error: {e}"))?;
     let target_file = match options.out_file.as_deref().filter(|s| !s.is_empty()) {
-        Some(out) => std::path::PathBuf::from(out),
-        None => decks_dir.join(format!("{slug}.tsv")),
+        Some(out) => out.to_string(),
+        None => node_path::join(&decks_dir, &format!("{slug}.tsv")),
     };
     fs::write(&target_file, &tsv_content).map_err(|e| format!("Error: {e}"))?;
 
@@ -483,7 +490,7 @@ pub fn export_deck_tsv(options: &ExportOptions) -> Result<ExportResult, String> 
         .count();
 
     Ok(ExportResult {
-        file_path: target_file.display().to_string(),
+        file_path: target_file,
         deck_name,
         slug,
         card_count: cards.len(),
@@ -931,6 +938,23 @@ mod tests {
     }
 
     #[test]
+    fn export_string_nodes_yield_no_cards() {
+        let t = temp_dir("export-string-nodes");
+        let result = export_deck_tsv(&ExportOptions {
+            nodes: Some(json!("ab")),
+            topic: Some(json!("T")),
+            base_dir: Some(display(&t.0)),
+            ..ExportOptions::default()
+        })
+        .unwrap();
+        assert_eq!(result.card_count, 0);
+        assert_eq!(result.basic_count, 0);
+        assert_eq!(result.cloze_count, 0);
+        assert_eq!(result.deck_name, "Proxi::T");
+        assert_eq!(Path::new(&result.file_path), t.0.join("decks").join("t.tsv"));
+    }
+
+    #[test]
     fn export_nodes_win_over_cards() {
         let t = temp_dir("export-nodes");
         let options = ExportOptions {
@@ -1181,5 +1205,16 @@ mod tests {
             extract_cards_from_lesson(&display(&nodes_number)).unwrap_err(),
             "TypeError: doc.nodes is not iterable"
         );
+
+        // A string is iterable in JS: one-char nodes carry no ankiParams, so 0 cards, no error.
+        for (name, nodes) in [("ab", json!("ab")), ("empty", json!(""))] {
+            let path = write_lesson(
+                &t.0,
+                &format!("edges/nodes-string-{name}.html"),
+                &json!({ "metadata": { "topic": "x" }, "nodes": nodes }),
+            );
+            let extracted = extract_cards_from_lesson(&display(&path)).unwrap();
+            assert!(extracted.cards.is_empty(), "{name}: {:?}", extracted.cards);
+        }
     }
 }

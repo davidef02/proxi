@@ -192,6 +192,35 @@ fn export_data_and_stdin_write_identical_files() {
 }
 
 #[test]
+fn export_base_dir_joins_like_node() {
+    let (_t, data, cwd) = dirs("anki-cli-export-base-dir");
+
+    // path.join drops the `./`: Node prints `out/decks/base.tsv`, not `./out/decks/base.tsv`.
+    let run = run(
+        &data,
+        &cwd,
+        &[
+            "export",
+            "--data",
+            "{\"topic\":\"Base\"}",
+            "--base-dir",
+            "./out",
+        ],
+        None,
+    );
+    assert_eq!(run.code, 0, "stderr: {}", run.stderr);
+    let sep = std::path::MAIN_SEPARATOR;
+    assert_eq!(
+        run.stdout,
+        format!("✅ Exported 0 cards to out{sep}decks{sep}base.tsv\n")
+    );
+    assert!(
+        data.join("out").join("decks").join("base.tsv").is_file(),
+        "the default target is created under the joined decks dir"
+    );
+}
+
+#[test]
 fn export_invalid_stdin_fails_before_lesson() {
     let (_t, data, cwd) = dirs("anki-cli-export-bad-stdin");
 
