@@ -488,6 +488,7 @@ async fn real_build_serves_the_built_spa() {
     let data = common::temp_dir("api-real-data");
     let mut options = ServerOptions::new(common::repo_root());
     options.data_root = Some(data.0.clone());
+    options.fetch_model_on_start = Some(false);
     let server = start(options).await.expect("start server");
     let client = Client::new();
 

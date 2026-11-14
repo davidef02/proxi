@@ -75,7 +75,9 @@ the binary uses only HTTP/SSE and is listed in `RUST_PORTED` of `scripts/test-ru
 Server data modules (`courses.ts`, `knowledge.ts`, `lesson.ts`, `exercises.ts`, `graph/store.ts`) take the
 data root (`dataRoot`) as their first argument. `.learner/` (settings, sessions, jobs, manifests, secrets)
 stays under `repoRoot` and is never synced. `.learner/models` and `.learner/embeddings` hold the embedding
-model and index, regenerated automatically.
+model and index, regenerated automatically. `proxi embed-bench` measures recall@3 and median query time of
+that model on `<dataRoot>/bench/embed-bench-queries.json` and records the result in
+`app/server/graph/embedding-model.json`.
 
 ## Keep the teaching context lean
 

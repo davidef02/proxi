@@ -11,6 +11,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub mod anki_seed;
 pub mod fake_anki;
+pub mod fake_hf;
 
 pub fn repo_root() -> PathBuf {
     let raw = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -69,6 +70,90 @@ pub fn node(args: &[&str]) -> Command {
 
 pub fn proxi_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_proxi"))
+}
+
+/// The three concepts of `app/test/embeddings.test.ts`, used by the model-backed tests.
+pub const SAMPLE_CONCEPTS: &[(&str, &str, &str)] = &[
+    (
+        "n_computed",
+        "Proprietà calcolate",
+        "In Vue una proprietà calcolata ricalcola il valore solo quando cambiano le sue dipendenze reattive.",
+    ),
+    (
+        "n_props",
+        "Props",
+        "Dati passati da un componente genitore a un componente figlio.",
+    ),
+    (
+        "n_for",
+        "Ciclo for",
+        "Ripete un blocco di codice un numero fissato di volte.",
+    ),
+];
+
+/// The models folder holding `model`: an explicit override, this checkout, then the main checkout
+/// (worktrees do not download the postinstall model). `None` lets model-backed tests skip.
+pub fn model_root(model: &str) -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(raw) = std::env::var("PROXI_TEST_MODELS") {
+        if !raw.trim().is_empty() {
+            candidates.push(PathBuf::from(raw));
+        }
+    }
+    candidates.push(repo_root().join(".learner").join("models"));
+    if let Some(main) = main_checkout() {
+        candidates.push(main.join(".learner").join("models"));
+    }
+    candidates.into_iter().find(|models| {
+        let dir = model
+            .split('/')
+            .fold(models.clone(), |dir, segment| dir.join(segment));
+        dir.join("config.json").is_file() && has_onnx(&dir.join("onnx"))
+    })
+}
+
+fn main_checkout() -> Option<PathBuf> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .current_dir(repo_root())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let common = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Path::new(&common).parent().map(Path::to_path_buf)
+}
+
+fn has_onnx(dir: &Path) -> bool {
+    fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .any(|entry| entry.file_name().to_string_lossy().ends_with(".onnx"))
+        })
+        .unwrap_or(false)
+}
+
+/// A graph store the routes and the CLIs accept: `graph/nodes.jsonl` plus an empty chains ledger.
+pub fn write_node_lines(data_root: &Path, nodes: &[(&str, &str, &str)]) {
+    let graph = data_root.join("graph");
+    fs::create_dir_all(&graph).expect("create graph dir");
+    let mut out = String::new();
+    for (id, name, statement) in nodes {
+        let line = serde_json::json!({
+            "id": id,
+            "name": name,
+            "statement": statement,
+            "aliases": [],
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "provenance": [],
+        });
+        out.push_str(&line.to_string());
+        out.push('\n');
+    }
+    fs::write(graph.join("nodes.jsonl"), out).expect("write nodes.jsonl");
+    fs::write(graph.join("chains.jsonl"), "").expect("write chains.jsonl");
 }
 
 /// Fixtures are assembled at runtime: the pre-flight scans source files for key prefixes.
