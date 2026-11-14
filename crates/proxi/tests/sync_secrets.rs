@@ -11,9 +11,9 @@ use base64::engine::general_purpose::STANDARD;
 #[cfg(windows)]
 use proxi::sync::secrets::{ElectronDecryptor, KeychainStore, dpapi_protect};
 use proxi::sync::secrets::{
-    GDRIVE_ACCOUNT, GITHUB_ACCOUNT, GithubSecret, LegacyDecryptor, LegacyState, MAX_SECRET_BYTES,
-    MemoryStore, SecretStore, UNREADABLE_ERROR, decrypt_v10, get_gdrive, get_github, legacy_file,
-    migrate_legacy, set_github,
+    GDRIVE_ACCOUNT, GITHUB_ACCOUNT, GdriveSecret, GithubSecret, LegacyDecryptor, LegacyState,
+    MAX_SECRET_BYTES, MemoryStore, SecretStore, UNREADABLE_ERROR, decrypt_v10, get_gdrive,
+    get_github, legacy_file, migrate_legacy, set_gdrive, set_github,
 };
 use serde_json::{Value, json};
 
@@ -112,6 +112,68 @@ fn get_github_of_malformed_json_is_unreadable() {
 }
 
 #[test]
+fn set_gdrive_round_trips_in_node_key_order() {
+    let store = MemoryStore::default();
+    let secret = GdriveSecret {
+        refresh_token: "rt-1".to_string(),
+        folder_id: "folder-1".to_string(),
+        email: Some("me@example.com".to_string()),
+    };
+    set_gdrive(&store, &secret).unwrap();
+    assert_eq!(
+        store.get(GDRIVE_ACCOUNT).unwrap().as_deref(),
+        Some(r#"{"refreshToken":"rt-1","folderId":"folder-1","email":"me@example.com"}"#)
+    );
+    assert_eq!(get_gdrive(&store).unwrap(), Some(secret));
+
+    let without_email = GdriveSecret {
+        refresh_token: "rt-2".to_string(),
+        folder_id: "folder-2".to_string(),
+        email: None,
+    };
+    set_gdrive(&store, &without_email).unwrap();
+    assert_eq!(
+        store.get(GDRIVE_ACCOUNT).unwrap().as_deref(),
+        Some(r#"{"refreshToken":"rt-2","folderId":"folder-2"}"#)
+    );
+    assert_eq!(get_gdrive(&store).unwrap(), Some(without_email));
+}
+
+#[test]
+fn get_gdrive_of_malformed_json_is_unreadable() {
+    let store = MemoryStore::default();
+    store.set(GDRIVE_ACCOUNT, "not json").unwrap();
+    assert_eq!(get_gdrive(&store), Err(UNREADABLE_ERROR.to_string()));
+
+    store
+        .set(GDRIVE_ACCOUNT, r#"{"refreshToken":"rt-1"}"#)
+        .unwrap();
+    assert_eq!(get_gdrive(&store), Err(UNREADABLE_ERROR.to_string()));
+}
+
+#[test]
+fn a_migrated_gdrive_secret_without_email_reads_with_none() {
+    let repo = common::temp_dir("secrets-gdrive-no-email");
+    let store = MemoryStore::default();
+    let file = plaintext_legacy(
+        &repo.0,
+        json!({ "gdrive": { "refreshToken": "r".repeat(12), "folderId": "folder-1" } }),
+    );
+
+    assert_eq!(state_of(&repo.0, &store), LegacyState::Migrated);
+
+    assert_eq!(
+        get_gdrive(&store).unwrap(),
+        Some(GdriveSecret {
+            refresh_token: "r".repeat(12),
+            folder_id: "folder-1".to_string(),
+            email: None,
+        })
+    );
+    assert!(!file.exists());
+}
+
+#[test]
 fn plaintext_legacy_file_is_migrated_and_deleted() {
     let repo = common::temp_dir("secrets-plain");
     let store = MemoryStore::default();
@@ -127,7 +189,14 @@ fn plaintext_legacy_file_is_migrated_and_deleted() {
 
     assert!(!file.exists());
     assert_eq!(get_github(&store).unwrap(), Some(gh));
-    assert_eq!(get_gdrive(&store).unwrap(), Some(gdrive.clone()));
+    assert_eq!(
+        get_gdrive(&store).unwrap(),
+        Some(GdriveSecret {
+            refresh_token: "r".repeat(12),
+            folder_id: "folder-1".to_string(),
+            email: Some("me@example.com".to_string()),
+        })
+    );
     // Verbatim: the same bytes the object had in the file.
     assert_eq!(
         store.get(GDRIVE_ACCOUNT).unwrap(),
@@ -157,7 +226,14 @@ fn an_entry_already_in_the_store_is_not_overwritten() {
     assert_eq!(state_of(&repo.0, &store), LegacyState::Migrated);
 
     assert_eq!(get_github(&store).unwrap(), Some(old));
-    assert_eq!(get_gdrive(&store).unwrap(), Some(gdrive));
+    assert_eq!(
+        get_gdrive(&store).unwrap(),
+        Some(GdriveSecret {
+            refresh_token: "r".repeat(12),
+            folder_id: "folder-1".to_string(),
+            email: None,
+        })
+    );
     assert!(!file.exists());
 }
 

@@ -35,6 +35,7 @@ use crate::lesson;
 use crate::limits::{self, LimitsCache};
 use crate::protocol::{GlobalEvent, LearnerSettings, SettingsResponse, SyncStatus, DEFAULT_PORT};
 use crate::settings::{self, SettingsError};
+use crate::sync::gdrive::GoogleEndpoints;
 use crate::sync::github::{GithubEndpoints, real_sleeper};
 use crate::sync::routes::spawn_auto;
 use crate::sync::secrets::{ElectronDecryptor, KeychainStore, MemoryStore, SecretStore};
@@ -43,8 +44,8 @@ use crate::sync::service::{SyncConfig, SyncService};
 /// Shown instead of the SPA when `app/web/dist` has not been built (main.ts:536-537).
 const MISSING_UI: &str = "Proxi: la UI non è stata compilata. Esegui `npm run app:build` e riapri questa pagina.";
 
-/// Base URLs for tests; `None` = the real service. Anki is honoured now; the rest by the issue that
-/// ports each client.
+/// Base URLs for tests; `None` = the real service. Anki, GitHub and Google are honoured now; the rest
+/// by the issue that ports each client.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Endpoints {
     pub anki: Option<String>,
@@ -173,17 +174,23 @@ pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
     };
     let status_events = events.clone();
     let pulled_events = events.clone();
+    // Bound before the service: the Google redirect URI points back at this port.
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", opts.port)).await?;
+    let port = listener.local_addr()?.port();
     let sync_cfg = SyncConfig {
         repo_root: repo_root.clone(),
         data_root: data_root.clone(),
         data_root_from_env,
         github: GithubEndpoints::from_override(opts.endpoints.github.as_deref()),
+        google: GoogleEndpoints::from_override(opts.endpoints.google.as_deref()),
+        port,
         sleep: real_sleeper(),
         store,
         decryptor: Arc::new(ElectronDecryptor {
             profiles: ElectronDecryptor::default_profiles(),
         }),
         make_provider: None,
+        relaunch: None,
         on_status: Arc::new(move |status: &SyncStatus| {
             status_events.emit(&GlobalEvent::Sync {
                 status: status.clone(),
@@ -198,8 +205,6 @@ pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
         .await
         .map_err(std::io::Error::other)?;
 
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", opts.port)).await?;
-    let port = listener.local_addr()?.port();
     let state = Arc::new(AppState {
         repo_str: repo_root.display().to_string(),
         data_str: data_root.display().to_string(),
@@ -399,7 +404,11 @@ async fn front(State(state): State<Arc<AppState>>, request: Request, next: Next)
             return not_found_response();
         }
         // /files is served from the data folder and the repo, not from the built UI.
-        if !path.starts_with("/files/") && !state.dist.join("index.html").is_file() {
+        // The Google OAuth callback answers itself even when the UI is not built.
+        if !path.starts_with("/files/")
+            && path != "/oauth/google/callback"
+            && !state.dist.join("index.html").is_file()
+        {
             return (
                 StatusCode::OK,
                 [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],

@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { after, before, describe, it } from "node:test";
 import { createServer, type RunningServer } from "../server/main.ts";
-import { GOOGLE_CLIENT_ID } from "../server/sync/gdrive.ts";
 import { GITHUB_CLIENT_ID } from "../server/sync/github.ts";
 
 const CURRICULUM = { chapters: [{ title: "Demo", slug: "demo", lessons: [{ title: "Prima lezione", slug: "prima-lezione", plannedNodes: 2 }] }] };
@@ -32,13 +31,6 @@ describe("sync routes, data folder and sync-related HTTP surface", () => {
   after(async () => {
     await srv.close();
     fs.rmSync(path.dirname(repo), { recursive: true, force: true });
-  });
-
-  it("GET /oauth/google/callback with an unknown state answers 400 html", async () => {
-    const r = await fetch(`${base()}/oauth/google/callback?state=x`);
-    assert.equal(r.status, 400);
-    assert.match(r.headers.get("content-type") ?? "", /text\/html/);
-    assert.match(await r.text(), /scaduta/);
   });
 
   it("serves courses/ from the data folder and assets/ from the repo", async () => {
@@ -72,61 +64,6 @@ describe("sync routes, data folder and sync-related HTTP surface", () => {
 
   const post = (p: string, body: unknown, headers: Record<string, string> = guard) =>
     fetch(`${base()}${p}`, { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify(body) });
-
-  it("GET /api/sync/conflicts lists copies; POST resolve keeps the chosen side and validates its input", async () => {
-    const conflicts = path.join(repo, ".learner", "drive-conflicts", "courses", "demo");
-    fs.mkdirSync(conflicts, { recursive: true });
-    fs.writeFileSync(path.join(data, "courses", "demo", "NOTES.md"), "local notes");
-    fs.writeFileSync(path.join(conflicts, "NOTES.md.remoto-1700000000000"), "remote notes");
-
-    const list = (await (await fetch(`${base()}/api/sync/conflicts`)).json()) as { id: string; rel: string; side: string }[];
-    assert.deepEqual(list.map((c) => [c.id, c.rel, c.side]), [["courses/demo/NOTES.md.remoto-1700000000000", "courses/demo/NOTES.md", "remoto"]]);
-    assert.equal(((await (await fetch(`${base()}/api/sync`)).json()) as { conflictCount: number }).conflictCount, 1);
-
-    assert.equal((await post("/api/sync/conflicts/resolve", { id: list[0].id, choice: "remote" }, {})).status, 403);
-    assert.equal((await post("/api/sync/conflicts/resolve", { id: list[0].id, choice: "mine" })).status, 400);
-    assert.equal((await post("/api/sync/conflicts/resolve", { id: "../../secrets.json.locale-1", choice: "local" })).status, 400);
-
-    const r = await post("/api/sync/conflicts/resolve", { id: list[0].id, choice: "remote" });
-    assert.equal(r.status, 200);
-    assert.deepEqual(await r.json(), { ok: true });
-    assert.equal(fs.readFileSync(path.join(data, "courses", "demo", "NOTES.md"), "utf8"), "remote notes");
-    assert.deepEqual(await (await fetch(`${base()}/api/sync/conflicts`)).json(), []);
-  });
-
-  it("GET /api/sync/trash lists trashed files; POST restore moves one back and refuses to overwrite", async () => {
-    const ms = String(Date.now() - 60_000);
-    const trashed = path.join(repo, ".learner", "trash", ms, "courses", "demo");
-    fs.mkdirSync(trashed, { recursive: true });
-    fs.writeFileSync(path.join(trashed, "gone.md"), "gone");
-    fs.writeFileSync(path.join(trashed, "MISSION.md"), "old mission");
-
-    const list = (await (await fetch(`${base()}/api/sync/trash`)).json()) as { id: string; rel: string }[];
-    assert.deepEqual(list.map((e) => e.rel).sort(), ["courses/demo/MISSION.md", "courses/demo/gone.md"]);
-
-    const gone = list.find((e) => e.rel.endsWith("gone.md"))!;
-    const r = await post("/api/sync/trash/restore", { id: gone.id });
-    assert.equal(r.status, 200);
-    assert.equal(fs.readFileSync(path.join(data, "courses", "demo", "gone.md"), "utf8"), "gone");
-
-    const clash = list.find((e) => e.rel.endsWith("MISSION.md"))!;
-    const refused = await post("/api/sync/trash/restore", { id: clash.id });
-    assert.equal(refused.status, 400);
-    assert.match(((await refused.json()) as { error: string }).error, /Esiste già/);
-    assert.equal(fs.readFileSync(path.join(data, "courses", "demo", "MISSION.md"), "utf8"), "# Mission\n");
-  });
-
-  it("POST /api/sync/data-root validates its input", async () => {
-    assert.equal((await post("/api/sync/data-root", { dataRoot: "relative/dir" })).status, 400);
-    assert.equal((await post("/api/sync/data-root", { dataRoot: path.join(repo, "inside") })).status, 400);
-    assert.equal(fs.existsSync(path.join(repo, ".learner", "config.json")), false);
-  });
-
-  it("POST /api/sync/google/start without a client id answers 400 with the Italian message", { skip: (GOOGLE_CLIENT_ID as string) !== "" }, async () => {
-    const r = await post("/api/sync/google/start", {});
-    assert.equal(r.status, 400);
-    assert.match(((await r.json()) as { error: string }).error, /Client Google non configurato/);
-  });
 
   it("POST /api/sync/github/start without a client id reports the Italian error in the status", { skip: (GITHUB_CLIENT_ID as string) !== "" }, async () => {
     const r = await post("/api/sync/github/start", {});

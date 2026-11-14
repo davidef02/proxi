@@ -22,6 +22,8 @@ pub struct Recorded {
     pub path: String,
     /// Header names lowercased.
     pub headers: Vec<(String, String)>,
+    /// Raw body; `body` is the lossy UTF-8 view of the same bytes.
+    pub bytes: Vec<u8>,
     pub body: String,
 }
 
@@ -42,7 +44,7 @@ impl Recorded {
 pub struct Reply {
     pub status: u16,
     pub headers: Vec<(String, String)>,
-    pub body: String,
+    pub body: Vec<u8>,
 }
 
 impl Reply {
@@ -50,7 +52,9 @@ impl Reply {
         Reply {
             status,
             headers: vec![("content-type".to_string(), "application/json".to_string())],
-            body: serde_json::to_string(&value.into()).expect("serialise fake json reply"),
+            body: serde_json::to_string(&value.into())
+                .expect("serialise fake json reply")
+                .into_bytes(),
         }
     }
 
@@ -58,7 +62,15 @@ impl Reply {
         Reply {
             status,
             headers: Vec::new(),
-            body: body.into(),
+            body: body.into().into_bytes(),
+        }
+    }
+
+    pub fn bytes(status: u16, body: Vec<u8>) -> Self {
+        Reply {
+            status,
+            headers: Vec::new(),
+            body,
         }
     }
 }
@@ -118,6 +130,7 @@ impl FakeHttp {
                             path,
                             headers,
                             body: String::from_utf8_lossy(&bytes).to_string(),
+                            bytes: bytes.to_vec(),
                         };
                         log.lock()
                             .expect("fake http log")

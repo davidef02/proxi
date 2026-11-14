@@ -1,11 +1,14 @@
-// /api/sync over plain HTTP, the GitHub device flow and the committed sync golden: identical against the Node server
-// and the proxi binary (PROXI_TEST_SERVER).
+// /api/sync over plain HTTP: the GitHub and Google logins, conflicts, trash, the data folder and the committed
+// goldens, identical against the Node server and the proxi binary (PROXI_TEST_SERVER).
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, before, describe, it } from "node:test";
+import { DRIVE_SCOPE, GOOGLE_CLIENT_ID } from "../server/sync/gdrive.ts";
 import { captureScript, GOLDEN_DIR, ISO_RE, SCRIPTS } from "./capture-golden.ts";
+import { installFakeDrive, type FakeDrive, type FakeDriveSeed } from "./fake-drive.ts";
 import { installFakeGithub, type FakeGithubSeed } from "./fake-github.ts";
 import { startFakeServers, type FakeServers } from "./fake-servers.ts";
 import { serverMode, startServer, type TestServer } from "./harness.ts";
@@ -22,7 +25,8 @@ interface SyncStatusBody {
   dataRootFromEnv: boolean;
   needsData: boolean;
   github: { connected: boolean; login?: string; repo?: string; pending?: { userCode: string; verificationUri: string; expiresAt: string }; error?: string };
-  gdrive: { connected: boolean };
+  gdrive: { connected: boolean; email?: string; pending?: boolean; error?: string };
+  restartRequired?: boolean;
   conflictCount: number;
   trashCount: number;
 }
@@ -31,6 +35,7 @@ interface Ctx {
   server: TestServer;
   repo: string;
   data: string;
+  drive: FakeDrive;
 }
 
 interface SeedOptions {
@@ -41,6 +46,7 @@ interface SeedOptions {
   /** Extra setup once both folders exist (old drive dirs and the like). */
   extra?: (repo: string, data: string) => void;
   github?: FakeGithubSeed;
+  drive?: FakeDriveSeed;
 }
 
 let fakes: FakeServers;
@@ -69,6 +75,7 @@ function writeText(file: string, text: string): void {
 async function withServer(opts: SeedOptions, fn: (ctx: Ctx) => Promise<void>): Promise<void> {
   fakes.reset();
   installFakeGithub(fakes.github, opts.github ?? {});
+  const drive = installFakeDrive(fakes.google, opts.drive ?? {});
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "api-sync-"));
   dirs.push(dir);
   const repo = path.join(dir, "repo");
@@ -80,7 +87,7 @@ async function withServer(opts: SeedOptions, fn: (ctx: Ctx) => Promise<void>): P
   opts.extra?.(repo, data);
   const server = await startServer({ repoRoot: repo, dataRoot: data, fakes: fakes.urls });
   try {
-    await fn({ server, repo, data });
+    await fn({ server, repo, data, drive });
   } finally {
     await server.close();
   }
@@ -98,6 +105,14 @@ async function status(server: TestServer): Promise<SyncStatusBody> {
   const r = await fetch(`${server.url}/api/sync`);
   assert.equal(r.status, 200);
   return (await r.json()) as SyncStatusBody;
+}
+
+/** The loopback callback page of app/server/sync/service.ts, escaped the same way. */
+function page(text: string): string {
+  return (
+    `<!doctype html><html lang="it"><head><meta charset="utf-8"><title>Proxi</title></head><body>` +
+    `<h1>Proxi</h1><p>${text.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`)}</p></body></html>`
+  );
 }
 
 /** Same poll as integration.test.ts, sync or async predicate. */
@@ -291,6 +306,280 @@ describe("GitHub device flow", () => {
       } finally {
         stream.close();
       }
+    });
+  });
+});
+
+describe("Google login", () => {
+  it("PKCE login connects and keeps the refresh token (AC1)", async () => {
+    await withServer({}, async ({ server, drive }) => {
+      const started = await post(server, "/api/sync/google/start", {});
+      assert.equal(started.status, 200);
+      const { url } = (await started.json()) as { url: string };
+      const u = new URL(url);
+      assert.ok(u.pathname.endsWith("/o/oauth2/v2/auth"), `unexpected auth path: ${u.pathname}`);
+      const redirect = `http://127.0.0.1:${server.port}/oauth/google/callback`;
+      assert.equal(u.searchParams.get("client_id"), GOOGLE_CLIENT_ID);
+      assert.equal(u.searchParams.get("redirect_uri"), redirect);
+      assert.equal(u.searchParams.get("response_type"), "code");
+      assert.equal(u.searchParams.get("scope"), DRIVE_SCOPE);
+      const challenge = u.searchParams.get("code_challenge") ?? "";
+      assert.equal(u.searchParams.get("code_challenge_method"), "S256");
+      const state = u.searchParams.get("state") ?? "";
+      assert.match(state, /^[0-9a-f]{32}$/);
+      assert.equal(u.searchParams.get("access_type"), "offline");
+      assert.equal(u.searchParams.get("prompt"), "consent");
+      assert.equal((await status(server)).gdrive.pending, true);
+
+      const callback = await fetch(`${server.url}/oauth/google/callback?code=abc&state=${state}`);
+      assert.equal(callback.status, 200);
+      assert.match(callback.headers.get("content-type") ?? "", /text\/html/);
+      assert.equal(await callback.text(), page("Accesso a Google completato. Puoi chiudere questa scheda e tornare a Proxi."));
+
+      const authForm = drive
+        .mutations()
+        .find((m) => m.path === "/token" && (m.body as { grant_type?: string }).grant_type === "authorization_code")?.body as
+        | Record<string, string>
+        | undefined;
+      assert.ok(authForm, "the fake got no authorization_code token request");
+      assert.equal(authForm.code, "abc");
+      assert.equal(authForm.client_id, GOOGLE_CLIENT_ID);
+      assert.equal(authForm.redirect_uri, redirect);
+      assert.equal(createHash("sha256").update(authForm.code_verifier).digest("base64url"), challenge);
+
+      const folder = drive.mutations().find((m) => m.method === "POST" && m.path === "/drive/v3/files");
+      assert.deepEqual(folder?.body, { name: "proxi-data", mimeType: "application/vnd.google-apps.folder", appProperties: { proxi: "data" } });
+      assert.equal(typeof drive.folderId(), "string");
+
+      const connected = await waitFor(async () => {
+        const body = await status(server);
+        return body.gdrive.connected &&
+          body.gdrive.email === "tester@example.com" &&
+          body.provider === "gdrive" &&
+          body.gdrive.pending === false &&
+          body.state !== "syncing"
+          ? body
+          : undefined;
+      });
+      assert.equal(connected.provider, "gdrive");
+      assert.equal(connected.gdrive.connected, true);
+      assert.equal(connected.gdrive.email, "tester@example.com");
+      assert.equal(connected.gdrive.pending, false);
+
+      const again = await fetch(`${server.url}/oauth/google/callback?code=abc&state=${state}`);
+      assert.equal(again.status, 400);
+      assert.match(again.headers.get("content-type") ?? "", /text\/html/);
+      assert.equal(await again.text(), page("Richiesta di accesso non valida o scaduta: riprova da Proxi."));
+
+      const disconnected = (await (await post(server, "/api/sync/disconnect", { provider: "gdrive" })).json()) as SyncStatusBody;
+      assert.equal(disconnected.gdrive.connected, false);
+      assert.equal(disconnected.provider, "local");
+      const revoke = drive.mutations().find((m) => m.method === "POST" && m.path === "/revoke");
+      assert.deepEqual(revoke?.body, { token: "rt-1" });
+    });
+  });
+
+  it("a denied Google login answers Node's page (AC2)", async () => {
+    await withServer({}, async ({ server, drive }) => {
+      const { url } = (await (await post(server, "/api/sync/google/start", {})).json()) as { url: string };
+      const state = new URL(url).searchParams.get("state") ?? "";
+      const denied = await fetch(`${server.url}/oauth/google/callback?error=access_denied&state=${state}`);
+      assert.equal(denied.status, 400);
+      assert.equal(await denied.text(), page("Accesso a Google annullato."));
+      assert.equal(drive.mutations().some((m) => m.path === "/token"), false, "a denied login must not reach the token endpoint");
+      assert.equal((await status(server)).gdrive.connected, false);
+    });
+  });
+
+  it("an unknown state answers 400 html (AC2)", async () => {
+    await withServer({}, async ({ server }) => {
+      const r = await fetch(`${server.url}/oauth/google/callback?state=x`);
+      assert.equal(r.status, 400);
+      assert.match(r.headers.get("content-type") ?? "", /text\/html/);
+      assert.equal(await r.text(), page("Richiesta di accesso non valida o scaduta: riprova da Proxi."));
+    });
+  });
+
+  it("a revoked refresh token puts the reconnect message in the status (AC2)", async () => {
+    await withServer(
+      {
+        repo: {
+          ".learner/settings.json": { syncProvider: "gdrive" },
+          ".learner/secrets.json": {
+            v: 1,
+            encrypted: false,
+            data: JSON.stringify({ gdrive: { refreshToken: "rt-old", folderId: "folder-1", email: "tester@example.com" } }),
+          },
+        },
+        drive: { folderId: "folder-1" },
+      },
+      async ({ server }) => {
+        const r = await post(server, "/api/sync/run", {});
+        assert.equal(r.status, 200);
+        const s = (await r.json()) as SyncStatusBody;
+        assert.equal(s.state, "error");
+        assert.equal(s.error, "Accesso a Google scaduto o revocato: riconnetti.");
+      },
+    );
+  });
+
+  it("a full sync against the fake Drive sends the Node golden requests (AC3)", async () => {
+    const script = SCRIPTS.find((s) => s.route === "sync-gdrive");
+    assert.ok(script, "no sync-gdrive script in capture-golden.ts");
+    const file = await captureScript(script, serverMode());
+    const golden = JSON.parse(fs.readFileSync(path.join(GOLDEN_DIR, "sync-gdrive.json"), "utf-8")) as { cases: unknown };
+    assert.deepEqual(file.cases, golden.cases);
+  });
+});
+
+describe("conflicts and trash", () => {
+  const at = (ms: number) => new Date(ms).toISOString();
+
+  it("conflict listing, validation and resolution keep the chosen side (AC4)", async () => {
+    await withServer({ data: EXISTING_DATA }, async ({ server, repo, data }) => {
+      const conflicts = path.join(repo, ".learner", "drive-conflicts", "courses", "demo");
+      fs.mkdirSync(conflicts, { recursive: true });
+      fs.writeFileSync(path.join(data, "courses", "demo", "NOTES.md"), "local notes");
+      fs.writeFileSync(path.join(conflicts, "NOTES.md.remoto-1700000000000"), "remote notes");
+
+      const list = (await (await fetch(`${server.url}/api/sync/conflicts`)).json()) as { id: string; rel: string; side: string; at: string }[];
+      assert.deepEqual(list, [
+        { id: "courses/demo/NOTES.md.remoto-1700000000000", rel: "courses/demo/NOTES.md", side: "remoto", at: "2023-11-14T22:13:20.000Z" },
+      ]);
+      assert.equal((await status(server)).conflictCount, 1);
+
+      const id = list[0].id;
+      const noHeader = await fetch(`${server.url}/api/sync/conflicts/resolve`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id, choice: "remote" }),
+      });
+      assert.equal(noHeader.status, 403);
+
+      const badChoice = await post(server, "/api/sync/conflicts/resolve", { id, choice: "mine" });
+      assert.equal(badChoice.status, 400);
+      assert.deepEqual(await badChoice.json(), { error: 'choice: Invalid option: expected one of "local"|"remote"|"both"' });
+
+      const traversal = await post(server, "/api/sync/conflicts/resolve", { id: "../../secrets.json.locale-1", choice: "local" });
+      assert.equal(traversal.status, 400);
+      assert.deepEqual(await traversal.json(), { error: "Conflitto non valido." });
+
+      const bothInvalid = await post(server, "/api/sync/conflicts/resolve", { id: "", choice: "mine" });
+      assert.equal(bothInvalid.status, 400);
+      assert.deepEqual(await bothInvalid.json(), {
+        error: 'id: Too small: expected string to have >=1 characters; choice: Invalid option: expected one of "local"|"remote"|"both"',
+      });
+
+      const resolved = await post(server, "/api/sync/conflicts/resolve", { id, choice: "remote" });
+      assert.equal(resolved.status, 200);
+      assert.deepEqual(await resolved.json(), { ok: true });
+      assert.equal(fs.readFileSync(path.join(data, "courses", "demo", "NOTES.md"), "utf8"), "remote notes");
+      assert.deepEqual(await (await fetch(`${server.url}/api/sync/conflicts`)).json(), []);
+      assert.equal((await status(server)).conflictCount, 0);
+
+      // A legacy `.drive-` copy is a remote one.
+      fs.mkdirSync(conflicts, { recursive: true });
+      fs.writeFileSync(path.join(conflicts, "legacy.md.drive-1600000000000"), "drive notes");
+      const legacy = (await (await fetch(`${server.url}/api/sync/conflicts`)).json()) as { id: string; rel: string; side: string; at: string }[];
+      assert.deepEqual(legacy, [{ id: "courses/demo/legacy.md.drive-1600000000000", rel: "courses/demo/legacy.md", side: "remoto", at: at(1600000000000) }]);
+
+      const kept = await post(server, "/api/sync/conflicts/resolve", { id: legacy[0].id, choice: "both" });
+      assert.equal(kept.status, 200);
+      assert.deepEqual(await kept.json(), { ok: true });
+      assert.equal(fs.readFileSync(path.join(data, "conflitti", legacy[0].id), "utf8"), "drive notes");
+      assert.deepEqual(await (await fetch(`${server.url}/api/sync/conflicts`)).json(), []);
+    });
+  });
+
+  it("trash listing, validation and restore move files back and refuse to overwrite (AC4)", async () => {
+    const ms = String(Date.now() - 60_000);
+    const deletedAt = at(Number(ms));
+    await withServer({ data: EXISTING_DATA }, async ({ server, repo, data }) => {
+      const trashed = path.join(repo, ".learner", "trash", ms, "courses", "demo");
+      fs.mkdirSync(trashed, { recursive: true });
+      fs.writeFileSync(path.join(trashed, "gone.md"), "gone");
+      fs.writeFileSync(path.join(trashed, "MISSION.md"), "old mission");
+
+      const list = (await (await fetch(`${server.url}/api/sync/trash`)).json()) as { id: string; rel: string; deletedAt: string; size: number }[];
+      assert.equal(list.length, 2);
+      const byRel = new Map(list.map((e) => [e.rel, e]));
+      assert.deepEqual(byRel.get("courses/demo/gone.md"), { id: `${ms}/courses/demo/gone.md`, rel: "courses/demo/gone.md", deletedAt, size: 4 });
+      assert.deepEqual(byRel.get("courses/demo/MISSION.md"), {
+        id: `${ms}/courses/demo/MISSION.md`,
+        rel: "courses/demo/MISSION.md",
+        deletedAt,
+        size: 11,
+      });
+      const s = await status(server);
+      assert.equal(s.trashCount, 2);
+      assert.equal(s.conflictCount, 0);
+
+      const gone = byRel.get("courses/demo/gone.md")!;
+      const noHeader = await fetch(`${server.url}/api/sync/trash/restore`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: gone.id }),
+      });
+      assert.equal(noHeader.status, 403);
+
+      const missing = await post(server, "/api/sync/trash/restore", {});
+      assert.equal(missing.status, 400);
+      assert.deepEqual(await missing.json(), { error: "id: Invalid input: expected string, received undefined" });
+
+      const restored = await post(server, "/api/sync/trash/restore", { id: gone.id });
+      assert.equal(restored.status, 200);
+      assert.deepEqual(await restored.json(), { ok: true });
+      assert.equal(fs.readFileSync(path.join(data, "courses", "demo", "gone.md"), "utf8"), "gone");
+      assert.equal((await status(server)).trashCount, 1);
+
+      const clash = byRel.get("courses/demo/MISSION.md")!;
+      const refused = await post(server, "/api/sync/trash/restore", { id: clash.id });
+      assert.equal(refused.status, 400);
+      assert.deepEqual(await refused.json(), { error: "Esiste già un file con questo nome: courses/demo/MISSION.md" });
+      assert.equal(fs.readFileSync(path.join(data, "courses", "demo", "MISSION.md"), "utf8"), "# Mission\n");
+    });
+  });
+});
+
+describe("data folder", () => {
+  it("data-root validates, writes the pointer and asks for a restart (AC5)", async () => {
+    await withServer({ data: EXISTING_DATA }, async ({ server, repo, data }) => {
+      const config = path.join(repo, ".learner", "config.json");
+
+      const relative = await post(server, "/api/sync/data-root", { dataRoot: "relative/dir" });
+      assert.equal(relative.status, 400);
+      assert.deepEqual(await relative.json(), { error: "La cartella dei dati deve essere un percorso assoluto." });
+
+      const inside = await post(server, "/api/sync/data-root", { dataRoot: path.join(repo, "inside") });
+      assert.equal(inside.status, 400);
+      assert.deepEqual(await inside.json(), { error: "La cartella dei dati non può stare dentro il codice di Proxi (né contenerlo)." });
+
+      const missing = await post(server, "/api/sync/data-root", {});
+      assert.equal(missing.status, 400);
+      assert.deepEqual(await missing.json(), { error: "dataRoot: Invalid input: expected string, received undefined" });
+
+      const tooLong = await post(server, "/api/sync/data-root", { dataRoot: "x".repeat(501) });
+      assert.equal(tooLong.status, 400);
+      assert.deepEqual(await tooLong.json(), { error: "dataRoot: Too big: expected string to have <=500 characters" });
+      assert.equal(fs.existsSync(config), false, "invalid input must not write the pointer");
+
+      const same = await post(server, "/api/sync/data-root", { dataRoot: data });
+      assert.equal(same.status, 200);
+      const sameBody = (await same.json()) as SyncStatusBody;
+      assert.equal(sameBody.dataRoot, data);
+      assert.equal(sameBody.restartRequired, undefined);
+      assert.equal(fs.existsSync(config), false, "the current data folder needs no pointer");
+      assert.equal(fs.statSync(path.join(data, "courses")).isDirectory(), true);
+
+      const other = path.join(path.dirname(data), "other-data");
+      const moved = await post(server, "/api/sync/data-root", { dataRoot: other });
+      assert.equal(moved.status, 200);
+      const movedBody = (await moved.json()) as SyncStatusBody;
+      assert.equal(movedBody.dataRoot, data, "the running server keeps its data folder");
+      assert.equal(movedBody.restartRequired, true);
+      assert.equal(fs.statSync(path.join(other, "courses")).isDirectory(), true);
+      assert.equal(fs.readFileSync(config, "utf8"), JSON.stringify({ dataRoot: path.resolve(other) }, null, 2) + "\n");
+      assert.equal((await status(server)).restartRequired, true);
     });
   });
 });
