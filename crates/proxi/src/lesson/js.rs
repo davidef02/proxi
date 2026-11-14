@@ -1,6 +1,10 @@
 //! JavaScript semantics the lesson port must reproduce.
 
+use std::io;
+
+use serde::Serialize;
 use serde_json::Value;
+use serde_json::ser::{Formatter, PrettyFormatter, Serializer};
 
 /// JS `\s` / `String#trim`: includes U+FEFF, excludes U+0085.
 pub fn is_js_space(c: char) -> bool {
@@ -112,6 +116,147 @@ pub fn text(v: Option<&Value>) -> &str {
     v.and_then(Value::as_str).unwrap_or("")
 }
 
+/// serde_json formatter that prints numbers the way V8 does.
+struct JsFormatter(PrettyFormatter<'static>);
+
+impl Formatter for JsFormatter {
+    fn begin_array<W>(&mut self, writer: &mut W) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        self.0.begin_array(writer)
+    }
+
+    fn end_array<W>(&mut self, writer: &mut W) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        self.0.end_array(writer)
+    }
+
+    fn begin_array_value<W>(&mut self, writer: &mut W, first: bool) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        self.0.begin_array_value(writer, first)
+    }
+
+    fn end_array_value<W>(&mut self, writer: &mut W) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        self.0.end_array_value(writer)
+    }
+
+    fn begin_object<W>(&mut self, writer: &mut W) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        self.0.begin_object(writer)
+    }
+
+    fn end_object<W>(&mut self, writer: &mut W) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        self.0.end_object(writer)
+    }
+
+    fn begin_object_key<W>(&mut self, writer: &mut W, first: bool) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        self.0.begin_object_key(writer, first)
+    }
+
+    fn begin_object_value<W>(&mut self, writer: &mut W) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        self.0.begin_object_value(writer)
+    }
+
+    fn end_object_value<W>(&mut self, writer: &mut W) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        self.0.end_object_value(writer)
+    }
+
+    fn write_i64<W>(&mut self, writer: &mut W, value: i64) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        if value.unsigned_abs() <= (1u64 << 53) {
+            writer.write_all(value.to_string().as_bytes())
+        } else {
+            writer.write_all(js_number(value as f64).as_bytes())
+        }
+    }
+
+    fn write_i128<W>(&mut self, writer: &mut W, value: i128) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        if value.unsigned_abs() <= (1u128 << 53) {
+            writer.write_all(value.to_string().as_bytes())
+        } else {
+            writer.write_all(js_number(value as f64).as_bytes())
+        }
+    }
+
+    fn write_u64<W>(&mut self, writer: &mut W, value: u64) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        if value <= (1u64 << 53) {
+            writer.write_all(value.to_string().as_bytes())
+        } else {
+            writer.write_all(js_number(value as f64).as_bytes())
+        }
+    }
+
+    fn write_u128<W>(&mut self, writer: &mut W, value: u128) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        if value <= (1u128 << 53) {
+            writer.write_all(value.to_string().as_bytes())
+        } else {
+            writer.write_all(js_number(value as f64).as_bytes())
+        }
+    }
+
+    fn write_f32<W>(&mut self, writer: &mut W, value: f32) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        writer.write_all(js_number(f64::from(value)).as_bytes())
+    }
+
+    fn write_f64<W>(&mut self, writer: &mut W, value: f64) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        writer.write_all(js_number(value).as_bytes())
+    }
+}
+
+/// `JSON.stringify(v, null, 2)`.
+pub fn stringify_pretty(v: &Value) -> String {
+    let mut ser = Serializer::with_formatter(Vec::new(), JsFormatter(PrettyFormatter::new()));
+    v.serialize(&mut ser)
+        .expect("serializing a Value cannot fail");
+    String::from_utf8(ser.into_inner()).expect("JSON output is UTF-8")
+}
+
+pub fn render_data_island(doc: &Value) -> String {
+    format!(
+        "<script type=\"application/json\" id=\"lesson-data\">\n{}\n  </script>",
+        stringify_pretty(doc).replace('<', "\\u003c")
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -179,5 +324,44 @@ mod tests {
         assert_eq!(text(None), "");
         assert_eq!(text(Some(&json!(1))), "");
         assert_eq!(text(Some(&json!("hi"))), "hi");
+    }
+
+    #[test]
+    fn stringify_matches_v8_numbers() {
+        let v: Value = serde_json::from_str(
+            r#"{"a":1.0,"b":1e21,"c":1E-7,"d":-0,"e":9007199254740993,"f":0.1}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            stringify_pretty(&v),
+            "{\n  \"a\": 1,\n  \"b\": 1e+21,\n  \"c\": 1e-7,\n  \"d\": 0,\n  \"e\": 9007199254740992,\n  \"f\": 0.1\n}"
+        );
+    }
+
+    #[test]
+    fn stringify_keeps_key_order_and_empty_containers() {
+        let v: Value = serde_json::from_str(r#"{"z":[],"a":{},"m":[1,{"k":"v"}]}"#).unwrap();
+        assert_eq!(
+            stringify_pretty(&v),
+            "{\n  \"z\": [],\n  \"a\": {},\n  \"m\": [\n    1,\n    {\n      \"k\": \"v\"\n    }\n  ]\n}"
+        );
+    }
+
+    #[test]
+    fn stringify_escapes_like_v8() {
+        let v = Value::String("\u{1}\u{1f}\u{8}\t\n\u{c}\r\"\\\u{7f}\u{2028}é".to_string());
+        assert_eq!(
+            stringify_pretty(&v),
+            "\"\\u0001\\u001f\\b\\t\\n\\f\\r\\\"\\\\\u{7f}\u{2028}é\""
+        );
+    }
+
+    #[test]
+    fn data_island_escapes_lt() {
+        let doc = json!({"metadata": {"lessonNumber": 1, "title": "</script>"}, "nodes": []});
+        assert_eq!(
+            render_data_island(&doc),
+            "<script type=\"application/json\" id=\"lesson-data\">\n{\n  \"metadata\": {\n    \"lessonNumber\": 1,\n    \"title\": \"\\u003c/script>\"\n  },\n  \"nodes\": []\n}\n  </script>"
+        );
     }
 }

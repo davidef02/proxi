@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use reqwest::{Client, Method, StatusCode};
 use serde_json::Value;
 
-use proxi::server::{start, RunningServer, ServerOptions};
+use proxi::server::{RunningServer, ServerOptions, start};
 
 /// The real Node server, killed on drop so a failing test never leaks a process.
 struct NodeServer {
@@ -55,7 +55,10 @@ fn start_node(repo: &Path) -> NodeServer {
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
-        assert!(!remaining.is_zero(), "Node server did not print PORT in 60 s");
+        assert!(
+            !remaining.is_zero(),
+            "Node server did not print PORT in 60 s"
+        );
         let line = rx
             .recv_timeout(remaining)
             .expect("Node server exited before printing PORT");

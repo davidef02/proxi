@@ -7,25 +7,26 @@ use std::time::Duration;
 
 use axum::body::Bytes;
 use axum::extract::{Request, State};
-use axum::http::{header, Method, StatusCode};
+use axum::http::{Method, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
 use axum::{Json, Router};
 use futures_util::stream::Stream;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::task::JoinHandle;
 use tower_http::services::{ServeDir, ServeFile};
 
 use crate::data_root::{self, DATA_ROOT_ENV};
 use crate::events::{self, EventBus};
 use crate::limits::{self, LimitsCache};
-use crate::protocol::{GlobalEvent, LearnerSettings, SettingsResponse, DEFAULT_PORT};
+use crate::protocol::{DEFAULT_PORT, GlobalEvent, LearnerSettings, SettingsResponse};
 use crate::settings::{self, SettingsError};
 
 /// Shown instead of the SPA when `app/web/dist` has not been built (main.ts:536-537).
-const MISSING_UI: &str = "Proxi: la UI non è stata compilata. Esegui `npm run app:build` e riapri questa pagina.";
+const MISSING_UI: &str =
+    "Proxi: la UI non è stata compilata. Esegui `npm run app:build` e riapri questa pagina.";
 
 /// Base URLs for tests; `None` = the real service. Stored now, honoured by the issues that port each client.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -106,12 +107,14 @@ pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
     let repo_root = data_root::resolve_path(&opts.repo_root);
     let data_root = match opts.data_root {
         Some(path) => data_root::resolve_path(&path),
-        None => data_root::resolve_data_root(
-            &repo_root,
-            std::env::var(DATA_ROOT_ENV).ok().as_deref(),
-            &data_root::home_dir(),
-        )
-        .data_root,
+        None => {
+            data_root::resolve_data_root(
+                &repo_root,
+                std::env::var(DATA_ROOT_ENV).ok().as_deref(),
+                &data_root::home_dir(),
+            )
+            .data_root
+        }
     };
     let dist = opts
         .dist_dir
