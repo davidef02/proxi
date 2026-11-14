@@ -361,6 +361,84 @@ it("anki golden pins ping, LaTeX and the data/stdin parity", () => {
   assert.ok(extract.includes('"lessonNumber": 1,'));
 });
 
+it("anki golden pins sync", () => {
+  interface SyncNote {
+    deckName: string;
+    modelName: string;
+    fields: Record<string, string | null>;
+    options: { allowDuplicate: boolean; duplicateScope: string };
+  }
+  interface SyncRequest {
+    action: string;
+    params?: { deck?: string; notes?: SyncNote[]; modelName?: string };
+  }
+  interface SyncCase {
+    name: string;
+    stdout: string;
+    exitCode: number;
+    requests: SyncRequest[];
+    files: Record<string, string | null>;
+  }
+  const file = JSON.parse(goldenText(ANKI_GOLDEN)) as { cases: SyncCase[] };
+  const byName = (name: string) => {
+    const found = file.cases.find((c) => c.name === name);
+    assert.ok(found, `missing anki case ${name}`);
+    return found;
+  };
+  const actions = (c: SyncCase) => c.requests.map((r) => r.action);
+  const addedCount = (c: SyncCase) => Number(/^✅ Synced (\d+) cards/.exec(c.stdout)?.[1] ?? NaN);
+  const duplicateCount = (c: SyncCase) => Number(/\((\d+) duplicates skipped\)/.exec(c.stdout)?.[1] ?? NaN);
+  const addNotes = (c: SyncCase) => {
+    const request = c.requests.find((r) => r.action === "addNotes");
+    assert.ok(request, `${c.name} has no addNotes request`);
+    return request.params?.notes ?? [];
+  };
+
+  for (const c of file.cases) assert.ok(Array.isArray(c.requests), `${c.name} has no requests array`);
+
+  const lesson = byName("sync-lesson");
+  assert.deepEqual(actions(lesson), ["version", "createDeck", "modelNames", "addNotes"]);
+  assert.match(lesson.stdout, /^✅ Synced ([1-9]\d*) cards to deck 'Proxi::Vue\.js & Vetrine' \(0 duplicates skipped\)\n📁 Backup TSV saved to /);
+  assert.deepEqual(lesson.requests.find((r) => r.action === "createDeck")?.params, { deck: "Proxi::Vue.js & Vetrine" });
+  for (const note of addNotes(lesson)) {
+    assert.equal(note.deckName, "Proxi::Vue.js & Vetrine");
+    assert.deepEqual(note.options, { allowDuplicate: false, duplicateScope: "deck" });
+  }
+  const firstAdded = addedCount(lesson);
+
+  const again = byName("sync-lesson-again");
+  assert.ok(again.stdout.startsWith("✅ Synced 0 cards"), again.stdout);
+  assert.equal(duplicateCount(again), firstAdded);
+
+  const duplicates = byName("sync-allow-duplicates");
+  assert.equal(addedCount(duplicates), firstAdded);
+  for (const note of addNotes(duplicates)) assert.equal(note.options.allowDuplicate, true);
+
+  const deck = byName("sync-deck");
+  assert.deepEqual(deck.requests.find((r) => r.action === "createDeck")?.params, { deck: "Proxi::Personale" });
+  assert.ok(deck.files["decks/entropia.tsv"]?.includes("#deck:Proxi::Personale"), "sync-deck TSV header");
+
+  const italian = byName("sync-italian");
+  assert.deepEqual(actions(italian), ["version", "createDeck", "modelNames", "modelFieldNames", "modelFieldNames", "addNotes"]);
+  const italianNotes = addNotes(italian);
+  assert.equal(italianNotes.length, 1);
+  assert.equal(italianNotes[0]?.modelName, "Basilare");
+  assert.deepEqual(Object.keys(italianNotes[0]?.fields ?? {}), ["Fronte", "Retro"]);
+
+  const error = byName("sync-anki-error");
+  assert.deepEqual(actions(error), ["version"]);
+  assert.equal(error.exitCode, 0);
+  assert.ok(error.stdout.includes(`AnkiConnect offline (<errorUrl> - ${ANKI_ERROR})`), error.stdout);
+
+  const offline = byName("sync-offline");
+  assert.deepEqual(offline.requests, []);
+  assert.ok(offline.stdout.includes("Connection timed out"), offline.stdout);
+  assert.ok(offline.stdout.includes("📁 Deck TSV exported to "), offline.stdout);
+
+  const nodes = byName("sync-nodes-only");
+  assert.deepEqual(nodes.requests.find((r) => r.action === "addNotes")?.params, { notes: [] });
+});
+
 it("lesson golden covers rebuild and compile-ref", () => {
   const file = JSON.parse(goldenText(LESSON_GOLDEN)) as {
     cases: Array<{ name: string; stderr: string; files: Record<string, string | null> }>;

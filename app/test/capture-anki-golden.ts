@@ -31,6 +31,7 @@ export interface AnkiGoldenCase {
   stdout: string;
   stderr: string;
   exitCode: number;
+  requests: unknown[];
   files: Record<string, string | null>;
 }
 
@@ -244,6 +245,32 @@ export const CASES: AnkiCase[] = [
     stderrPrefix: "Fatal error: SyntaxError: ",
     expectExit: 1,
   },
+  { name: "sync-lesson", args: ["sync", "--lesson", L, "--anki-url", "<ankiUrl>"], expectExit: 0 },
+  { name: "sync-lesson-again", args: ["sync", "--lesson", L, "--anki-url", "<ankiUrl>"], expectExit: 0 },
+  { name: "sync-allow-duplicates", args: ["sync", "--lesson", L, "--anki-url", "<ankiUrl>", "--allow-duplicates"], expectExit: 0 },
+  {
+    name: "sync-deck",
+    args: ["sync", "--lesson", "lessons-sciolte/0001-entropia.html", "--deck", "Proxi::Personale", "--anki-url", "<ankiUrl>"],
+    expectExit: 0,
+  },
+  {
+    name: "sync-italian",
+    args: ["sync", "--lesson", "courses/lezioni-singole/lessons/0001-microstati.html", "--anki-url", "<italianUrl>"],
+    expectExit: 0,
+  },
+  { name: "sync-data-cards", args: ["sync", "--data", CARDS, "--topic", "Algoritmi", "--anki-url", "<ankiUrl>"], expectExit: 0 },
+  { name: "sync-nodes-only", args: ["sync", "--data", NODES, "--anki-url", "<ankiUrl>"], expectExit: 0 },
+  { name: "sync-no-payload", args: ["sync", "--anki-url", "<ankiUrl>"], expectExit: 0 },
+  { name: "sync-anki-error", args: ["sync", "--lesson", L, "--anki-url", "<errorUrl>"], expectExit: 0 },
+  { name: "sync-offline", args: ["sync", "--lesson", L, "--anki-url", "<slowUrl>", "--timeout", "200"], expectExit: 0 },
+  {
+    name: "sync-missing-lesson",
+    args: ["sync", "--lesson", "broken/nope.html", "--anki-url", "<ankiUrl>"],
+    stderrPrefix:
+      "[anki-sync] TSV export skipped: Lesson file not found at path: broken/nope.html\nFatal error: Error: Lesson file not found at path: broken/nope.html\n",
+    expectExit: 1,
+  },
+  { name: "sync-invalid-data", args: ["sync", "--data", "{"], stderrPrefix: "Fatal error: SyntaxError: ", expectExit: 1 },
 ];
 
 /** Real URLs back to their placeholders (longest first, so no URL is a prefix of another), then the paths and the timings. */
@@ -300,6 +327,10 @@ async function deadUrl(): Promise<string> {
 export async function captureAnkiGolden(outDir: string = GOLDEN_DIR): Promise<string> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "golden-anki-"));
   const online = new MockAnki();
+  online.rejectDuplicates = true;
+  const italian = new MockAnki();
+  italian.rejectDuplicates = true;
+  italian.models = { Basilare: ["Fronte", "Retro"], "Testo da completare": ["Testo", "Extra"] };
   const erroring = new MockAnki();
   const slow = new MockAnki();
   try {
@@ -313,12 +344,14 @@ export async function captureAnkiGolden(outDir: string = GOLDEN_DIR): Promise<st
     const roots = rootVariants(data);
 
     const onlineUrl = await online.start();
+    const italianUrl = await italian.start();
     erroring.responseError = ANKI_ERROR;
     const errorUrl = await erroring.start();
     slow.shouldTimeout = true;
     const slowUrl = await slow.start();
     const urls: Record<string, string> = {
       "<ankiUrl>": onlineUrl,
+      "<italianUrl>": italianUrl,
       "<errorUrl>": errorUrl,
       "<slowUrl>": slowUrl,
       "<deadUrl>": await deadUrl(),
@@ -331,6 +364,8 @@ export async function captureAnkiGolden(outDir: string = GOLDEN_DIR): Promise<st
     const cases: AnkiGoldenCase[] = [];
     for (const c of CASES) {
       const before = snapshot(data);
+      // Each case hits at most one mock: slice the raw request log after the run.
+      const logged = [online.requests.length, italian.requests.length, erroring.requests.length];
       const args = c.args.map((arg) => urls[arg] ?? arg);
       const run = await runNode(args, c.stdin ?? "", env);
       if (run.code !== c.expectExit) {
@@ -339,6 +374,11 @@ export async function captureAnkiGolden(outDir: string = GOLDEN_DIR): Promise<st
       if (c.stderrPrefix !== undefined && !run.stderr.startsWith(c.stderrPrefix)) {
         throw new Error(`${c.name}: stderr does not start with ${JSON.stringify(c.stderrPrefix)}: ${JSON.stringify(run.stderr)}`);
       }
+      const requests = [
+        ...online.requests.slice(logged[0]),
+        ...italian.requests.slice(logged[1]),
+        ...erroring.requests.slice(logged[2]),
+      ];
       const after = snapshot(data);
       const files: Record<string, string | null> = {};
       for (const name of [...new Set([...before.keys(), ...after.keys()])].sort()) {
@@ -356,6 +396,7 @@ export async function captureAnkiGolden(outDir: string = GOLDEN_DIR): Promise<st
         // A stderrPrefix means the tail is platform-specific (the stack, V8's JSON wording): pin only the prefix.
         stderr: normaliseAnkiStream(c.stderrPrefix ?? run.stderr, urls, roots),
         exitCode: c.expectExit,
+        requests,
         files,
       });
     }
@@ -368,6 +409,7 @@ export async function captureAnkiGolden(outDir: string = GOLDEN_DIR): Promise<st
     return target;
   } finally {
     await online.stop();
+    await italian.stop();
     await erroring.stop();
     await slow.stop();
     fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 });

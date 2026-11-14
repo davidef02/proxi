@@ -19,7 +19,7 @@ enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Anki cards: ping, extract, export
+    /// Anki cards: ping, extract, export, sync
     Anki {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
