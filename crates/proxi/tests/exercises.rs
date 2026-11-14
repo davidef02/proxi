@@ -1,13 +1,16 @@
 mod common;
 
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
-use serde_json::json;
+use serde_json::{Value, json};
+use tokio::task::JoinHandle;
 
 use proxi::exercises::{
-    MAX_FILE, SaveError, editor_command_line, get_workspace, list_exercises, reveal_hint,
-    save_exercise_file,
+    Installs, MAX_FILE, NODE_MISSING, NpmCommand, RunConfig, SaveError, editor_command_line,
+    get_workspace, list_exercises, npm_command, reveal_hint, run_exercise, save_exercise_file,
 };
 
 /// `tempEx` of app/test/exercises.test.ts.
@@ -340,4 +343,345 @@ fn editor_command_line_quotes_the_dir_and_refuses_quotes() {
         Some("code \"dir con spazi\"".to_string())
     );
     assert_eq!(editor_command_line(Path::new("a\"b")), None);
+}
+
+const FAKE_VITEST: &str = r#"import fs from "node:fs";const o=process.argv.find(a=>a.startsWith("--outputFile=")).slice(13);fs.writeFileSync(o,JSON.stringify({numTotalTests:1,numPassedTests:1,numFailedTests:0,testResults:[]}));"#;
+
+fn node() -> PathBuf {
+    proxi::child::node_on_path().expect("node on PATH")
+}
+
+fn exercises_base(root: &Path) -> PathBuf {
+    root.join("courses").join("c").join("exercises")
+}
+
+fn fake_vitest(base: &Path, source: &str) -> PathBuf {
+    let dir = base.join("node_modules").join("vitest");
+    fs::create_dir_all(&dir).expect("create vitest dir");
+    let file = dir.join("vitest.mjs");
+    fs::write(&file, source).expect("write fake vitest");
+    file
+}
+
+fn cfg() -> RunConfig {
+    RunConfig::new(Some(node()), NpmCommand::Default)
+}
+
+async fn run_one(root: &Path, name: &str, cfg: &RunConfig) -> Value {
+    run_exercise(root, "c", name, cfg, &Installs::default()).await
+}
+
+fn fake_npm() -> String {
+    format!(
+        r#"import fs from "node:fs";fs.appendFileSync("install.log", process.argv[2] + "\n");fs.mkdirSync("node_modules/vitest", {{ recursive: true }});fs.writeFileSync("node_modules/vitest/vitest.mjs", {});"#,
+        serde_json::to_string(FAKE_VITEST).expect("serialise vitest source")
+    )
+}
+
+#[cfg(windows)]
+fn fake_npm_bin(base: &Path) -> PathBuf {
+    let bin = base.join("fake-npm.cmd");
+    fs::write(&bin, "@node \"%~dp0fake-npm.mjs\" %*\r\n").expect("write fake npm cmd");
+    bin
+}
+
+#[cfg(unix)]
+fn fake_npm_bin(base: &Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let bin = base.join("fake-npm");
+    fs::write(
+        &bin,
+        "#!/bin/sh\nexec node \"$(dirname \"$0\")/fake-npm.mjs\" \"$@\"\n",
+    )
+    .expect("write fake npm");
+    fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).expect("chmod fake npm");
+    bin
+}
+
+const HEARTBEAT_VITEST: &str = r#"
+import { spawn } from "node:child_process";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const here = dirname(fileURLToPath(import.meta.url));
+spawn(process.execPath, [join(here, "child.mjs")], { stdio: "ignore" });
+setInterval(() => {}, 1000);
+"#;
+
+const HEARTBEAT_CHILD: &str = r#"
+import { appendFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const here = dirname(fileURLToPath(import.meta.url));
+setInterval(() => appendFileSync(join(here, "beat.txt"), "."), 50);
+"#;
+
+/// A fake vitest that never exits and leaves a grandchild beating every 50 ms.
+fn heartbeat_vitest(root: &Path) -> PathBuf {
+    let dir = exercises_base(root).join("node_modules").join("vitest");
+    fs::create_dir_all(&dir).expect("create vitest dir");
+    fs::write(dir.join("vitest.mjs"), HEARTBEAT_VITEST).expect("write vitest");
+    fs::write(dir.join("child.mjs"), HEARTBEAT_CHILD).expect("write child");
+    dir.join("beat.txt")
+}
+
+fn beat_len(path: &Path) -> u64 {
+    fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+}
+
+async fn wait_for_beat(path: &Path, handle: &JoinHandle<Value>) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if beat_len(path) > 0 {
+            return;
+        }
+        assert!(
+            !handle.is_finished(),
+            "the run finished before the heartbeat started"
+        );
+        assert!(Instant::now() < deadline, "heartbeat never started");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+async fn assert_stopped(path: &Path) {
+    for _ in 0..10 {
+        let before = beat_len(path);
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        if beat_len(path) == before {
+            return;
+        }
+    }
+    panic!("heartbeat still growing: {}", path.display());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn run_unknown_name_and_missing_package_json() {
+    let (root, _dir) = temp_ex();
+    for name in ["99-nope", "../x"] {
+        let result = run_one(&root.0, name, &cfg()).await;
+        let error = result["error"].as_str().expect("error");
+        assert!(error.contains("sconosciuto"), "{name}: {error}");
+    }
+
+    // No package.json in the exercises dir: the install message says so.
+    let result = run_one(&root.0, "01-a", &cfg()).await;
+    assert_eq!(result["ok"], json!(false));
+    let error = result["error"].as_str().expect("error");
+    assert!(error.contains("package.json"), "{error}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn last_run_is_persisted_and_listed() {
+    let (root, dir) = temp_ex();
+    fake_vitest(&exercises_base(&root.0), FAKE_VITEST);
+    assert!(
+        list_exercises(&root.0, "c").expect("list")[0]
+            .get("lastRun")
+            .is_none()
+    );
+
+    let result = run_one(&root.0, "01-a", &cfg()).await;
+    assert_eq!(result["ok"], json!(true), "{}", result["error"]);
+
+    let text = serde_json::to_string(&result).expect("serialise");
+    assert_eq!(
+        fs::read_to_string(dir.join(".app-lastrun.json")).expect("read last run"),
+        text
+    );
+    assert!(text.starts_with("{\"ok\":"), "{text}");
+    let keys: Vec<&str> = result
+        .as_object()
+        .expect("object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            "ok",
+            "passed",
+            "failed",
+            "total",
+            "failures",
+            "tests",
+            "durationMs",
+            "at"
+        ]
+    );
+
+    let list = list_exercises(&root.0, "c").expect("list");
+    assert_eq!(list[0]["lastRun"], result);
+    assert!(
+        !list[0]["files"]
+            .as_array()
+            .expect("files")
+            .iter()
+            .any(|file| file.as_str() == Some(".app-lastrun.json"))
+    );
+    let workspace = get_workspace(&root.0, "c", "01-a")
+        .expect("workspace")
+        .expect("exercise exists");
+    assert_eq!(workspace["info"]["lastRun"]["ok"], json!(true));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn installs_the_dependencies_once_when_vitest_is_missing() {
+    let (root, _dir) = temp_ex();
+    let base = exercises_base(&root.0);
+    fs::write(base.join("package.json"), "{}").expect("write package.json");
+    let fake = root.0.join("fake-npm.mjs");
+    fs::write(&fake, fake_npm()).expect("write fake npm");
+    let cfg = RunConfig::new(Some(node()), NpmCommand::Script(fake));
+    let installs = Installs::default();
+
+    let (first, second) = tokio::join!(
+        run_exercise(&root.0, "c", "01-a", &cfg, &installs),
+        run_exercise(&root.0, "c", "01-a", &cfg, &installs),
+    );
+    assert_eq!(first["ok"], json!(true), "{}", first["error"]);
+    assert_eq!(second["ok"], json!(true), "{}", second["error"]);
+    assert_eq!(
+        fs::read_to_string(base.join("install.log")).expect("install log"),
+        "install\n"
+    );
+
+    // Vitest is already there: a later run must not install again.
+    let third = run_exercise(&root.0, "c", "01-a", &cfg, &installs).await;
+    assert_eq!(third["ok"], json!(true), "{}", third["error"]);
+    assert_eq!(
+        fs::read_to_string(base.join("install.log")).expect("install log"),
+        "install\n"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn install_through_a_bin_shim() {
+    let (root, _dir) = temp_ex();
+    let base = exercises_base(&root.0);
+    fs::write(base.join("package.json"), "{}").expect("write package.json");
+    fs::write(base.join("fake-npm.mjs"), fake_npm()).expect("write fake npm");
+    let cfg = RunConfig::new(Some(node()), NpmCommand::Bin(fake_npm_bin(&base)));
+
+    let result = run_one(&root.0, "01-a", &cfg).await;
+    assert_eq!(result["ok"], json!(true), "{}", result["error"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn node_missing_is_a_clear_error() {
+    let (root, _dir) = temp_ex();
+    let cfg = RunConfig::new(None, NpmCommand::Default);
+
+    let result = run_exercise(&root.0, "c", "01-a", &cfg, &Installs::default()).await;
+    assert_eq!(result["ok"], json!(false));
+    assert_eq!(result["error"], json!(NODE_MISSING));
+    assert!(result["error"].as_str().expect("error").contains("Node"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn missing_report_shows_stderr_without_ansi() {
+    let (root, _dir) = temp_ex();
+    fake_vitest(
+        &exercises_base(&root.0),
+        r#"process.stderr.write("\u001b[31mboom\u001b[39m");"#,
+    );
+
+    let result = run_one(&root.0, "01-a", &cfg()).await;
+    assert_eq!(result["ok"], json!(false));
+    assert_eq!(
+        result["error"],
+        json!("vitest non ha prodotto un report. boom")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn malformed_report_is_an_error_and_not_persisted() {
+    let (root, dir) = temp_ex();
+    fake_vitest(
+        &exercises_base(&root.0),
+        r#"import fs from "node:fs";const o=process.argv.find(a=>a.startsWith("--outputFile=")).slice(13);fs.writeFileSync(o,"{nope");"#,
+    );
+
+    let result = run_one(&root.0, "01-a", &cfg()).await;
+    assert_eq!(result["ok"], json!(false));
+    let error = result["error"].as_str().expect("error");
+    assert!(error.starts_with("Report di vitest non valido"), "{error}");
+    assert!(!dir.join(".app-lastrun.json").exists());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn timeout_kills_the_vitest_tree() {
+    let (root, _dir) = temp_ex();
+    let beat = heartbeat_vitest(&root.0);
+    let mut cfg = cfg();
+    cfg.run_timeout = Duration::from_secs(3);
+
+    let data_root = root.0.clone();
+    let handle = tokio::spawn(async move { run_one(&data_root, "01-a", &cfg).await });
+    wait_for_beat(&beat, &handle).await;
+
+    let result = handle.await.expect("run finished");
+    assert_eq!(result["error"], json!("Timeout: i test hanno superato 3 s"));
+    assert!(beat_len(&beat) > 0, "the heartbeat file vanished");
+    assert_stopped(&beat).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cancelled_run_kills_the_vitest_tree() {
+    let (root, _dir) = temp_ex();
+    let beat = heartbeat_vitest(&root.0);
+    let cfg = cfg();
+
+    let data_root = root.0.clone();
+    let handle = tokio::spawn(async move { run_one(&data_root, "01-a", &cfg).await });
+    wait_for_beat(&beat, &handle).await;
+
+    handle.abort();
+    let _ = handle.await;
+    assert_stopped(&beat).await;
+}
+
+#[test]
+fn npm_command_prefers_the_flag_then_a_non_empty_env() {
+    assert_eq!(
+        npm_command(Some(Path::new("npm-flag")), Some(OsStr::new("env.mjs"))),
+        NpmCommand::Bin(PathBuf::from("npm-flag"))
+    );
+    assert_eq!(
+        npm_command(None, Some(OsStr::new("env.mjs"))),
+        NpmCommand::Script(PathBuf::from("env.mjs"))
+    );
+    assert_eq!(npm_command(None, Some(OsStr::new(""))), NpmCommand::Default);
+    assert_eq!(npm_command(None, None), NpmCommand::Default);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn vitest_gets_the_node_arguments() {
+    let (root, _dir) = temp_ex();
+    let base = exercises_base(&root.0);
+    fake_vitest(
+        &base,
+        r#"import fs from "node:fs";fs.appendFileSync("argv.json", JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd() }));const o=process.argv.find(a=>a.startsWith("--outputFile=")).slice(13);fs.writeFileSync(o,JSON.stringify({numTotalTests:1,numPassedTests:1,numFailedTests:0,testResults:[]}));"#,
+    );
+
+    let result = run_one(&root.0, "01-a", &cfg()).await;
+    assert_eq!(result["ok"], json!(true), "{}", result["error"]);
+
+    let recorded: Value =
+        serde_json::from_str(&fs::read_to_string(base.join("argv.json")).expect("read argv"))
+            .expect("parse argv");
+    let args = recorded["args"].as_array().expect("args");
+    assert_eq!(args.len(), 4);
+    assert_eq!(args[0], json!("run"));
+    assert_eq!(args[1], json!("01-a/"));
+    assert_eq!(args[2], json!("--reporter=json"));
+    let output = args[3].as_str().expect("output file");
+    assert!(output.starts_with("--outputFile="), "{output}");
+    assert!(output.ends_with("report.json"), "{output}");
+    assert_eq!(
+        fs::canonicalize(recorded["cwd"].as_str().expect("cwd")).expect("canonical cwd"),
+        fs::canonicalize(&base).expect("canonical base")
+    );
 }

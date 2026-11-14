@@ -1,14 +1,23 @@
 //! The /api/exercises data side: list, workspace, save, hints and runs (port of app/server/exercises.ts).
 
+use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Map, Value};
 use sha1::{Digest, Sha1};
+use tokio::sync::watch;
 
+use crate::child;
+use crate::events;
 use crate::js;
+use crate::vitest;
 
 pub const LASTRUN_FILE: &str = ".app-lastrun.json";
 /// `save_exercise_file` error when the file changed on disk since the version the editor loaded.
@@ -16,6 +25,8 @@ pub const CONFLICT: &str = "Il file è cambiato fuori dall'editor";
 pub const HINTS_FILE: &str = "SUGGERIMENTI.json";
 pub const INSTRUCTIONS_FILE: &str = "ISTRUZIONI.md";
 pub const MAX_FILE: u64 = 200 * 1024;
+pub const NODE_MISSING: &str =
+    "Node.js non trovato nel PATH: installa Node.js (https://nodejs.org) e riapri Proxi per eseguire i test";
 
 const EXT: [&str; 6] = [".vue", ".js", ".ts", ".json", ".css", ".md"];
 
@@ -439,4 +450,281 @@ pub fn open_in_editor(abs_dir: &Path) {
             let _ = child.wait();
         });
     }
+}
+
+/// How a first run installs the course dependencies (`LEARNER_NPM_BIN` in tests).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NpmCommand {
+    /// Real npm, through the shell.
+    Default,
+    /// An npm-like executable, run as `<bin> install`.
+    Bin(PathBuf),
+    /// A Node script, run as `node <script> install`.
+    Script(PathBuf),
+}
+
+/// The flag wins over the env, like every other engine binary (`server.rs` `start`).
+pub fn npm_command(flag: Option<&Path>, env: Option<&OsStr>) -> NpmCommand {
+    if let Some(flag) = flag {
+        return NpmCommand::Bin(flag.to_path_buf());
+    }
+    match env {
+        Some(value) if !value.is_empty() => NpmCommand::Script(PathBuf::from(value)),
+        _ => NpmCommand::Default,
+    }
+}
+
+pub struct RunConfig {
+    pub node: Option<PathBuf>,
+    pub npm: NpmCommand,
+    pub run_timeout: Duration,
+    pub install_timeout: Duration,
+}
+
+impl RunConfig {
+    pub fn new(node: Option<PathBuf>, npm: NpmCommand) -> Self {
+        Self {
+            node,
+            npm,
+            run_timeout: Duration::from_secs(120),
+            install_timeout: Duration::from_secs(300),
+        }
+    }
+}
+
+/// The same shape Node returns for a run that never started: `error` comes last.
+pub fn run_failure(error: &str) -> Value {
+    let mut map = Map::new();
+    map.insert("ok".into(), Value::Bool(false));
+    map.insert("passed".into(), Value::from(0));
+    map.insert("failed".into(), Value::from(0));
+    map.insert("total".into(), Value::from(0));
+    map.insert("failures".into(), Value::Array(Vec::new()));
+    map.insert("durationMs".into(), Value::from(0));
+    map.insert("at".into(), Value::from(events::iso_now()));
+    map.insert("error".into(), Value::from(error));
+    Value::Object(map)
+}
+
+/// One `npm install` per exercises dir, shared by concurrent runs like Node shared the promise.
+#[derive(Clone, Default)]
+pub struct Installs(Arc<Mutex<HashMap<PathBuf, watch::Receiver<Option<Option<String>>>>>>);
+
+impl Installs {
+    pub async fn install_once(&self, base: &Path, cfg: &RunConfig) -> Option<String> {
+        let (mut rx, started) = {
+            let mut installs = self.0.lock().expect("install registry lock");
+            match installs.get(base).cloned() {
+                Some(rx) => (rx, None),
+                None => {
+                    let (tx, rx) = watch::channel(None);
+                    installs.insert(base.to_path_buf(), rx.clone());
+                    (rx, Some(tx))
+                }
+            }
+        };
+
+        if let Some(tx) = started {
+            // Own task: a cancelled request must not kill an install another request waits on.
+            let registry = self.clone();
+            let base = base.to_path_buf();
+            let node = cfg.node.clone();
+            let npm = cfg.npm.clone();
+            let limit = cfg.install_timeout;
+            tokio::spawn(async move {
+                let result = run_install(&base, node.as_deref(), &npm, limit).await;
+                // Drop the key before publishing: a later run starts a fresh install, like Node.
+                registry.0.lock().expect("install registry lock").remove(&base);
+                let _ = tx.send(Some(result));
+            });
+        }
+
+        match rx.wait_for(|value| value.is_some()).await {
+            Ok(value) => value.as_ref().expect("install result").clone(),
+            Err(_) => Some("npm install non è partito: interrotto".into()),
+        }
+    }
+}
+
+async fn run_install(
+    base: &Path,
+    node: Option<&Path>,
+    npm: &NpmCommand,
+    limit: Duration,
+) -> Option<String> {
+    if !base.join("package.json").exists() {
+        return Some(format!("Manca package.json in {}", base.display()));
+    }
+
+    let make = || {
+        let mut cmd = match npm {
+            NpmCommand::Script(script) => {
+                let node = node.expect("run_exercise checks node before installing");
+                let mut cmd = tokio::process::Command::new(node);
+                cmd.arg(script);
+                cmd
+            }
+            NpmCommand::Bin(bin) => child::shim_command(bin),
+            NpmCommand::Default => default_npm(),
+        };
+        cmd.arg("install")
+            .current_dir(base)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        cmd
+    };
+
+    let mut child = match child::spawn_tree(make) {
+        Ok(child) => child,
+        Err(e) => return Some(format!("npm install non è partito: {e}")),
+    };
+    match child.wait_timeout(limit).await {
+        Ok(Some(status)) => match status.code() {
+            Some(0) => None,
+            Some(code) => Some(format!("npm install è fallito (codice {code})")),
+            None => Some("npm install è fallito (codice null)".into()),
+        },
+        Ok(None) => Some("Timeout: npm install ha superato 5 minuti".into()),
+        Err(e) => Some(format!("npm install non è partito: {e}")),
+    }
+}
+
+#[cfg(windows)]
+fn default_npm() -> tokio::process::Command {
+    // npm is npm.cmd: only the shell finds it from PATH.
+    let mut cmd = tokio::process::Command::new("cmd.exe");
+    cmd.args(["/d", "/c", "npm"]);
+    cmd
+}
+
+#[cfg(not(windows))]
+fn default_npm() -> tokio::process::Command {
+    tokio::process::Command::new("npm")
+}
+
+/// The vitest report dir; removed on drop so a cancelled run leaves nothing behind.
+struct ReportDir(PathBuf);
+
+impl ReportDir {
+    fn new() -> io::Result<Self> {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "learner-ex-{}-{nanos}-{n}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&path)?;
+        Ok(Self(path))
+    }
+}
+
+impl Drop for ReportDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Run the exercise's tests with vitest and persist the result for the list.
+pub async fn run_exercise(
+    data_root: &Path,
+    course: &str,
+    name: &str,
+    cfg: &RunConfig,
+    installs: &Installs,
+) -> Value {
+    let base = exercises_base(data_root, course);
+    let dir = base.join(name);
+    if !is_exercise_name(name) || name.contains('/') || name.contains('\\') || !dir.is_dir() {
+        return run_failure(&format!("Esercizio sconosciuto: {name}"));
+    }
+    let Some(node) = cfg.node.as_deref() else {
+        return run_failure(NODE_MISSING);
+    };
+
+    let vitest_mjs = base.join("node_modules").join("vitest").join("vitest.mjs");
+    if !vitest_mjs.exists() {
+        let error = installs.install_once(&base, cfg).await;
+        if error.is_some() || !vitest_mjs.exists() {
+            return run_failure(&error.unwrap_or_else(|| {
+                format!("Installazione non riuscita: esegui npm install in courses/{course}/exercises")
+            }));
+        }
+    }
+
+    let tmp = match ReportDir::new() {
+        Ok(tmp) => tmp,
+        Err(e) => return run_failure(&e.to_string()),
+    };
+    let out = tmp.0.join("report.json");
+    let start = Instant::now();
+    let make = || {
+        // The trailing slash is the path filter: "01-a/" must not match "01-ab/".
+        let mut cmd = tokio::process::Command::new(node);
+        cmd.arg(&vitest_mjs)
+            .arg("run")
+            .arg(format!("{name}/"))
+            .arg("--reporter=json")
+            .arg(format!("--outputFile={}", out.display()))
+            .current_dir(&base)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        cmd
+    };
+    let mut child = match child::spawn_tree(make) {
+        Ok(child) => child,
+        Err(e) => return run_failure(&e.to_string()),
+    };
+    let stderr = child.take_stderr().map(|mut pipe| {
+        tokio::spawn(async move {
+            let mut buf = Vec::new();
+            let _ = tokio::io::AsyncReadExt::read_to_end(&mut pipe, &mut buf).await;
+            buf
+        })
+    });
+
+    let status = match child.wait_timeout(cfg.run_timeout).await {
+        Ok(status) => status,
+        Err(e) => return run_failure(&e.to_string()),
+    };
+    if status.is_none() {
+        return run_failure(&format!(
+            "Timeout: i test hanno superato {} s",
+            cfg.run_timeout.as_secs()
+        ));
+    }
+    let stderr = match stderr {
+        Some(task) => task
+            .await
+            .map(|buf| String::from_utf8_lossy(&buf).into_owned())
+            .unwrap_or_default(),
+        None => String::new(),
+    };
+    if !out.exists() {
+        return run_failure(&vitest::clean_message(&format!(
+            "vitest non ha prodotto un report. {stderr}"
+        )));
+    }
+    let report = match fs::read(&out) {
+        Ok(raw) => String::from_utf8_lossy(&raw).into_owned(),
+        Err(e) => return run_failure(&e.to_string()),
+    };
+    let result = match vitest::parse_vitest_report(
+        &report,
+        start.elapsed().as_millis() as u64,
+        &events::iso_now(),
+    ) {
+        Ok(result) => result,
+        Err(message) => return run_failure(&message),
+    };
+    // Best effort, like Node: an unwritable dir must not turn a finished run into an error.
+    if let Ok(text) = serde_json::to_string(&result) {
+        let _ = fs::write(dir.join(LASTRUN_FILE), text);
+    }
+    result
 }
