@@ -135,6 +135,19 @@ pub fn repo_root() -> PathBuf {
     )
 }
 
+/// CLI entrypoints only (Node `enterDataRoot`): resolve, create, chdir so relative paths keep working.
+pub fn enter_data_root() -> std::io::Result<PathBuf> {
+    let data_root = resolve_data_root(
+        &repo_root(),
+        env::var(DATA_ROOT_ENV).ok().as_deref(),
+        &home_dir(),
+    )
+    .data_root;
+    std::fs::create_dir_all(&data_root)?;
+    env::set_current_dir(&data_root)?;
+    Ok(data_root)
+}
+
 pub fn run_cli_with(
     args: &[String],
     repo_root: &Path,

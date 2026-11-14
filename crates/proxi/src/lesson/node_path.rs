@@ -156,10 +156,10 @@ mod tests {
         (".", "f.html", "f.html", "f.html"),
         ("./", "f.html", "f.html", "f.html"),
         (
-            "C:/Users/x/data/lessons",
+            "C:/data/lessons",
             "f.html",
-            "C:\\Users\\x\\data\\lessons\\f.html",
-            "C:/Users/x/data/lessons/f.html",
+            "C:\\data\\lessons\\f.html",
+            "C:/data/lessons/f.html",
         ),
         (
             "/abs/data/lessons",
