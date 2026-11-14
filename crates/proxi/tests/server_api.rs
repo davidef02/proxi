@@ -6,9 +6,9 @@ use std::time::Duration;
 
 use reqwest::header::{CONTENT_TYPE, HOST};
 use reqwest::{Client, Response, StatusCode};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
-use proxi::server::{RunningServer, ServerOptions, start};
+use proxi::server::{start, RunningServer, ServerOptions};
 
 const FIXTURE_INDEX: &str = "<!doctype html><title>fixture</title>";
 const MISSING_UI: &str =
@@ -331,9 +331,7 @@ async fn settings_event_arrives_with_a_masked_key() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let raw = read_until(&mut stream, Duration::from_secs(5), |raw| {
-        data_events(raw)
-            .iter()
-            .any(|event| event["type"] == "settings")
+        data_events(raw).iter().any(|event| event["type"] == "settings")
     })
     .await;
     let events = data_events(&raw);
@@ -363,13 +361,7 @@ async fn limits_event_precedes_settings_when_limits_turn_off() {
         .unwrap();
     assert_eq!(stream.status(), StatusCode::OK);
 
-    let response = post(
-        &client,
-        &server,
-        "/api/settings",
-        r#"{"provider":"opencode"}"#,
-    )
-    .await;
+    let response = post(&client, &server, "/api/settings", r#"{"provider":"opencode"}"#).await;
     assert_eq!(response.status(), StatusCode::OK);
 
     let raw = read_until(&mut stream, Duration::from_secs(5), |raw| {

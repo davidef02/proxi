@@ -123,10 +123,7 @@ mod tests {
             data_root: "D".to_string(),
         };
         let json = serde_json::to_string(&response).unwrap();
-        assert!(
-            json.ends_with(r#","repoRoot":"R","dataRoot":"D"}"#),
-            "{json}"
-        );
+        assert!(json.ends_with(r#","repoRoot":"R","dataRoot":"D"}"#), "{json}");
     }
 
     #[test]
@@ -151,9 +148,6 @@ mod tests {
             json.starts_with("{\"type\":\"settings\",\"settings\":{\"provider\":\"claude\","),
             "{json}"
         );
-        assert!(
-            json.ends_with(",\"repoRoot\":\"R\",\"dataRoot\":\"D\"}}"),
-            "{json}"
-        );
+        assert!(json.ends_with(",\"repoRoot\":\"R\",\"dataRoot\":\"D\"}}"), "{json}");
     }
 }

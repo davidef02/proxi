@@ -54,8 +54,10 @@ mod tests {
     fn temp_dir(tag: &str) -> PathBuf {
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path =
-            std::env::temp_dir().join(format!("proxi-limits-{tag}-{}-{n}", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "proxi-limits-{tag}-{}-{n}",
+            std::process::id()
+        ));
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(&path).unwrap();
         path

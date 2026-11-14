@@ -83,7 +83,10 @@ fn normalise_win32(input: &str) -> String {
         (device, true, &after_server[share_end..])
     } else if let Some(rest) = path.strip_prefix('\\') {
         (String::new(), true, rest)
-    } else if path.len() >= 2 && path.as_bytes()[0].is_ascii_alphabetic() && &path[1..2] == ":" {
+    } else if path.as_bytes().first().is_some_and(|b| b.is_ascii_alphabetic())
+        && path.as_bytes().get(1) == Some(&b':')
+    {
+        // Only ASCII bytes are sliced: the second char may be multi-byte (`là` is not a drive).
         let absolute = path.as_bytes().get(2) == Some(&b'\\');
         (path[..2].to_string(), absolute, &path[2..])
     } else {
@@ -202,6 +205,12 @@ mod tests {
             "courses/demo/lessons/0001-a.html"
         };
         assert_eq!(join("courses/demo/lessons", "0001-a.html"), expected);
+    }
+
+    #[test]
+    fn join_win32_does_not_slice_inside_a_multibyte_char() {
+        // The second char is not ASCII: slicing bytes 1..2 would panic before the drive check.
+        assert_eq!(join_win32("là", "f"), "là\\f");
     }
 
     #[test]

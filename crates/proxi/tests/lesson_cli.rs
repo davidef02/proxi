@@ -179,18 +179,19 @@ fn relative_paths_resolve_against_data_root_not_cwd() {
     );
     assert_eq!(run.code, 1);
     assert_eq!(run.stdout, "");
-    // The binary's cwd after its chdir; macOS temp dirs differ after canonicalization.
-    let root = if cfg!(windows) {
+    // Node's fs prints the resolved absolute path on Windows (ToNamespacedPath) and the argument as
+    // typed on POSIX, so the binary must report the same text on each platform.
+    let reported = if cfg!(windows) {
         proxi::data_root::resolve_path(&data)
+            .join("missing.json")
+            .display()
+            .to_string()
     } else {
-        fs::canonicalize(&data).expect("canonicalize data")
+        "missing.json".to_string()
     };
     assert_eq!(
         run.stderr,
-        format!(
-            "Error: ENOENT: no such file or directory, open '{}'\n",
-            root.join("missing.json").display()
-        )
+        format!("Error: ENOENT: no such file or directory, open '{reported}'\n")
     );
 }
 
@@ -222,6 +223,46 @@ fn stdin_payload_is_read() {
     );
     assert_eq!(run.code, 0, "{}", run.stderr);
     assert!(run.stdout.contains("\"nodeCount\": 1"), "{}", run.stdout);
+}
+
+#[test]
+fn init_and_append_do_not_refresh_the_board() {
+    let t = common::temp_dir("lesson-no-board");
+    let data = t.0.join("data");
+    let cwd = t.0.join("cwd");
+    fs::create_dir_all(&cwd).expect("create cwd");
+
+    let run = run_lesson(&data, &cwd, &["init", "--topic", "A"], None);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert_eq!(run.stderr, "", "init must not print the [home] line");
+    assert!(
+        !data.join("index.html").exists(),
+        "init must not refresh index.html (#7)"
+    );
+
+    fs::write(
+        data.join("p.json"),
+        r#"{"nodeId":"n","title":"N","tier":"axiom","content":"c"}"#,
+    )
+    .expect("write payload");
+    let run = run_lesson(
+        &data,
+        &cwd,
+        &[
+            "append",
+            "--lesson",
+            "lessons/0001-a.html",
+            "--node-file",
+            "p.json",
+        ],
+        None,
+    );
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert_eq!(run.stderr, "", "append must not print the [home] line");
+    assert!(
+        !data.join("index.html").exists(),
+        "append must not refresh index.html (#7)"
+    );
 }
 
 #[test]

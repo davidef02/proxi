@@ -7,7 +7,7 @@ use std::time::Duration;
 use reqwest::{Client, Response};
 use serde_json::Value;
 
-use proxi::server::{ServerOptions, start};
+use proxi::server::{start, ServerOptions};
 
 fn golden_file(route: &str) -> PathBuf {
     common::repo_root()
@@ -37,11 +37,8 @@ async fn replay(route: &str) {
         let target = repo.join(rel);
         fs::create_dir_all(target.parent().expect("seed file has a parent"))
             .unwrap_or_else(|error| panic!("create parents of {rel}: {error}"));
-        fs::write(
-            &target,
-            serde_json::to_vec_pretty(seed).expect("serialise seed"),
-        )
-        .unwrap_or_else(|error| panic!("write seed {rel}: {error}"));
+        fs::write(&target, serde_json::to_vec_pretty(seed).expect("serialise seed"))
+            .unwrap_or_else(|error| panic!("write seed {rel}: {error}"));
     }
 
     let mut options = ServerOptions::new(repo.clone());

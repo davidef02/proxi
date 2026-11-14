@@ -114,11 +114,16 @@ fn run_append(args: &[String], stdin: &mut dyn Read) -> Result<Value, String> {
     } else if let Some(node_file) = truthy(node_file) {
         match fs::read(node_file) {
             Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
-            // Node's fs reports the resolved absolute path, never the argument as typed.
+            // Node's fs prints `path.out()` after ToNamespacedPath: the resolved absolute path on
+            // Windows only, the argument as typed on POSIX.
             Err(e) if e.kind() == ErrorKind::NotFound => {
+                let reported = if cfg!(windows) {
+                    resolve_path(Path::new(node_file)).display().to_string()
+                } else {
+                    node_file.to_string()
+                };
                 return Err(format!(
-                    "ENOENT: no such file or directory, open '{}'",
-                    resolve_path(Path::new(node_file)).display()
+                    "ENOENT: no such file or directory, open '{reported}'"
                 ));
             }
             Err(e) => return Err(e.to_string()),

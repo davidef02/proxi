@@ -114,12 +114,7 @@ pub fn repo_root_from(env_repo: Option<&str>, exe: Option<&Path>, manifest_dir: 
     if let Some(exe) = exe {
         // The binary lives in <repo>/target/{release,debug}: walk up to the first repo marker.
         for dir in exe.ancestors().skip(1) {
-            if dir
-                .join("app")
-                .join("shared")
-                .join("identity.mjs")
-                .is_file()
-            {
+            if dir.join("app").join("shared").join("identity.mjs").is_file() {
                 return resolve_path(dir);
             }
         }
@@ -303,8 +298,11 @@ mod tests {
         let env_data = t.0.join("env-data");
         write_pointer(&repo, &t.0.join("pointer"));
 
-        let resolved =
-            resolve_data_root(&repo, Some(env_data.to_str().unwrap()), &t.0.join("home"));
+        let resolved = resolve_data_root(
+            &repo,
+            Some(env_data.to_str().unwrap()),
+            &t.0.join("home"),
+        );
         assert_eq!(resolved.source, DataRootSource::Env);
         assert_eq!(resolved.data_root, resolve_path(&env_data));
     }
@@ -459,7 +457,11 @@ mod tests {
         let env_repo = t.0.join("env-repo");
 
         assert_eq!(
-            repo_root_from(Some(env_repo.to_str().unwrap()), Some(&exe), &t.0.join("m")),
+            repo_root_from(
+                Some(env_repo.to_str().unwrap()),
+                Some(&exe),
+                &t.0.join("m")
+            ),
             resolve_path(&env_repo)
         );
         assert_eq!(
@@ -626,10 +628,7 @@ mod tests {
         let home = t.0.join("home");
         let (code, out, err) = run(&["where", "--", "--zz"], &t.0.join("repo"), None, &home);
         assert_eq!(code, 0);
-        assert_eq!(
-            out,
-            format!("{} (default)\n", default_data_root(&home).display())
-        );
+        assert_eq!(out, format!("{} (default)\n", default_data_root(&home).display()));
         assert!(err.is_empty());
     }
 

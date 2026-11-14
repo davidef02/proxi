@@ -7,7 +7,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn repo_root() -> PathBuf {
-    let raw = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    let raw = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..");
     let mut out = PathBuf::new();
     for component in raw.components() {
         match component {
@@ -36,7 +38,10 @@ pub fn temp_dir(tag: &str) -> TempDir {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let path = std::env::temp_dir().join(format!("proxi-{tag}-{}-{nanos}-{n}", std::process::id()));
+    let path = std::env::temp_dir().join(format!(
+        "proxi-{tag}-{}-{nanos}-{n}",
+        std::process::id()
+    ));
     fs::create_dir_all(&path).expect("create temp dir");
     TempDir(path)
 }

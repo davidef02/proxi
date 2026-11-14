@@ -1,12 +1,7 @@
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(
-    name = "proxi",
-    version,
-    about = "Proxi",
-    disable_help_subcommand = true
-)]
+#[command(name = "proxi", version, about = "Proxi", disable_help_subcommand = true)]
 struct Cli {
     #[command(subcommand)]
     command: Command,

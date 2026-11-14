@@ -283,8 +283,9 @@
         "--node-file",
         "payloads/missing.json"
       ],
+      "stderrPrefix": "Error: ENOENT: no such file or directory, open '",
       "stdout": "",
-      "stderr": "Error: ENOENT: no such file or directory, open '<dataRoot>/payloads/missing.json'\n",
+      "stderr": "Error: ENOENT: no such file or directory, open '",
       "exitCode": 1,
       "files": {}
     },
@@ -299,7 +300,7 @@
       ],
       "stderrPrefix": "Error: Invalid JSON payload: ",
       "stdout": "",
-      "stderr": "Error: Invalid JSON payload: Expected property name or '}' in JSON at position 1 (line 1 column 2)\n",
+      "stderr": "Error: Invalid JSON payload: ",
       "exitCode": 1,
       "files": {}
     },

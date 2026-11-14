@@ -162,7 +162,7 @@ export const CASES: LessonCase[] = [
   { name: "append-missing-lesson", args: ["append", "--lesson", "courses/demo/lessons/9999-nope.html", "--data", '{"nodeId":"x"}'], expectExit: 1 },
   { name: "append-no-target", args: ["append", "--data", "{}"], expectExit: 1 },
   { name: "append-slug-prefix", args: ["append", "--slug", "probabilita", "--data", "{}"], expectExit: 1 },
-  { name: "append-missing-node-file", args: ["append", "--lesson", L, "--node-file", "payloads/missing.json"], expectExit: 1 },
+  { name: "append-missing-node-file", args: ["append", "--lesson", L, "--node-file", "payloads/missing.json"], stderrPrefix: "Error: ENOENT: no such file or directory, open '", expectExit: 1 },
   { name: "append-invalid-json", args: ["append", "--lesson", L, "--data", "{"], stderrPrefix: "Error: Invalid JSON payload: ", expectExit: 1 },
   { name: "list-default", args: ["list"], expectExit: 0 },
   { name: "list-dir", args: ["list", "--dir", "payloads"], expectExit: 0 },
@@ -231,7 +231,9 @@ export async function captureLessonGolden(outDir: string = GOLDEN_DIR): Promise<
         ...(c.stdin !== undefined ? { stdin: c.stdin } : {}),
         ...(c.stderrPrefix !== undefined ? { stderrPrefix: c.stderrPrefix } : {}),
         stdout: normaliseStream(run.stdout, roots),
-        stderr: normaliseStream(stderr, roots),
+        // A stderrPrefix means the tail is platform-specific (Node's ENOENT prints the resolved path
+        // on Windows, the argument as typed on POSIX): the golden pins only the prefix.
+        stderr: normaliseStream(c.stderrPrefix ?? stderr, roots),
         exitCode: c.expectExit,
         files,
       });

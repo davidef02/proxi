@@ -131,7 +131,10 @@ fn validate(key: &str, v: &Value) -> Result<Value, String> {
         "agyModels" | "opencodeModels" => role_models(key, v),
         "teacherModel" | "subagentModel" | "mapModel" => enum_value(key, v, MODELS),
         "effort" => effort(v),
-        "autoMap" => v.as_bool().map(Value::Bool).ok_or_else(|| invalid(key)),
+        "autoMap" => v
+            .as_bool()
+            .map(Value::Bool)
+            .ok_or_else(|| invalid(key)),
         "dictationLanguage" => {
             let s = v
                 .as_str()
@@ -221,10 +224,7 @@ pub fn write_settings(repo_root: &Path, patch: &Value) -> Result<LearnerSettings
         .ok_or_else(|| SettingsError::Invalid(": Expected object".to_string()))?;
     let mut cleaned = Vec::with_capacity(obj.len());
     for (key, value) in obj {
-        cleaned.push((
-            key.clone(),
-            validate(key, value).map_err(SettingsError::Invalid)?,
-        ));
+        cleaned.push((key.clone(), validate(key, value).map_err(SettingsError::Invalid)?));
     }
     // The UI sends the masked key back with every save; keep the stored one.
     cleaned.retain(|(key, value)| {
@@ -269,8 +269,10 @@ mod tests {
     fn temp_dir(tag: &str) -> PathBuf {
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path =
-            std::env::temp_dir().join(format!("proxi-settings-{tag}-{}-{n}", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "proxi-settings-{tag}-{}-{n}",
+            std::process::id()
+        ));
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(&path).unwrap();
         path
@@ -389,15 +391,13 @@ mod tests {
     #[test]
     fn write_ignores_the_masked_key() {
         let repo = temp_dir("write-masked");
-        let first = write_settings(
-            &repo,
-            &json!({"anthropicApiKey": fake_key("-ant-real-key-1234")}),
-        )
-        .unwrap();
+        let first =
+            write_settings(&repo, &json!({"anthropicApiKey": fake_key("-ant-real-key-1234")}))
+                .unwrap();
         assert_eq!(first.anthropic_api_key, fake_key("-ant-real-key-1234"));
 
-        let after =
-            write_settings(&repo, &json!({"anthropicApiKey": fake_key("-ant-…abcd")})).unwrap();
+        let after = write_settings(&repo, &json!({"anthropicApiKey": fake_key("-ant-…abcd")}))
+            .unwrap();
         assert_eq!(after.anthropic_api_key, fake_key("-ant-real-key-1234"));
 
         let after = write_settings(
