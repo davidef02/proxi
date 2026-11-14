@@ -65,6 +65,37 @@ describe("FakeHttpServer", () => {
     }
   });
 
+  it("fallback answers unmatched paths, exact routes win, reset clears it", async () => {
+    const fake = new FakeHttpServer("demo");
+    const url = await fake.start();
+    try {
+      fake.on("GET", "/exact", { body: { from: "route" } });
+      fake.onFallback((req) => {
+        if (req.path === "/boom") throw new Error("fallback boom");
+        return { status: 418, body: { from: "fallback", path: req.path } };
+      });
+
+      const exact = await fetch(url + "/exact");
+      assert.equal(exact.status, 200);
+      assert.deepEqual(await exact.json(), { from: "route" });
+
+      const other = await fetch(url + "/other?x=1");
+      assert.equal(other.status, 418);
+      assert.deepEqual(await other.json(), { from: "fallback", path: "/other?x=1" });
+      assert.equal(fake.requests.length, 2);
+      assert.equal(fake.requests[1].path, "/other?x=1");
+
+      assert.equal((await fetch(url + "/boom")).status, 500);
+      assert.equal(fake.requests.length, 3);
+
+      fake.reset();
+      assert.equal(fake.requests.length, 0);
+      assert.equal((await fetch(url + "/other")).status, 404);
+    } finally {
+      await fake.close();
+    }
+  });
+
   it("reset clears routes and requests", async () => {
     const fake = new FakeHttpServer("demo");
     const url = await fake.start();

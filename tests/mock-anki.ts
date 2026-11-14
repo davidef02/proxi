@@ -22,6 +22,7 @@ export class MockAnki {
   models: Record<string, string[]> | null = null;
   deckStats: Record<string, any> | null = null;
   deckNamesAndIds: Record<string, number> | null = null;
+  guiDeckReviewError: string | null = null;
 
   private server: http.Server | null = null;
   private nextCardId = 1001;
@@ -37,6 +38,7 @@ export class MockAnki {
     this.models = null;
     this.deckStats = null;
     this.deckNamesAndIds = null;
+    this.guiDeckReviewError = null;
   }
 
   private assignDefaults(): void {
@@ -185,6 +187,12 @@ export class MockAnki {
                   result[String(d)] = { deck_id: 1, name: d, new_count: 0, learn_count: 0, review_count: 0, total_in_deck: 0 };
                 }
                 res.end(JSON.stringify({ result, error: null }));
+              }
+            } else if (action === "guiDeckReview") {
+              if (this.guiDeckReviewError) {
+                res.end(JSON.stringify({ result: null, error: this.guiDeckReviewError }));
+              } else {
+                res.end(JSON.stringify({ result: true, error: null }));
               }
             } else {
               res.end(JSON.stringify({ result: null, error: `Unsupported action ${action}` }));

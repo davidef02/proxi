@@ -1,0 +1,320 @@
+{
+  "route": "lesson",
+  "seed": {},
+  "dataSeed": {
+    "courses/demo/lessons/0001-prima.html": "<html><body><script type=\"application/json\" id=\"lesson-data\">{\"metadata\":{\"lessonNumber\":1,\"topic\":\"Prima\",\"title\":\"Prima\",\"slug\":\"prima\",\"dateCreated\":\"\",\"dateModified\":\"\",\"version\":\"1\",\"initialDag\":\"\"},\"nodes\":[{\"nodeId\":\"n1\",\"title\":\"Nodo 1\",\"tier\":\"axiom\",\"content\":\"<p>La <b>verità</b> pesa </b> poco.</p>\",\"math\":[]}],\"weight\":1.0,\"zeta\":\"sconosciuta\"}</script></body></html>",
+    "courses/demo/lessons/0002-prosa.html": "<html>solo prosa</html>",
+    "courses/demo/lessons/0003-rotta.html": "<script type=\"application/json\" id=\"lesson-data\">{nope</script>",
+    "courses/demo/reference/prima.html": "<!doctype html>\n<html><head>\n<title> Sintesi prima </title>\n<style>a{}</style>\n<link rel=x>\n</head><body>\n<script>1</script>\n<main><h2>Ciao</h2></main>\n<script type=\"application/json\" id=\"reference-data\">{\"title\":\"Sintesi prima\",\"slug\":\"prima\",\"nodes\":[],\"formulas\":[],\"misconceptions\":[]}</script>\n</body></html>",
+    "courses/demo/lessons/0004-seconda.html": "<html><body><script type=\"application/json\" id=\"lesson-data\">{\"metadata\":{\"lessonNumber\":4,\"topic\":\"Seconda\",\"title\":\"\",\"slug\":\"seconda\",\"dateCreated\":\"\",\"dateModified\":\"\",\"version\":\"1\",\"initialDag\":\"graph TD\\nN1[a]\"},\"nodes\":[{\"nodeId\":\"n1\",\"title\":\"Nodo 1\",\"tier\":\"axiom\",\"content\":\"\",\"summary\":\"  Fatto uno  \",\"math\":[\"a^2\"]},{\"nodeId\":\"n2\",\"title\":\"Nodo 2\",\"tier\":\"axiom\",\"content\":\"\",\"ankiParams\":{\"targetFact\":\"Fatto due\"},\"steps\":[{\"stepId\":\"s1\",\"content\":\"<p>x</p>\",\"math\":[\"b\"],\"codeBlocks\":[{\"language\":\"js\",\"code\":\"1\"}]}]},{\"nodeId\":\"n3\",\"title\":\"Nodo 3\",\"tier\":\"axiom\",\"content\":\"<p><strong>La verità da tenere senza caveat.</strong> Il punto fermo.</p>\"},{\"nodeId\":\"n4\",\"title\":\"Nodo 4\",\"tier\":\"axiom\",\"content\":\"<p>Prima frase. Seconda frase! Terza.</p><pre><code class=\\\"language-python\\\">l1\\nl2\\nl3 &lt;\\nl4\\nl5\\nl6\\nl7\\nl8\\nl9\\nl10\\nl11\\nl12\\nl13</code></pre>\"},{\"nodeId\":\"n5\",\"title\":\"Nodo 5\",\"tier\":\"axiom\",\"content\":\"Testo\\n```rust\\nfn x() {}\\n```\"},{\"nodeId\":\"n6\",\"tier\":\"axiom\",\"content\":\"\"}]}</script></body></html>",
+    "courses/demo/learning-records/0004-x.md": "# x\r\n\r\n## Evidence\r\n\r\n- Confonde il Nodo 2 con il 3\r\n* Slip sul node abc-1\r\n\r\n<!-- lesson: seconda -->\r\n",
+    "courses/demo/lessons/0005-terza.html": "<html><body><script type=\"application/json\" id=\"lesson-data\">{\"metadata\":{\"lessonNumber\":5,\"topic\":\"Terza\",\"title\":\"Terza\",\"slug\":\"terza\",\"dateCreated\":\"\",\"dateModified\":\"\",\"version\":\"1\",\"initialDag\":\"\"},\"nodes\":[{\"nodeId\":\"n1\",\"title\":\"Nodo 1\",\"tier\":\"axiom\",\"content\":\"x\",\"math\":[]}]}</script></body></html>",
+    "courses/demo/learning-records/0005-y.md": "# y\n\n## Evidence\n\nTutto bene. Un errore sul segno. Fine\n\n## Next\n"
+  },
+  "cases": [
+    {
+      "name": "lesson-ok",
+      "request": {
+        "method": "GET",
+        "path": "/api/lesson?path=courses/demo/lessons/0001-prima.html"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "metadata": {
+            "lessonNumber": 1,
+            "topic": "Prima",
+            "title": "Prima",
+            "slug": "prima",
+            "dateCreated": "",
+            "dateModified": "",
+            "version": "1",
+            "initialDag": ""
+          },
+          "nodes": [
+            {
+              "nodeId": "n1",
+              "title": "Nodo 1",
+              "tier": "axiom",
+              "content": "<p>La <b>verità</b> pesa </b> poco.</p>",
+              "math": []
+            }
+          ],
+          "weight": 1,
+          "zeta": "sconosciuta"
+        }
+      }
+    },
+    {
+      "name": "lesson-missing",
+      "request": {
+        "method": "GET",
+        "path": "/api/lesson?path=courses/demo/lessons/0099-no.html"
+      },
+      "response": {
+        "status": 404,
+        "body": {
+          "error": "Lezione non trovata"
+        }
+      }
+    },
+    {
+      "name": "lesson-prose",
+      "request": {
+        "method": "GET",
+        "path": "/api/lesson?path=courses/demo/lessons/0002-prosa.html"
+      },
+      "response": {
+        "status": 422,
+        "body": {
+          "error": "La lezione non ha dati strutturati"
+        }
+      }
+    },
+    {
+      "name": "lesson-malformed",
+      "request": {
+        "method": "GET",
+        "path": "/api/lesson?path=courses/demo/lessons/0003-rotta.html"
+      },
+      "response": {
+        "status": 422,
+        "body": {
+          "error": "Malformed #lesson-data island: Expected property name or '}' in JSON at position 1 (line 1 column 2)"
+        }
+      }
+    },
+    {
+      "name": "lesson-bad-path",
+      "request": {
+        "method": "GET",
+        "path": "/api/lesson?path=courses/demo/MISSION.md"
+      },
+      "response": {
+        "status": 400,
+        "body": {
+          "error": "Percorso della lezione non valido"
+        }
+      }
+    },
+    {
+      "name": "doc-reference",
+      "request": {
+        "method": "GET",
+        "path": "/api/doc?path=courses/demo/reference/prima.html"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "title": "Sintesi prima",
+          "html": "<h2>Ciao</h2>"
+        }
+      }
+    },
+    {
+      "name": "doc-lesson",
+      "request": {
+        "method": "GET",
+        "path": "/api/doc?path=courses/demo/lessons/0002-prosa.html"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "html": "<html>solo prosa</html>"
+        }
+      }
+    },
+    {
+      "name": "doc-missing",
+      "request": {
+        "method": "GET",
+        "path": "/api/doc?path=courses/demo/reference/nope.html"
+      },
+      "response": {
+        "status": 404,
+        "body": {
+          "error": "Documento non trovato"
+        }
+      }
+    },
+    {
+      "name": "doc-bad-path",
+      "request": {
+        "method": "GET",
+        "path": "/api/doc?path=courses/demo/exercises/x.html"
+      },
+      "response": {
+        "status": 400,
+        "body": {
+          "error": "Percorso del documento non valido"
+        }
+      }
+    },
+    {
+      "name": "reference-island",
+      "request": {
+        "method": "GET",
+        "path": "/api/reference?path=courses/demo/reference/prima.html"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "title": "Sintesi prima",
+          "slug": "prima",
+          "nodes": [],
+          "formulas": [],
+          "misconceptions": []
+        }
+      }
+    },
+    {
+      "name": "reference-fallback",
+      "request": {
+        "method": "GET",
+        "path": "/api/reference?path=courses/demo/reference/seconda.html"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "title": "Seconda",
+          "topic": "Seconda",
+          "slug": "seconda",
+          "initialDag": "graph TD\nN1[a]",
+          "nodes": [
+            {
+              "nodeId": "n1",
+              "number": 1,
+              "title": "Nodo 1",
+              "tier": "axiom",
+              "summary": "Fatto uno",
+              "keyFormula": "a^2"
+            },
+            {
+              "nodeId": "n2",
+              "number": 2,
+              "title": "Nodo 2",
+              "tier": "axiom",
+              "summary": "Fatto due",
+              "keyFormula": "b",
+              "keyCode": {
+                "language": "js",
+                "code": "1"
+              }
+            },
+            {
+              "nodeId": "n3",
+              "number": 3,
+              "title": "Nodo 3",
+              "tier": "axiom",
+              "summary": "Il punto fermo."
+            },
+            {
+              "nodeId": "n4",
+              "number": 4,
+              "title": "Nodo 4",
+              "tier": "axiom",
+              "summary": "Prima frase. Seconda frase!",
+              "keyCode": {
+                "language": "python",
+                "code": "l1\nl2\nl3 <\nl4\nl5\nl6\nl7\nl8\nl9\nl10\n// ..."
+              }
+            },
+            {
+              "nodeId": "n5",
+              "number": 5,
+              "title": "Nodo 5",
+              "tier": "axiom",
+              "summary": "Testo ```rust fn x() {} ```",
+              "keyCode": {
+                "language": "rust",
+                "code": "fn x() {}"
+              }
+            },
+            {
+              "nodeId": "n6",
+              "number": 6,
+              "tier": "axiom"
+            }
+          ],
+          "formulas": [
+            {
+              "math": "a^2",
+              "sourceNode": "Nodo 1"
+            },
+            {
+              "math": "b",
+              "sourceNode": "Nodo 2"
+            }
+          ],
+          "misconceptions": [
+            {
+              "description": "Confonde il Nodo 2 con il 3",
+              "sourceNode": "Nodo 2"
+            },
+            {
+              "description": "Slip sul node abc-1",
+              "sourceNode": "Nodo abc-1"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "reference-fallback-sentences",
+      "request": {
+        "method": "GET",
+        "path": "/api/reference?path=courses/demo/reference/terza.html"
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "title": "Terza",
+          "topic": "Terza",
+          "slug": "terza",
+          "initialDag": "",
+          "nodes": [
+            {
+              "nodeId": "n1",
+              "number": 1,
+              "title": "Nodo 1",
+              "tier": "axiom",
+              "summary": "x"
+            }
+          ],
+          "formulas": [],
+          "misconceptions": [
+            {
+              "description": "Un errore sul segno."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "reference-missing",
+      "request": {
+        "method": "GET",
+        "path": "/api/reference?path=courses/demo/reference/nope.html"
+      },
+      "response": {
+        "status": 404,
+        "body": {
+          "error": "Sintesi non trovata"
+        }
+      }
+    },
+    {
+      "name": "reference-lesson-path",
+      "request": {
+        "method": "GET",
+        "path": "/api/reference?path=courses/demo/lessons/0004-seconda.html"
+      },
+      "response": {
+        "status": 404,
+        "body": {
+          "error": "Sintesi non trovata"
+        }
+      }
+    }
+  ]
+}
