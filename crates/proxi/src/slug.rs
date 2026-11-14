@@ -1,6 +1,6 @@
 //! The one slug rule of the engine (port of extensions/slug.ts): plan and lesson must slug identically.
 
-use crate::lesson::js::{is_js_space, js_trim};
+pub use crate::lesson::js::{is_js_space, js_trim};
 
 /// A kebab-case, ASCII-folded identifier.
 pub fn slugify(text: &str) -> String {
@@ -59,9 +59,22 @@ mod tests {
     }
 
     #[test]
+    fn slugify_matches_node_cases() {
+        assert_eq!(slugify("Probabilità condizionata"), "probabilita-condizionata");
+        assert_eq!(slugify("App State & Caching"), "app-state-and-caching");
+        assert_eq!(slugify("Image, e container!"), "image-e-container");
+        assert_eq!(slugify("  --Rust__ WebAssembly--  "), "rust-webassembly");
+        assert_eq!(slugify("Ünïcödé çà"), "unicode-ca");
+        assert_eq!(slugify("日本語 test"), "test");
+        assert_eq!(slugify("a\u{A0}b\u{FEFF}c"), "a-b-c");
+        assert_eq!(slugify(""), "");
+    }
+
+    #[test]
     fn lesson_slug_is_slugify() {
-        for text in ["Probabilità & Statistica", "  Già__Fatto -- Ok  ", ""] {
+        for text in ["Probabilità & Statistica", "  Già__Fatto -- Ok  ", "App State & Caching", ""] {
             assert_eq!(lesson_slug(text), slugify(text));
         }
+        assert_eq!(lesson_slug("App State & Caching"), "app-state-and-caching");
     }
 }

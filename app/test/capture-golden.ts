@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { captureHome } from "./capture-golden-home.ts";
 import { driveBody, installFakeDrive, type FakeDriveSeed } from "./fake-drive.ts";
 import type { FakeGithubSeed } from "./fake-github.ts";
 import { installFakeGithub } from "./fake-github.ts";
@@ -572,6 +573,7 @@ export async function captureGolden(outDir: string = GOLDEN_DIR): Promise<string
     fs.writeFileSync(target, JSON.stringify(file, null, 2) + "\n"); // always LF, never os.EOL
     written.push(target);
   }
+  written.push(await captureHome(outDir));
   return written;
 }
 

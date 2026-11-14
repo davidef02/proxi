@@ -28,5 +28,8 @@ gethostname = "1.1.0"
 indexmap = { version = "2.14.2", features = ["serde"] }
 process-wrap = { version = "10.0.1", default-features = false, features = ["tokio1", "job-object", "process-group", "kill-on-drop"] }
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.191"
+
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_Time"] }

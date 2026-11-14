@@ -2144,6 +2144,7 @@ dependencies = [
  "icu_normalizer",
  "indexmap",
  "keyring",
+ "libc",
  "ort",
  "process-wrap",
  "reqwest",
