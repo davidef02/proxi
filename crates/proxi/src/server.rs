@@ -23,6 +23,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use crate::anki_client::{self, AnkiClient};
 use crate::anki_import::ImportRegistry;
 use crate::anki_status::{start_review, status_all, status_for_course, ReviewStart};
+use crate::claude::{self, ClaudeBin};
 use crate::course_data::{course_deck_name_for, valid_course};
 use crate::courses::{self, CoursesError};
 use crate::data_root::{self, DataRootSource, DATA_ROOT_ENV};
@@ -36,6 +37,7 @@ use crate::lesson;
 use crate::limits::{self, LimitsCache};
 use crate::model_download;
 use crate::protocol::{GlobalEvent, LearnerSettings, SettingsResponse, SyncStatus, DEFAULT_PORT};
+use crate::sessions::{ManagerOptions, SessionManager};
 use crate::settings::{self, SettingsError};
 use crate::sync::gdrive::GoogleEndpoints;
 use crate::sync::github::{GithubEndpoints, real_sleeper};
@@ -101,6 +103,7 @@ pub struct RunningServer {
     pub port: u16,
     pub url: String,
     pub events: EventBus,
+    pub sessions: SessionManager,
     sync: SyncService,
     auto: JoinHandle<()>,
     task: JoinHandle<()>,
@@ -112,8 +115,9 @@ impl RunningServer {
         self.auto.abort();
     }
 
-    /// One last auto pass, bounded so quitting cannot hang, then stop serving.
+    /// Stop the sessions (children and final state), one last auto pass, then stop serving.
     pub async fn shutdown(self) {
+        self.sessions.shutdown().await;
         self.auto.abort();
         if self.sync.auto_enabled() {
             let sync = self.sync.clone();
@@ -143,10 +147,11 @@ struct AppState {
     dist: PathBuf,
     events: EventBus,
     keep_alive: Duration,
-    limits: LimitsCache,
+    limits: Arc<LimitsCache>,
     anki: AnkiClient,
     imports: ImportRegistry,
     graph: Arc<GraphStore>,
+    sessions: SessionManager,
 }
 
 pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
@@ -230,6 +235,45 @@ pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
         .await
         .map_err(std::io::Error::other)?;
 
+    // Sessions, pinned at start like Node's `bins` (main.ts:167-171). The manager loads the saved
+    // sessions: blocking, and after listen because the port ends up in the prompt and `mcp.json`.
+    let token = random_token();
+    let claude = ClaudeBin {
+        cmd: opts
+            .bins
+            .claude
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .or_else(claude::locate_from_process)
+            .unwrap_or_else(|| "claude".to_string()),
+        args: opts.bins.claude_args.clone(),
+    };
+    // The engine may read the folder that holds this repo (sibling checkouts); a repo pinned at a
+    // filesystem root is its own add-dir.
+    let add_dirs = vec![
+        repo_root
+            .parent()
+            .map_or_else(|| repo_root.clone(), std::path::Path::to_path_buf),
+    ];
+    let limits = Arc::new(LimitsCache::new());
+    let imports = ImportRegistry::new();
+    let manager_opts = ManagerOptions {
+        repo_root: repo_root.clone(),
+        data_root: data_root.clone(),
+        code_root: data_root::repo_root(),
+        port,
+        token,
+        claude,
+        add_dirs,
+        events: events.clone(),
+        limits: limits.clone(),
+        anki: anki.clone(),
+        imports: imports.clone(),
+    };
+    let sessions = tokio::task::spawn_blocking(move || SessionManager::new(manager_opts))
+        .await
+        .map_err(std::io::Error::other)?;
+
     let state = Arc::new(AppState {
         repo_str: repo_root.display().to_string(),
         data_str: data_root.display().to_string(),
@@ -239,11 +283,13 @@ pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
         dist,
         events: events.clone(),
         keep_alive: opts.keep_alive,
-        // One cache per server: Node keys it by repo root, and a server serves one repo.
-        limits: LimitsCache::new(),
+        // One cache per server: Node keys it by repo root, and a server serves one repo. The session
+        // manager records Claude's reports into this same instance.
+        limits,
         anki,
-        imports: ImportRegistry::new(),
+        imports,
         graph: Arc::new(GraphStore::new(data_root)),
+        sessions: sessions.clone(),
     });
 
     let app = router(state, sync.clone());
@@ -256,10 +302,18 @@ pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
         port,
         url: format!("http://127.0.0.1:{port}"),
         events,
+        sessions,
         sync,
         auto,
         task,
     })
+}
+
+/// Node's `randomBytes(24).toString("hex")`: the shared secret written into `mcp.json`.
+fn random_token() -> String {
+    let mut bytes = [0u8; 24];
+    getrandom::fill(&mut bytes).expect("system randomness");
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// Mirrors Node's startup gate (main.ts:569-570): fetch when the code root is the repo too, or when a
@@ -309,6 +363,19 @@ fn router(state: Arc<AppState>, sync: SyncService) -> Router {
         .route(
             "/api/graph/nodes/{id}/delete",
             post(delete_graph_node).fallback(not_found),
+        )
+        .route(
+            "/api/sessions",
+            get(get_sessions).post(post_sessions).fallback(not_found),
+        )
+        .route("/api/sessions/{id}", get(get_session).fallback(not_found))
+        .route(
+            "/api/sessions/{id}/events",
+            get(get_session_events).fallback(not_found),
+        )
+        .route(
+            "/api/sessions/{id}/message",
+            post(post_session_message).fallback(not_found),
         )
         .route("/files/", get(get_file))
         .route("/files/{*rest}", get(get_file))
@@ -717,6 +784,68 @@ async fn delete_graph_node(
         }
         Ok(Err(error)) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
         Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"),
+    }
+}
+
+/// The session routes (main.ts:354-372): list, create, read, per-session SSE, message.
+async fn get_sessions(State(state): State<Arc<AppState>>) -> Json<Value> {
+    Json(state.sessions.list())
+}
+
+async fn post_sessions(State(state): State<Arc<AppState>>, body: Bytes) -> Response {
+    // Raw bytes on purpose: the Node server ignores the content-type (c.req.json()).
+    let body: Value = match serde_json::from_slice(&body) {
+        Ok(value) => value,
+        Err(_) => return json_error(StatusCode::BAD_REQUEST, "Invalid JSON body"),
+    };
+    match state.sessions.create(body).await {
+        Ok(id) => Json(json!({ "id": id })).into_response(),
+        Err(error) => json_error(error.status, &error.message),
+    }
+}
+
+async fn get_session(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+    match state.sessions.get(&id) {
+        Some(session) => Json(session).into_response(),
+        None => json_error(StatusCode::NOT_FOUND, "Session not found"),
+    }
+}
+
+/// The manager sends the full state first, then the live events, into this channel.
+async fn get_session_events(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Response {
+    let Some(rx) = state.sessions.subscribe(&id) else {
+        return json_error(StatusCode::NOT_FOUND, "Session not found");
+    };
+    let stream = futures_util::stream::unfold(rx, |mut rx| async move {
+        rx.recv()
+            .await
+            .map(|payload| (Ok::<_, Infallible>(Event::default().data(payload)), rx))
+    });
+    Sse::new(stream)
+        .keep_alive(
+            KeepAlive::new()
+                .interval(state.keep_alive)
+                .text("keep-alive"),
+        )
+        .into_response()
+}
+
+async fn post_session_message(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> Response {
+    let body: Value = match serde_json::from_slice(&body) {
+        Ok(value) => value,
+        Err(_) => return json_error(StatusCode::BAD_REQUEST, "Invalid JSON body"),
+    };
+    // The manager checks the body before the id, as Node's `textBody` runs before `manager.message`.
+    match state.sessions.message(&id, body).await {
+        Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Err(error) => json_error(error.status, &error.message),
     }
 }
 
