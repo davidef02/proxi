@@ -163,6 +163,34 @@ describe("Composer attachments (Images and PDFs)", () => {
     assert.deepEqual(metas.map((m) => m.name), ["due.md", "uno.txt"]);
   });
 
+  it("follows Node's File.type when a part has no or an empty Content-Type", async () => {
+    // WHATWG's parser (undici, and the binary) gives `text/plain` to a part with no Content-Type and
+    // `""` to an empty one, which the server stores as application/octet-stream.
+    const res = await fetch(`${server.url}/api/sessions/${id}/attachments`, {
+      method: "POST",
+      headers: { "x-learner-client": "1", "content-type": "multipart/form-data; boundary=x" },
+      body: [
+        "--x",
+        'Content-Disposition: form-data; name="files"; filename="no-type.png"',
+        "",
+        "niente",
+        "--x",
+        'Content-Disposition: form-data; name="files"; filename="empty-type.png"',
+        "Content-Type: ",
+        "",
+        "vuoto",
+        "--x--",
+        "",
+      ].join("\r\n"),
+    });
+    assert.equal(res.status, 200);
+    const metas = (await res.json()) as AttachmentMeta[];
+    assert.deepEqual(metas.map((m) => [m.name, m.mimeType]), [
+      ["no-type.png", "text/plain"],
+      ["empty-type.png", "application/octet-stream"],
+    ]);
+  });
+
   it("rejects unsupported file types with 400", async () => {
     const exe = new FormData();
     exe.append("files", new Blob([Buffer.from("MZ binary")], { type: "application/x-msdownload" }), "malware.exe");
