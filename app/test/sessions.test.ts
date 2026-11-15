@@ -108,19 +108,27 @@ describe("sessions with fake-claude", () => {
   });
 
   it("409 while running, interrupt returns to idle", async () => {
-    assert.equal((await post(`/api/sessions/${id}/message`, { text: "FAKE:slow" })).status, 200);
-    const busy = await post(`/api/sessions/${id}/message`, { text: "ancora" });
-    assert.equal(busy.status, 409);
-    assert.ok(((await busy.json()) as { error: string }).error);
-    assert.equal((await post(`/api/sessions/${id}/interrupt`)).status, 200);
-    await idle(id);
+    const stream = sse(`${srv.url}/api/sessions/${id}/events`);
+    try {
+      assert.equal((await post(`/api/sessions/${id}/message`, { text: "FAKE:slow" })).status, 200);
+      const busy = await post(`/api/sessions/${id}/message`, { text: "ancora" });
+      assert.equal(busy.status, 409);
+      assert.ok(((await busy.json()) as { error: string }).error);
+      // The fake drops an interrupt that lands in the same stdin read as the user line: wait for its
+      // first streamed delta, so the request finds the slow script already running.
+      await waitFor(() => stream.events.some((e) => e.type === "delta"));
+      assert.equal((await post(`/api/sessions/${id}/interrupt`)).status, 200);
+      await idle(id);
 
-    const notices = (await state(id)).items.filter((i): i is Extract<ChatItem, { kind: "notice" }> => i.kind === "notice");
-    const infos = notices.filter((n) => n.level === "info");
-    assert.equal(infos.length, 1, "one info notice for the interrupted turn");
-    assert.equal(infos[0].text, "Turno interrotto.");
-    assert.ok(!notices.some((n) => n.level === "error"), "interrupt is not an error notice");
-    assert.ok(rawInputs().includes('{"type":"control_request","request_id":"int-1","request":{"subtype":"interrupt"}}'));
+      const notices = (await state(id)).items.filter((i): i is Extract<ChatItem, { kind: "notice" }> => i.kind === "notice");
+      const infos = notices.filter((n) => n.level === "info");
+      assert.equal(infos.length, 1, "one info notice for the interrupted turn");
+      assert.equal(infos[0].text, "Turno interrotto.");
+      assert.ok(!notices.some((n) => n.level === "error"), "interrupt is not an error notice");
+      assert.ok(rawInputs().includes('{"type":"control_request","request_id":"int-1","request":{"subtype":"interrupt"}}'));
+    } finally {
+      stream.close();
+    }
   });
 
   it("DELETE stops a running session and removes it (needs the client header)", async () => {

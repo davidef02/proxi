@@ -1,20 +1,24 @@
-//! The session routes over real HTTP: guards, create/get/list, per-session SSE, message, shutdown.
+//! The session routes over real HTTP: guards, create/get/list, per-session SSE, message, attachments,
+//! retry, interrupt, close, delete and shutdown.
 //!
-//! Ported from `app/test/api-sessions.test.ts` (T14 of issue #15): the server wiring around the
-//! manager, with the fake engine behind `--claude-bin` / `--claude-bin-arg`.
+//! Ported from `app/test/api-sessions.test.ts` (T14 of issue #15) and `app/test/sessions.test.ts` /
+//! `app/test/attachments.test.ts` (#20): the server wiring around the manager, with the fake engine
+//! behind `--claude-bin` / `--claude-bin-arg`.
 
 mod common;
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use reqwest::header::CONTENT_TYPE;
 use reqwest::{Client, StatusCode};
 use serde_json::{json, Value};
 
 use common::sessions::{
-    body_json, data_events, describe, post, read_until, require_fake_engine, seed_demo_course,
-    teach_planned, wait_for,
+    body_json, data_events, delete, describe, fake_args, post, raw_inputs, read_until,
+    require_fake_engine, seed_demo_course, teach_planned, upload, user_texts, wait_for,
+    wait_for_state_file, UploadPart, INTERRUPT_REQUEST,
 };
 use proxi::server::{start, RunningServer, ServerOptions};
 
@@ -36,24 +40,56 @@ impl Fixture {
 
     /// The fake engine, wired the way `proxi serve --claude-bin node --claude-bin-arg <fake>` is.
     fn options(&self) -> ServerOptions {
+        self.options_with(&[])
+    }
+
+    /// The same with test-hook flags before the fake script (`--input-out`, `--env-out`).
+    fn options_with(&self, extra: &[&str]) -> ServerOptions {
         let mut options = ServerOptions::new(self.repo.0.clone());
         options.data_root = Some(self.data.0.clone());
         options.memory_secrets = true;
         options.bins.claude = Some(PathBuf::from("node"));
-        options.bins.claude_args = vec![
-            common::repo_root()
-                .join("app")
-                .join("test")
-                .join("fake-claude.mjs")
-                .display()
-                .to_string(),
-        ];
+        options.bins.claude_args = fake_args(extra);
         options
     }
 }
 
 fn url(server: &RunningServer, path: &str) -> String {
     format!("{}{}", server.url, path)
+}
+
+/// The session state over HTTP.
+async fn state_of(client: &Client, server: &RunningServer, id: &str) -> Value {
+    let response = client
+        .get(url(server, &format!("/api/sessions/{id}")))
+        .send()
+        .await
+        .unwrap_or_else(|error| panic!("GET /api/sessions/{id}: {error}"));
+    body_json(response).await
+}
+
+/// The fake's first delta: an in-band interrupt sent before the `FAKE:slow` turn starts is dropped
+/// (the user line and the request arrive in one stdin read), so wait for the streamed text first.
+async fn wait_for_first_delta(client: &Client, server: &RunningServer, id: &str) {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let state = state_of(client, server, id).await;
+        let streaming = state["items"].as_array().is_some_and(|items| {
+            items.iter().any(|item| {
+                item["kind"] == "teacher"
+                    && item["streaming"] == true
+                    && item["text"].as_str().is_some_and(|text| !text.is_empty())
+            })
+        });
+        if streaming {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the fake turn never streamed: {state}"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
 }
 
 async fn create(client: &Client, server: &RunningServer, body: &Value) -> String {
@@ -446,5 +482,530 @@ async fn global_events_announce_a_created_session() {
     assert!(raw.contains(r#"data: {"type":"sessions"}"#), "{raw:?}");
 
     wait_for(&client, &server, &id, "idle").await;
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn session_control_routes_need_the_client_header_and_an_existing_id() {
+    let fixture = Fixture::new("sessions-api-control-guards");
+    let server = start(fixture.options()).await.expect("start server");
+    let client = Client::new();
+
+    // The CSRF guard covers the new verbs too.
+    for path in [
+        "/api/sessions/nope/retry",
+        "/api/sessions/nope/interrupt",
+        "/api/sessions/nope/close",
+        "/api/sessions/nope/attachments",
+    ] {
+        let response = client
+            .post(url(&server, path))
+            .send()
+            .await
+            .unwrap_or_else(|error| panic!("POST {path}: {error}"));
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{path}");
+    }
+    let response = client
+        .delete(url(&server, "/api/sessions/nope"))
+        .send()
+        .await
+        .expect("DELETE without the header");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    // With the header, an unknown id is Node's 404 on every one of them.
+    for path in [
+        "/api/sessions/nope/retry",
+        "/api/sessions/nope/interrupt",
+        "/api/sessions/nope/close",
+    ] {
+        let response = post(&client, &server, path, "{}").await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        assert_eq!(
+            body_json(response).await,
+            json!({"error": "Session not found"}),
+            "{path}"
+        );
+    }
+    let response = delete(&client, &server, "/api/sessions/nope").await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        body_json(response).await,
+        json!({"error": "Session not found"})
+    );
+    let response = upload(
+        &client,
+        &server,
+        "nope",
+        &[UploadPart {
+            field: "files",
+            file_name: "diagram.png",
+            mime: "image/png",
+            bytes: &[0x89, 0x50],
+        }],
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        body_json(response).await,
+        json!({"error": "Session not found"})
+    );
+
+    server.close();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn attachments_upload_in_node_order_and_reach_the_engine() {
+    require_fake_engine();
+    let fixture = Fixture::new("sessions-api-attachments");
+    let input = fixture.repo.0.join("input.jsonl");
+    let input = input.to_str().expect("utf-8 repo path");
+    let server = start(fixture.options_with(&["--input-out", input]))
+        .await
+        .expect("start server");
+    let client = Client::new();
+    let id = create(&client, &server, &teach_planned(Some(false))).await;
+    wait_for(&client, &server, &id, "idle").await;
+
+    // The body writes `file` first: the answer still lists every `files` part before it.
+    let response = upload(
+        &client,
+        &server,
+        &id,
+        &[
+            UploadPart {
+                field: "file",
+                file_name: "b.txt",
+                mime: "text/plain",
+                bytes: b"b",
+            },
+            UploadPart {
+                field: "files",
+                file_name: "a.png",
+                mime: "image/png",
+                bytes: &[0x89, 0x50],
+            },
+        ],
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let raw = response.text().await.expect("read the metas");
+    assert!(raw.starts_with(r#"[{"id":""#), "Node's key order: {raw}");
+    let metas: Value = serde_json::from_str(&raw).expect("the metas are JSON");
+    let rows = metas.as_array().expect("an array");
+    let names: Vec<&str> = rows.iter().filter_map(|row| row["name"].as_str()).collect();
+    assert_eq!(names, ["a.png", "b.txt"], "{raw}");
+    for row in rows {
+        let keys: Vec<&String> = row.as_object().expect("an object").keys().collect();
+        assert_eq!(keys, ["id", "name", "path", "mimeType", "size"], "{raw}");
+        let stored = fixture.repo.0.join(row["path"].as_str().expect("a path"));
+        assert!(stored.is_file(), "{} is on disk", stored.display());
+    }
+    assert_eq!(rows[0]["mimeType"], "image/png");
+    assert_eq!(rows[1]["mimeType"], "text/plain");
+    assert_eq!(
+        fs::read(fixture.repo.0.join(rows[0]["path"].as_str().unwrap())).unwrap(),
+        [0x89, 0x50]
+    );
+
+    let text = "Ecco le slide della lezione";
+    let response = post(
+        &client,
+        &server,
+        &format!("/api/sessions/{id}/message"),
+        &json!({"text": text, "attachments": metas.clone()}).to_string(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_json(response).await, json!({"ok": true}));
+    wait_for(&client, &server, &id, "idle").await;
+
+    let prompt = format!(
+        "[Allegati forniti dallo studente:\n- a.png (percorso: {})\n- b.txt (percorso: {})]\n\n{text}",
+        rows[0]["path"].as_str().unwrap(),
+        rows[1]["path"].as_str().unwrap()
+    );
+    let sent = user_texts(Path::new(input));
+    assert_eq!(
+        sent.last().map(String::as_str),
+        Some(prompt.as_str()),
+        "{sent:?}"
+    );
+
+    // An empty form is Node's 400, so is a refused type; a body Node cannot parse is its 500.
+    // A browser's empty FormData is only the closing boundary (reqwest's empty Form sends no body
+    // at all, which is a truncated multipart body, not an empty form).
+    let attachments = url(&server, &format!("/api/sessions/{id}/attachments"));
+    let response = client
+        .post(&attachments)
+        .header("x-learner-client", "1")
+        .header(CONTENT_TYPE, "multipart/form-data; boundary=x")
+        .body("--x--\r\n")
+        .send()
+        .await
+        .expect("POST an empty form");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body_json(response).await,
+        json!({"error": "Nessun file caricato"})
+    );
+
+    let response = upload(
+        &client,
+        &server,
+        &id,
+        &[UploadPart {
+            field: "files",
+            file_name: "malware.exe",
+            mime: "application/x-msdownload",
+            bytes: b"MZ",
+        }],
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body_json(response).await,
+        json!({"error": "Tipo di file non supportato: .exe"})
+    );
+
+    let response = client
+        .post(&attachments)
+        .header("x-learner-client", "1")
+        .header(CONTENT_TYPE, "multipart/form-data; boundary=x")
+        .body("garbage")
+        .send()
+        .await
+        .expect("POST a malformed multipart body");
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        body_json(response).await,
+        json!({"error": "Failed to parse body as FormData."})
+    );
+
+    let response = client
+        .post(&attachments)
+        .header("x-learner-client", "1")
+        .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body("a=1")
+        .send()
+        .await
+        .expect("POST a form-urlencoded body");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body_json(response).await,
+        json!({"error": "Nessun file caricato"})
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn retry_route_sends_a_snapshot_then_the_rerun_turn() {
+    require_fake_engine();
+    let fixture = Fixture::new("sessions-api-retry");
+    let server = start(fixture.options()).await.expect("start server");
+    let client = Client::new();
+    let id = create(&client, &server, &teach_planned(Some(false))).await;
+    wait_for(&client, &server, &id, "idle").await;
+
+    let response = post(
+        &client,
+        &server,
+        &format!("/api/sessions/{id}/message"),
+        r#"{"text":"FAKE:error_once spiegami il principio di induzione"}"#,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let failed = wait_for(&client, &server, &id, "error").await;
+    assert_eq!(failed["retryable"], true, "{failed}");
+
+    let mut stream = client
+        .get(url(&server, &format!("/api/sessions/{id}/events")))
+        .send()
+        .await
+        .expect("GET events");
+    assert_eq!(stream.status(), StatusCode::OK);
+    let raw = read_until(&mut stream, Duration::from_secs(10), |buffer| {
+        buffer.contains("\n\n")
+    })
+    .await;
+    let initial = data_events(&raw);
+    assert_eq!(initial.len(), 1, "{raw}");
+    assert_eq!(initial[0]["type"], "snapshot");
+
+    let response = post(&client, &server, &format!("/api/sessions/{id}/retry"), "{}").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_json(response).await, json!({"ok": true}));
+
+    let raw = read_until(&mut stream, Duration::from_secs(30), |buffer| {
+        data_events(buffer)
+            .iter()
+            .any(|event| event["type"] == "status" && event["status"] == "idle")
+    })
+    .await;
+    let live = data_events(&raw);
+    let described: Vec<String> = live.iter().map(describe).collect();
+    let start = described
+        .iter()
+        .position(|line| line == "snapshot")
+        .unwrap_or_else(|| panic!("no retry snapshot: {described:?}"));
+    let after = &described[start..];
+    let running = after
+        .iter()
+        .position(|line| line == "status:running")
+        .unwrap_or_else(|| panic!("no running status: {described:?}"));
+    let idle = after
+        .iter()
+        .position(|line| line == "status:idle")
+        .unwrap_or_else(|| panic!("no idle status: {described:?}"));
+    assert!(running < idle, "running comes first: {described:?}");
+    assert!(
+        !after.iter().any(|line| line.starts_with("item:learner:")),
+        "retry adds no learner bubble: {described:?}"
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn interrupt_route_stops_the_turn_with_one_notice() {
+    require_fake_engine();
+    let fixture = Fixture::new("sessions-api-interrupt");
+    let input = fixture.repo.0.join("input.jsonl");
+    let input = input.to_str().expect("utf-8 repo path");
+    let server = start(fixture.options_with(&["--input-out", input]))
+        .await
+        .expect("start server");
+    let client = Client::new();
+    let id = create(&client, &server, &teach_planned(Some(false))).await;
+    wait_for(&client, &server, &id, "idle").await;
+
+    let response = post(
+        &client,
+        &server,
+        &format!("/api/sessions/{id}/message"),
+        r#"{"text":"FAKE:slow"}"#,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    wait_for(&client, &server, &id, "running").await;
+    wait_for_first_delta(&client, &server, &id).await;
+
+    let started = Instant::now();
+    let response = post(
+        &client,
+        &server,
+        &format!("/api/sessions/{id}/interrupt"),
+        "{}",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_json(response).await, json!({"ok": true}));
+    let state = wait_for(&client, &server, &id, "idle").await;
+    assert!(
+        started.elapsed() < Duration::from_secs(8),
+        "the interrupt idles the turn within 8 s, took {:?}: {state}",
+        started.elapsed()
+    );
+
+    let items = state["items"].as_array().expect("items");
+    let notices: Vec<&Value> = items
+        .iter()
+        .filter(|item| item["kind"] == "notice")
+        .collect();
+    assert_eq!(
+        notices
+            .iter()
+            .filter(|item| item["level"] == "info" && item["text"] == "Turno interrotto.")
+            .count(),
+        1,
+        "{state}"
+    );
+    assert!(
+        notices.iter().all(|item| item["level"] != "error"),
+        "an interrupt is not an error: {state}"
+    );
+    assert!(
+        raw_inputs(Path::new(input))
+            .iter()
+            .any(|line| line == INTERRUPT_REQUEST),
+        "the engine got the in-band request"
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn close_route_closes_and_refuses_new_turns() {
+    require_fake_engine();
+    let fixture = Fixture::new("sessions-api-close");
+    let server = start(fixture.options()).await.expect("start server");
+    let client = Client::new();
+    let id = create(&client, &server, &teach_planned(Some(false))).await;
+    wait_for(&client, &server, &id, "idle").await;
+
+    let response = post(&client, &server, &format!("/api/sessions/{id}/close"), "{}").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_json(response).await, json!({"ok": true}));
+    assert_eq!(state_of(&client, &server, &id).await["status"], "closed");
+
+    let response = post(
+        &client,
+        &server,
+        &format!("/api/sessions/{id}/message"),
+        r#"{"text":"x"}"#,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        body_json(response).await,
+        json!({"error": "Session is closed"})
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn delete_route_removes_the_session_data() {
+    require_fake_engine();
+    let fixture = Fixture::new("sessions-api-delete");
+    let server = start(fixture.options()).await.expect("start server");
+    let client = Client::new();
+    let id = create(&client, &server, &teach_planned(Some(false))).await;
+    wait_for(&client, &server, &id, "idle").await;
+
+    let response = post(
+        &client,
+        &server,
+        &format!("/api/sessions/{id}/message"),
+        r#"{"text":"FAKE:slow"}"#,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    wait_for(&client, &server, &id, "running").await;
+    let response = upload(
+        &client,
+        &server,
+        &id,
+        &[UploadPart {
+            field: "files",
+            file_name: "diagram.png",
+            mime: "image/png",
+            bytes: &[0x89, 0x50],
+        }],
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = delete(&client, &server, &format!("/api/sessions/{id}")).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_json(response).await, json!({"ok": true}));
+    let response = client
+        .get(url(&server, &format!("/api/sessions/{id}")))
+        .send()
+        .await
+        .expect("GET a deleted session");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let listed = body_json(
+        client
+            .get(url(&server, "/api/sessions"))
+            .send()
+            .await
+            .expect("GET sessions"),
+    )
+    .await;
+    assert!(
+        listed
+            .as_array()
+            .expect("a list")
+            .iter()
+            .all(|row| row["id"] != id.as_str()),
+        "{listed}"
+    );
+    let dir = fixture.repo.0.join(".learner").join("sessions").join(&id);
+    assert!(
+        !dir.exists(),
+        "the session dir went away, attachments included"
+    );
+
+    // A save timer scheduled before the delete must not resurrect the dir.
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert!(!dir.exists(), "a late flush recreated the deleted dir");
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_restart_lists_the_session_and_makes_the_cut_turn_retryable() {
+    require_fake_engine();
+    let fixture = Fixture::new("sessions-api-restart");
+    let server = start(fixture.options()).await.expect("start server");
+    let client = Client::new();
+    let id = create(
+        &client,
+        &server,
+        &json!({"kind": "practice", "course": "demo", "model": "haiku"}),
+    )
+    .await;
+    wait_for(&client, &server, &id, "idle").await;
+
+    let response = post(
+        &client,
+        &server,
+        &format!("/api/sessions/{id}/message"),
+        r#"{"text":"FAKE:slow:15"}"#,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    wait_for(&client, &server, &id, "running").await;
+    // The cut needs the turn on disk before the process dies: status running and the last turn saved.
+    wait_for_state_file(&fixture.repo.0, &id, |value| {
+        value["state"]["status"] == "running"
+            && value.get("lastTurn").is_some_and(|turn| !turn.is_null())
+    })
+    .await;
+
+    server.shutdown().await;
+    let server = start(fixture.options()).await.expect("restart server");
+
+    let listed = body_json(
+        client
+            .get(url(&server, "/api/sessions"))
+            .send()
+            .await
+            .expect("GET sessions"),
+    )
+    .await;
+    assert!(
+        listed
+            .as_array()
+            .expect("a list")
+            .iter()
+            .any(|row| row["id"] == id.as_str()),
+        "the restarted server lists the saved session: {listed}"
+    );
+    let cut = wait_for(&client, &server, &id, "error").await;
+    assert_eq!(cut["retryable"], true, "{cut}");
+    assert_eq!(
+        cut["lastError"],
+        "Sessione interrotta prima del completamento del turno"
+    );
+    let learners = cut["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .filter(|item| item["kind"] == "learner")
+        .count();
+
+    let response = post(&client, &server, &format!("/api/sessions/{id}/retry"), "{}").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let state = wait_for(&client, &server, &id, "idle").await;
+    let after = state["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .filter(|item| item["kind"] == "learner")
+        .count();
+    assert_eq!(after, learners, "retry adds no learner bubble: {state}");
+
     server.shutdown().await;
 }
