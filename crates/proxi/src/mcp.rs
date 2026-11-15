@@ -327,6 +327,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn initialize_defaults_the_protocol_version_when_it_is_null() {
+        // Node's `params?.protocolVersion ?? "2025-06-18"`: an explicit null is not a version.
+        let host = host();
+        let fake = echo_tool();
+        let r = rpc(
+            &host,
+            &fake,
+            "initialize",
+            Some(json!({"protocolVersion": null})),
+        )
+        .await;
+        assert_eq!(r["result"]["protocolVersion"], json!("2025-06-18"));
+    }
+
+    #[tokio::test]
     async fn a_notification_has_no_response_and_ping_answers_an_empty_object() {
         let host = host();
         let fake = echo_tool();
@@ -374,6 +389,28 @@ mod tests {
             serde_json::to_string(&r["result"]).unwrap(),
             r#"{"content":[{"type":"text","text":"got hi"}],"isError":false}"#
         );
+    }
+
+    #[tokio::test]
+    async fn missing_or_null_arguments_reach_the_validator_as_an_empty_object() {
+        // Node's `params?.arguments ?? {}`: a missing key and an explicit null are the same `{}`.
+        let host = host();
+        let fake = echo_tool();
+        let empty = rpc(
+            &host,
+            &fake,
+            "tools/call",
+            Some(json!({"name": "quiz", "arguments": {}})),
+        )
+        .await;
+        assert_eq!(empty["result"]["isError"], json!(true));
+        for params in [
+            json!({"name": "quiz", "arguments": null}),
+            json!({"name": "quiz"}),
+        ] {
+            let r = rpc(&host, &fake, "tools/call", Some(params)).await;
+            assert_eq!(r["result"], empty["result"]);
+        }
     }
 
     #[tokio::test]
