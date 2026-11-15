@@ -6,10 +6,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use axum::Router;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Router;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 

@@ -1,0 +1,35 @@
+{
+  "type": "object",
+  "properties": {
+    "recordTitle": {
+      "type": "string",
+      "minLength": 1,
+      "description": "What became true, e.g. 'Il contratto del componente: acquisito'."
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "description": "What he can now do."
+    },
+    "evidence": {
+      "type": "string",
+      "minLength": 1,
+      "description": "What he actually did: quiz results, slips, quotes (markdown)."
+    },
+    "implications": {
+      "type": "string",
+      "minLength": 1,
+      "description": "What the next session must do differently (markdown)."
+    },
+    "notesAddendum": {
+      "description": "What was learned about teaching him; appended to NOTES.md.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "recordTitle",
+    "summary",
+    "evidence",
+    "implications"
+  ]
+}

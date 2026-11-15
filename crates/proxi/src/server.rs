@@ -311,6 +311,7 @@ pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
         limits: limits.clone(),
         anki: anki.clone(),
         imports: imports.clone(),
+        jobs: Arc::new(crate::tools::NoJobs),
     };
     let sessions = tokio::task::spawn_blocking(move || SessionManager::new(manager_opts))
         .await
