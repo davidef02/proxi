@@ -441,6 +441,35 @@ async fn existing_lesson_restores_the_plan() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn existing_target_rejects_a_missing_or_prose_lesson() {
+    let env = TestEnv::new();
+    let mut prose = lesson_doc("In prosa", "");
+    prose["metadata"].as_object_mut().unwrap().remove("initialDag");
+    prose["nodes"] = json!([]);
+    write_lesson(&env.data.0, "demo", "0001-in-prosa.html", prose);
+    let manager = env.manager();
+
+    for path in [
+        "courses/demo/lessons/9999-manca.html",
+        "courses/demo/lessons/0001-in-prosa.html",
+    ] {
+        let error = manager
+            .create(json!({
+                "kind": "teach",
+                "course": "demo",
+                "model": "haiku",
+                "ankiOptIn": false,
+                "target": {"mode": "existing", "lessonPath": path},
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(error.status, StatusCode::BAD_REQUEST, "{path}");
+        assert!(!error.message.is_empty(), "{path}");
+    }
+    assert_eq!(manager.list(), json!([]), "a refused create saves nothing");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn free_standalone_lesson_provisions_the_course() {
     if !require_fake() {
         return;
@@ -562,6 +591,34 @@ async fn crash_marks_the_session_retryable_and_the_next_message_resumes() {
     let id = manager.create(teach_planned(Some(false))).await.unwrap();
     wait_for(&manager, &id, SessionStatus::Idle).await;
 
+    // AC5: the next message must resume the conversation. The fake echoes the `--resume` token in
+    // its init event, so a fresh `--session-id` would replace the token saved on disk.
+    let state_path = env
+        .repo
+        .0
+        .join(".learner")
+        .join("sessions")
+        .join(&id)
+        .join("state.json");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let resume_before = loop {
+        let saved = fs::read_to_string(&state_path)
+            .ok()
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+        if let Some(token) = saved
+            .as_ref()
+            .and_then(|file| file.get("resume"))
+            .and_then(Value::as_str)
+        {
+            break token.to_string();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the first turn never flushed its resume token"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    };
+
     manager
         .message(&id, json!({"text": "FAKE:crash"}))
         .await
@@ -583,6 +640,13 @@ async fn crash_marks_the_session_retryable_and_the_next_message_resumes() {
         .unwrap();
     let state = wait_for(&manager, &id, SessionStatus::Idle).await;
     assert_eq!(state["usage"]["turns"], 2, "the resumed turn counted");
+
+    manager.shutdown().await;
+    assert_eq!(
+        state_file(&env.repo.0, &id)["resume"],
+        json!(resume_before),
+        "the relaunch resumed the conversation instead of starting a new one"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -756,6 +820,72 @@ async fn load_recovers_interrupted_sessions() {
         manager.list().as_array().unwrap().len(),
         3,
         "the broken dir is skipped"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn load_re_asks_the_anki_opt_in_of_an_unstarted_teach_session() {
+    let env = TestEnv::new();
+    // The app was closed while the question card was on screen: `pendingStart` is still there and
+    // the reload cancels the old card, so the session must ask again instead of waiting forever.
+    write_state_file(
+        &env.repo.0,
+        "asking",
+        json!({
+            "state": {
+                "id": "asking",
+                "config": {"kind": "teach", "course": "demo", "model": "haiku", "target": {"mode": "planned", "title": "Prima lezione"}},
+                "title": "Prima lezione",
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "updatedAt": "2026-01-01T00:00:00.000Z",
+                "status": "waiting",
+                "usage": {"inputTokens": 0, "outputTokens": 0, "cacheReadTokens": 0, "cacheCreationTokens": 0, "turns": 0},
+                "items": [{
+                    "id": "req:old",
+                    "at": "2026-01-01T00:00:00.000Z",
+                    "kind": "ask",
+                    "requestId": "old",
+                    "input": {"question": ANKI_OPT_IN_QUESTION, "options": []},
+                    "cancelled": true,
+                }],
+                "pendingRequestId": "old",
+                "plan": null,
+            },
+            "provider": "claude",
+            "pendingStart": "Prima lezione",
+        }),
+    );
+    let manager = env.manager();
+
+    let state = manager.get("asking").expect("loaded");
+    assert_eq!(state["status"], "waiting", "still waiting for the learner");
+    let asks: Vec<&Value> = state["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .filter(|item| item["kind"] == "ask")
+        .collect();
+    assert_eq!(
+        asks.len(),
+        1,
+        "the cancelled card is replaced, not duplicated: {state}"
+    );
+    assert_eq!(asks[0]["input"]["question"], ANKI_OPT_IN_QUESTION);
+    assert!(
+        asks[0].get("cancelled").is_none(),
+        "the new card is live: {state}"
+    );
+    assert_ne!(asks[0]["requestId"], "old", "{state}");
+    assert_eq!(state["pendingRequestId"], asks[0]["requestId"]);
+    assert!(
+        !env.repo
+            .0
+            .join(".learner")
+            .join("sessions")
+            .join("asking")
+            .join("system.md")
+            .exists(),
+        "no engine starts before the answer"
     );
 }
 
