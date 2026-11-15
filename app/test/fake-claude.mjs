@@ -13,6 +13,8 @@ const arg = (name) => {
   const i = argv.indexOf(name);
   return i >= 0 ? argv[i + 1] : undefined;
 };
+// Test hook: append every raw stdin line, so a test can see exactly what the server sent (attachment block, interrupt request).
+const inputOut = arg("--input-out");
 // Test hook: dump the env the engine handed us, so a test can check the auth/data-root contract (AC3).
 const envOut = arg("--env-out");
 if (envOut) {
@@ -271,6 +273,7 @@ async function play(scenario) {
 let chain = Promise.resolve();
 const rl = readline.createInterface({ input: process.stdin });
 rl.on("line", (line) => {
+  if (inputOut) fs.appendFileSync(inputOut, line + "\n");
   let m;
   try {
     m = JSON.parse(line);

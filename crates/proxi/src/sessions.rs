@@ -518,13 +518,18 @@ impl SessionData {
         }));
     }
 
-    fn learner(&mut self, text: &str) {
-        self.upsert(json!({
-            "id": format!("l:{}", engine::uuid_v4()),
-            "at": events::iso_now(),
-            "kind": "learner",
-            "text": text,
-        }));
+    fn learner(&mut self, text: &str, attachments: Option<&Value>) {
+        let mut item = Map::new();
+        item.insert("id".to_string(), json!(format!("l:{}", engine::uuid_v4())));
+        item.insert("at".to_string(), json!(events::iso_now()));
+        item.insert("kind".to_string(), json!("learner"));
+        item.insert("text".to_string(), json!(text));
+        if let Some(attachments) = attachments
+            .filter(|value| value.as_array().is_some_and(|items| !items.is_empty()))
+        {
+            item.insert("attachments".to_string(), attachments.clone());
+        }
+        self.upsert(Value::Object(item));
     }
 
     /// Node's `onEvent`: engine events to chat items and usage.
@@ -710,8 +715,8 @@ impl TurnHost for SessionData {
         SessionData::notice(self, level, text);
     }
 
-    fn learner(&mut self, text: &str) {
-        SessionData::learner(self, text);
+    fn learner(&mut self, text: &str, attachments: Option<&Value>) {
+        SessionData::learner(self, text, attachments);
     }
 
     fn event(&mut self, event: &EngineEvent, late: bool) {

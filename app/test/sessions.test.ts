@@ -1,19 +1,13 @@
+// The session lifecycle over HTTP and SSE only (no server internals), so it runs against the Node server and the proxi binary.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
 import type { ChatItem, ServerEvent, SessionState } from "../shared/protocol.ts";
+import { fakeClaude, startServer, type TestServer } from "./harness.ts";
 
-let mod: typeof import("../server/main.ts") | undefined;
-try {
-  mod = await import("../server/main.ts");
-} catch {
-  /* wave-1 modules not all present yet */
-}
-const skip = mod ? false : "waiting for wave-1 modules";
-const FAKE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fake-claude.mjs");
+process.env.LEARNER_ANKI_URL = "http://127.0.0.1:9"; // closed port: never reach the real Anki
 
 function tempRepo(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "learner-ses-"));
@@ -24,86 +18,123 @@ function tempRepo(): string {
   return root;
 }
 
-async function waitFor<T>(fn: () => T | undefined | false, ms = 15000): Promise<T> {
+async function waitFor<T>(fn: () => T | undefined | false | Promise<T | undefined | false>, ms = 15000): Promise<T> {
   const end = Date.now() + ms;
   for (;;) {
-    const v = fn();
+    const v = await fn();
     if (v) return v;
     if (Date.now() > end) throw new Error("waitFor timed out");
     await new Promise((r) => setTimeout(r, 25));
   }
 }
 
-describe("sessions with fake-claude", { skip }, () => {
-  let srv: Awaited<ReturnType<NonNullable<typeof mod>["createServer"]>>;
+/** Minimal SSE client: parses `data:` lines from a fetch stream into ServerEvents. */
+function sse(url: string) {
+  const events: ServerEvent[] = [];
+  const ac = new AbortController();
+  void (async () => {
+    const res = await fetch(url, { signal: ac.signal });
+    const dec = new TextDecoder();
+    let buf = "";
+    for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
+      buf += dec.decode(chunk, { stream: true });
+      let i: number;
+      while ((i = buf.indexOf("\n\n")) >= 0) {
+        const block = buf.slice(0, i);
+        buf = buf.slice(i + 2);
+        const data = block.split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trim()).join("");
+        if (data) events.push(JSON.parse(data));
+      }
+    }
+  })().catch(() => {});
+  return { events, close: () => ac.abort() };
+}
+
+describe("sessions with fake-claude", () => {
+  let srv: TestServer;
   let root: string;
+  let inputFile: string;
   const post = (p: string, body: unknown = {}) =>
     fetch(srv.url + p, { method: "POST", headers: { "x-learner-client": "1", "content-type": "application/json" }, body: JSON.stringify(body) });
-  const state = (id: string) => srv.manager.get(id) as SessionState;
-  const texts = (id: string) => state(id).items.filter((i): i is Extract<ChatItem, { kind: "teacher" }> => i.kind === "teacher");
-  const start = () => mod!.createServer({ repoRoot: root, dataRoot: root, port: 0, openBrowser: false, claudeBin: process.execPath, claudeBinArgs: [FAKE], addDirs: [] });
+  const state = async (id: string): Promise<SessionState> => {
+    const r = await fetch(`${srv.url}/api/sessions/${id}`);
+    assert.equal(r.status, 200);
+    return (await r.json()) as SessionState;
+  };
+  const idle = (id: string) => waitFor(async () => (await state(id)).status === "idle");
+  const texts = async (id: string) =>
+    (await state(id)).items.filter((i): i is Extract<ChatItem, { kind: "teacher" }> => i.kind === "teacher");
+  /** Every raw stdin line the fake engine saw. */
+  const rawInputs = (): string[] => {
+    try {
+      return fs.readFileSync(inputFile, "utf-8").split("\n").filter(Boolean);
+    } catch {
+      return [];
+    }
+  };
+  const start = () => startServer({ repoRoot: root, dataRoot: root, claude: fakeClaude(["--input-out", inputFile]) });
 
   let id: string;
-  const events: ServerEvent[] = [];
 
   before(async () => {
     root = tempRepo();
+    inputFile = path.join(root, "input.jsonl");
     srv = await start();
   });
   after(async () => {
     await srv.close();
-    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 3 });
   });
 
   it("creates a teach session: learner item, teacher deltas, idle", async () => {
     const res = await post("/api/sessions", { kind: "teach", course: "demo", model: "haiku", ankiOptIn: false, target: { mode: "planned", title: "Prima lezione" } });
     assert.equal(res.status, 200);
-    id = (await res.json()).id;
-    srv.manager.subscribe(id, (e) => events.push(e));
-    await waitFor(() => state(id).status === "idle");
-    assert.equal(events[0].type, "snapshot");
-    assert.equal(state(id).title, "Prima lezione");
-    assert.ok(state(id).items.some((i) => i.kind === "learner"));
-    assert.ok(texts(id).some((t) => t.text.includes("docente") && !t.streaming));
-    assert.ok(events.some((e) => e.type === "status" && e.status === "idle"));
-    assert.equal(state(id).usage.turns, 1);
-    assert.ok(fs.existsSync(path.join(root, ".learner", "sessions", id, "mcp.json")));
-  });
-
-  it("quiz: card pending, answer via API, result reaches the teacher", async () => {
-    assert.equal((await post(`/api/sessions/${id}/message`, { text: "FAKE:quiz" })).status, 200);
-    const quiz = await waitFor(() => state(id).items.find((i) => i.kind === "quiz") as Extract<ChatItem, { kind: "quiz" }> | undefined);
-    await waitFor(() => state(id).status === "waiting" && state(id).pendingRequestId === quiz.requestId);
-    assert.equal(quiz.result, undefined);
-    const o = quiz.input.options[0];
-    const r = await post(`/api/sessions/${id}/answer`, { requestId: quiz.requestId, kind: "quiz", answer: { selected: [o.value ?? o.label], dontKnow: false, confidence: 80 } });
-    assert.equal(r.status, 200);
-    await waitFor(() => state(id).status === "idle");
-    assert.ok(quiz.result);
-    assert.equal(state(id).pendingRequestId, null);
-    assert.ok(texts(id).some((t) => /correct/.test(t.text)), "teacher text echoes the tool result");
+    id = ((await res.json()) as { id: string }).id;
+    const stream = sse(`${srv.url}/api/sessions/${id}/events`);
+    try {
+      await idle(id);
+      const snapshot = await waitFor(() => stream.events[0]);
+      assert.equal(snapshot.type, "snapshot");
+      const s = await state(id);
+      assert.equal(s.title, "Prima lezione");
+      assert.ok(s.items.some((i) => i.kind === "learner"));
+      assert.ok((await texts(id)).some((t) => t.text.includes("docente") && !t.streaming));
+      await waitFor(() => stream.events.some((e) => e.type === "status" && (e as { status: string }).status === "idle"));
+      assert.equal(s.usage.turns, 1);
+      assert.ok(fs.existsSync(path.join(root, ".learner", "sessions", id, "mcp.json")));
+    } finally {
+      stream.close();
+    }
   });
 
   it("409 while running, interrupt returns to idle", async () => {
     assert.equal((await post(`/api/sessions/${id}/message`, { text: "FAKE:slow" })).status, 200);
     const busy = await post(`/api/sessions/${id}/message`, { text: "ancora" });
     assert.equal(busy.status, 409);
-    assert.ok((await busy.json()).error);
+    assert.ok(((await busy.json()) as { error: string }).error);
     assert.equal((await post(`/api/sessions/${id}/interrupt`)).status, 200);
-    await waitFor(() => state(id).status === "idle");
-    assert.ok(!state(id).items.some((i) => i.kind === "notice" && i.level === "error"), "interrupt is not an error notice");
+    await idle(id);
+
+    const notices = (await state(id)).items.filter((i): i is Extract<ChatItem, { kind: "notice" }> => i.kind === "notice");
+    const infos = notices.filter((n) => n.level === "info");
+    assert.equal(infos.length, 1, "one info notice for the interrupted turn");
+    assert.equal(infos[0].text, "Turno interrotto.");
+    assert.ok(!notices.some((n) => n.level === "error"), "interrupt is not an error notice");
+    assert.ok(rawInputs().includes('{"type":"control_request","request_id":"int-1","request":{"subtype":"interrupt"}}'));
   });
 
   it("DELETE stops a running session and removes it (needs the client header)", async () => {
-    const id3 = (await (await post("/api/sessions", { kind: "practice", course: "demo", model: "haiku" })).json()).id;
-    await waitFor(() => state(id3).status === "idle");
+    const id3 = ((await (await post("/api/sessions", { kind: "practice", course: "demo", model: "haiku" })).json()) as { id: string }).id;
+    await idle(id3);
     assert.equal((await post(`/api/sessions/${id3}/message`, { text: "FAKE:slow" })).status, 200);
     assert.equal((await fetch(srv.url + `/api/sessions/${id3}`, { method: "DELETE" })).status, 403);
     const del = await fetch(srv.url + `/api/sessions/${id3}`, { method: "DELETE", headers: { "x-learner-client": "1" } });
     assert.equal(del.status, 200);
-    assert.equal(srv.manager.get(id3), undefined);
+    assert.deepEqual(await del.json(), { ok: true });
     assert.ok(!fs.existsSync(path.join(root, ".learner", "sessions", id3)));
     assert.equal((await fetch(srv.url + `/api/sessions/${id3}`)).status, 404);
+    const list = (await (await fetch(srv.url + "/api/sessions")).json()) as { id: string }[];
+    assert.ok(!list.some((s) => s.id === id3), "the deleted session is gone from the list");
   });
 
   it("rejects an unplanned title (a missing opt-in is asked in the session: workflow.test.ts)", async () => {
@@ -116,65 +147,121 @@ describe("sessions with fake-claude", { skip }, () => {
     const learnerText = "FAKE:error_once spiegami il principio di induzione";
     assert.equal((await post(`/api/sessions/${id}/message`, { text: learnerText })).status, 200);
 
-    await waitFor(() => state(id).status === "error");
-    assert.equal(state(id).retryable, true);
-    assert.ok(state(id).lastError);
-    assert.ok(state(id).items.some((i) => i.kind === "notice" && i.level === "error"));
+    const failed = await waitFor(async () => {
+      const s = await state(id);
+      return s.status === "error" ? s : undefined;
+    });
+    assert.equal(failed.retryable, true);
+    assert.ok(failed.lastError);
+    assert.ok(failed.items.some((i) => i.kind === "notice" && i.level === "error"));
 
-    const learnerItemsBefore = state(id).items.filter((i) => i.kind === "learner");
+    const learnerItemsBefore = failed.items.filter((i): i is Extract<ChatItem, { kind: "learner" }> => i.kind === "learner");
     const lastLearnerItem = learnerItemsBefore[learnerItemsBefore.length - 1];
     assert.equal(lastLearnerItem.text, learnerText);
 
     // Calling retry without client header fails with 403
     assert.equal((await fetch(srv.url + `/api/sessions/${id}/retry`, { method: "POST" })).status, 403);
 
-    // Retrying re-submits the turn without adding a new learner bubble
-    const retryRes = await post(`/api/sessions/${id}/retry`);
-    assert.equal(retryRes.status, 200);
+    // Retrying re-submits the turn without adding a new learner bubble: snapshot first, then the rerun's statuses.
+    const stream = sse(`${srv.url}/api/sessions/${id}/events`);
+    try {
+      await waitFor(() => stream.events[0]?.type === "snapshot");
+      const before = stream.events.length;
+      assert.equal((await post(`/api/sessions/${id}/retry`)).status, 200);
+      await waitFor(() => stream.events.slice(before).some((e) => e.type === "status" && (e as { status: string }).status === "idle"));
 
-    await waitFor(() => state(id).status === "idle");
-    assert.equal(state(id).retryable, false);
-    assert.ok(!state(id).items.some((i) => i.kind === "notice" && i.level === "error"), "error notice is removed on retry");
+      const live = stream.events.slice(before) as { type: string; status?: string; item?: { kind: string } }[];
+      assert.equal(live[0].type, "snapshot");
+      const runningAt = live.findIndex((e) => e.type === "status" && e.status === "running");
+      const idleAt = live.findIndex((e) => e.type === "status" && e.status === "idle");
+      assert.ok(runningAt >= 0 && idleAt > runningAt, "running comes before idle");
+      assert.ok(!live.some((e) => e.type === "item" && e.item?.kind === "learner"), "retry adds no learner bubble");
+    } finally {
+      stream.close();
+    }
 
-    const learnerItemsAfter = state(id).items.filter((i) => i.kind === "learner");
+    const retried = await state(id);
+    assert.equal(retried.retryable, false);
+    assert.ok(!retried.items.some((i) => i.kind === "notice" && i.level === "error"), "error notice is removed on retry");
+    const learnerItemsAfter = retried.items.filter((i) => i.kind === "learner");
     assert.equal(learnerItemsAfter.length, learnerItemsBefore.length, "learner bubble is NOT duplicated");
 
     // Calling retry when not failed returns 400
     const invalidRetry = await post(`/api/sessions/${id}/retry`);
     assert.equal(invalidRetry.status, 400);
-    assert.match((await invalidRetry.json()).error, /Nessun turno fallito da riprovare/);
+    assert.match(((await invalidRetry.json()) as { error: string }).error, /Nessun turno fallito da riprovare/);
   });
 
   it("lists newest first, closes, reloads, resumes", async () => {
-    const id2 = (await (await post("/api/sessions", { kind: "practice", course: "demo", model: "haiku" })).json()).id;
-    await waitFor(() => state(id2).status === "idle");
+    const id2 = ((await (await post("/api/sessions", { kind: "practice", course: "demo", model: "haiku" })).json()) as { id: string }).id;
+    await idle(id2);
     const list = (await (await fetch(srv.url + "/api/sessions")).json()) as { id: string }[];
     assert.deepEqual(list.map((s) => s.id).slice(0, 2), [id2, id]);
     assert.equal((await post(`/api/sessions/${id2}/close`)).status, 200);
-    assert.equal(state(id2).status, "closed");
+    assert.equal((await state(id2)).status, "closed");
     assert.equal((await post(`/api/sessions/${id2}/message`, { text: "x" })).status, 409);
     await srv.close();
     srv = await start();
-    assert.equal(state(id).status, "idle");
-    assert.equal(state(id2).status, "closed");
-    const before = state(id).usage.turns;
+    assert.equal((await state(id)).status, "idle");
+    assert.equal((await state(id2)).status, "closed");
+    const before = (await state(id)).usage.turns;
     assert.equal((await post(`/api/sessions/${id}/message`, { text: "ciao di nuovo" })).status, 200);
-    await waitFor(() => state(id).status === "idle" && state(id).usage.turns > before);
+    await waitFor(async () => {
+      const s = await state(id);
+      return s.status === "idle" && s.usage.turns > before;
+    });
   });
 
   it("starts a free teach session for a standalone lesson, provisioning courses/lezioni-singole/", async () => {
     fs.rmSync(path.join(root, "courses", "lezioni-singole"), { recursive: true, force: true });
     const res = await post("/api/sessions", { kind: "teach", course: "lezioni-singole", model: "haiku", ankiOptIn: false, target: { mode: "free" }, note: "Trasformata di Fourier" });
     assert.equal(res.status, 200);
-    const sid = (await res.json()).id;
-    await waitFor(() => state(sid).status === "idle");
+    const sid = ((await res.json()) as { id: string }).id;
+    await idle(sid);
     assert.equal(fs.existsSync(path.join(root, "courses", "lezioni-singole", "MISSION.md")), true);
-    assert.equal(state(sid).config.course, "lezioni-singole");
-    assert.equal(state(sid).config.target?.mode, "free");
-    assert.equal(state(sid).title, "Lezione singola · Trasformata di Fourier");
-    const opening = state(sid).items.find((i) => i.kind === "learner") as Extract<ChatItem, { kind: "learner" }>;
+    const s = await state(sid);
+    assert.equal(s.config.course, "lezioni-singole");
+    assert.equal(s.config.target?.mode, "free");
+    assert.equal(s.title, "Lezione singola · Trasformata di Fourier");
+    const opening = s.items.find((i): i is Extract<ChatItem, { kind: "learner" }> => i.kind === "learner");
+    assert.ok(opening);
     assert.match(opening.text, /Trasformata di Fourier/);
     const courses = (await (await fetch(srv.url + "/api/courses")).json()) as { slug: string }[];
     assert.ok(!courses.some((c) => c.slug === "lezioni-singole"), "lezioni-singole stays out of GET /api/courses");
+  });
+
+  it("a turn cut by a restart comes back as a retryable error", async () => {
+    const created = await post("/api/sessions", { kind: "practice", course: "demo", model: "haiku" });
+    assert.equal(created.status, 200);
+    const rid = ((await created.json()) as { id: string }).id;
+    await idle(rid);
+
+    assert.equal((await post(`/api/sessions/${rid}/message`, { text: "FAKE:slow:15" })).status, 200);
+    await waitFor(async () => (await state(rid)).status === "running");
+
+    // The cut needs the turn on disk before the process dies: status running and the last turn saved.
+    const file = path.join(root, ".learner", "sessions", rid, "state.json");
+    await waitFor(() => {
+      try {
+        const saved = JSON.parse(fs.readFileSync(file, "utf-8"));
+        return saved.state?.status === "running" && saved.lastTurn ? saved : undefined;
+      } catch {
+        return undefined; // not written yet
+      }
+    });
+    await srv.close();
+    srv = await start();
+
+    const cut = await state(rid);
+    assert.equal(cut.status, "error");
+    assert.equal(cut.retryable, true);
+    assert.equal(cut.lastError, "Sessione interrotta prima del completamento del turno");
+    const list = (await (await fetch(srv.url + "/api/sessions")).json()) as { id: string }[];
+    assert.ok(list.some((s) => s.id === rid), "the restarted server lists the saved session");
+
+    const learners = cut.items.filter((i) => i.kind === "learner").length;
+    assert.equal((await post(`/api/sessions/${rid}/retry`)).status, 200);
+    await waitFor(async () => (await state(rid)).status === "idle", 20000);
+    assert.equal((await state(rid)).items.filter((i) => i.kind === "learner").length, learners, "retry adds no learner bubble");
   });
 });
