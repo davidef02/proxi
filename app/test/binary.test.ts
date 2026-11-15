@@ -41,9 +41,8 @@ describe("spawnProxi", () => {
   });
 
   it("rejects with the exit code and stderr when the process dies first", async () => {
-    // The small delay lets the stderr chunk reach us before the exit event, or the message loses "boom".
     await assert.rejects(
-      () => spawnProxi(["-e", "process.stderr.write('boom'); setTimeout(() => process.exit(3), 100)"], process.execPath),
+      () => spawnProxi(["-e", "process.stderr.write('boom'); process.exit(3)"], process.execPath),
       /exited with code 3: boom/,
     );
   });

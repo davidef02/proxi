@@ -31,7 +31,7 @@ export async function spawnProxi(args: string[], bin: string = proxiBinary()): P
   let stdout = "";
   let stderr = "";
   let exited = false;
-  const exitedOnce = new Promise<void>((resolve) => child.once("exit", () => { exited = true; resolve(); }));
+  const exitedOnce = new Promise<void>((resolve) => child.once("close", () => { exited = true; resolve(); }));
   const kill = () => {
     try {
       child.kill();
@@ -68,7 +68,9 @@ export async function spawnProxi(args: string[], bin: string = proxiBinary()): P
     child.stderr!.setEncoding("utf8");
     child.stderr!.on("data", (chunk: string) => { stderr += chunk; });
     child.once("error", (error) => finish(() => reject(error)));
-    child.once("exit", (code) => {
+    // `close`, not `exit`: it fires after stdio closes, so the stderr of a process that dies at
+    // startup reaches us before we build the message.
+    child.once("close", (code) => {
       finish(() => {
         const found = reported();
         if (found) resolve(found);
