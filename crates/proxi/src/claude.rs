@@ -371,11 +371,6 @@ fn prepare(l: &ClaudeLaunch) -> std::io::Result<()> {
     fs::write(l.scratch_dir.join("mcp.json"), body)
 }
 
-fn is_windows_batch(cmd: &str) -> bool {
-    let lower = cmd.to_ascii_lowercase();
-    lower.ends_with(".cmd") || lower.ends_with(".bat")
-}
-
 #[cfg(unix)]
 fn exit_signal(status: &ExitStatus) -> Option<String> {
     use std::os::unix::process::ExitStatusExt;
@@ -492,19 +487,14 @@ pub fn spawn_claude(
         return dead(tx, rx, Some(format!("spawn error: {err}")), None);
     }
 
-    let mut argv = build_claude_args(&l, &uuid_v4());
-    let mut program = if l.bin.cmd == "claude" {
+    let argv = build_claude_args(&l, &uuid_v4());
+    // A `.cmd`/`.bat` shim (an npm-installed `claude.cmd`) is a valid program: std runs batch files
+    // through cmd.exe with cmd-safe escaping, and refuses arguments it cannot escape (CVE-2024-24576).
+    let program = if l.bin.cmd == "claude" {
         locate_from_process().unwrap_or_else(|| "claude".to_string())
     } else {
         l.bin.cmd.clone()
     };
-    if cfg!(windows) && is_windows_batch(&program) {
-        // Rust >= 1.77.2 refuses batch files as the direct program; go through cmd.exe.
-        let mut wrapped = vec!["/c".to_string(), program];
-        wrapped.extend(argv);
-        argv = wrapped;
-        program = "cmd.exe".to_string();
-    }
 
     let mut command = process_wrap::tokio::CommandWrap::with_new(&program, |command| {
         command

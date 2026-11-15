@@ -12,6 +12,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 pub mod anki_seed;
 pub mod fake_anki;
 pub mod fake_hf;
+pub mod sessions;
 
 pub fn repo_root() -> PathBuf {
     let raw = Path::new(env!("CARGO_MANIFEST_DIR"))

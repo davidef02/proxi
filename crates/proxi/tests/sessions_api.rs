@@ -9,13 +9,14 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use reqwest::header::CONTENT_TYPE;
-use reqwest::{Client, Response, StatusCode};
+use reqwest::{Client, StatusCode};
 use serde_json::{json, Value};
 
+use common::sessions::{
+    body_json, data_events, describe, post, read_until, require_fake_engine, seed_demo_course,
+    teach_planned, wait_for,
+};
 use proxi::server::{start, RunningServer, ServerOptions};
-
-const CURRICULUM: &str = r#"{"chapters":[{"title":"Demo","slug":"demo","lessons":[{"title":"Prima lezione","slug":"prima-lezione","plannedNodes":2}]}]}"#;
 
 /// A temp repo (`.learner`) and a separate temp data folder holding the `demo` course.
 struct Fixture {
@@ -29,12 +30,7 @@ impl Fixture {
             repo: common::temp_dir(tag),
             data: common::temp_dir(&format!("{tag}-data")),
         };
-        let data = &fixture.data.0;
-        fs::write(data.join("curriculum.json"), CURRICULUM).expect("write curriculum");
-        let course = data.join("courses").join("demo");
-        fs::create_dir_all(course.join("lessons")).expect("create lessons dir");
-        fs::write(course.join("MISSION.md"), "# Mission\n").expect("write mission");
-        fs::write(course.join("NOTES.md"), "# Notes\n").expect("write notes");
+        seed_demo_course(&fixture.data.0);
         fixture
     }
 
@@ -56,62 +52,8 @@ impl Fixture {
     }
 }
 
-fn node_available() -> bool {
-    std::process::Command::new("node")
-        .arg("--version")
-        .output()
-        .map(|out| out.status.success())
-        .unwrap_or(false)
-}
-
-/// Tests that create sessions skip, with a message, when node is missing.
-fn require_fake() -> bool {
-    if node_available() {
-        return true;
-    }
-    eprintln!("skipping: node is not on PATH");
-    false
-}
-
 fn url(server: &RunningServer, path: &str) -> String {
     format!("{}{}", server.url, path)
-}
-
-async fn post(client: &Client, server: &RunningServer, path: &str, body: &str) -> Response {
-    client
-        .post(url(server, path))
-        .header("x-learner-client", "1")
-        .header(CONTENT_TYPE, "application/json")
-        .body(body.to_string())
-        .send()
-        .await
-        .expect("POST request")
-}
-
-async fn body_json(response: Response) -> Value {
-    let text = response.text().await.expect("read body");
-    serde_json::from_str(&text).unwrap_or_else(|error| panic!("not JSON ({error}): {text}"))
-}
-
-/// Polls `GET /api/sessions/:id` until the status matches; panics after 30 s.
-async fn wait_for(client: &Client, server: &RunningServer, id: &str, status: &str) -> Value {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        let response = client
-            .get(url(server, &format!("/api/sessions/{id}")))
-            .send()
-            .await
-            .expect("GET session");
-        let state = body_json(response).await;
-        if state["status"] == status {
-            return state;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "timed out waiting for {status}: {state}"
-        );
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
 }
 
 async fn create(client: &Client, server: &RunningServer, body: &Value) -> String {
@@ -122,62 +64,6 @@ async fn create(client: &Client, server: &RunningServer, body: &Value) -> String
         .as_str()
         .unwrap_or_else(|| panic!("no id in {created}"))
         .to_string()
-}
-
-fn teach_planned(anki_opt_in: bool) -> Value {
-    json!({
-        "kind": "teach",
-        "course": "demo",
-        "model": "haiku",
-        "ankiOptIn": anki_opt_in,
-        "target": {"mode": "planned", "title": "Prima lezione"},
-    })
-}
-
-/// Reads chunks until `done` sees the accumulated text; panics after `timeout`.
-async fn read_until(
-    response: &mut Response,
-    timeout: Duration,
-    done: impl Fn(&str) -> bool,
-) -> String {
-    let deadline = tokio::time::Instant::now() + timeout;
-    let mut buffer = String::new();
-    while !done(&buffer) {
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        let chunk = tokio::time::timeout(remaining, response.chunk())
-            .await
-            .unwrap_or_else(|_| panic!("timed out; got {buffer:?}"))
-            .expect("read chunk")
-            .expect("stream closed early");
-        buffer.push_str(&String::from_utf8_lossy(&chunk));
-    }
-    buffer
-}
-
-fn data_events(raw: &str) -> Vec<Value> {
-    raw.split("\n\n")
-        .filter_map(|event| {
-            event
-                .lines()
-                .find_map(|line| line.strip_prefix("data: "))
-                .and_then(|json| serde_json::from_str(json).ok())
-        })
-        .collect()
-}
-
-/// One line per live event, so the whole AC1 sequence is one assertion.
-fn describe(event: &Value) -> String {
-    match event["type"].as_str().unwrap_or("") {
-        "item" => format!(
-            "item:{}:{}",
-            event["item"]["kind"].as_str().unwrap_or(""),
-            event["item"]["text"].as_str().unwrap_or("")
-        ),
-        "delta" => format!("delta:{}", event["text"].as_str().unwrap_or("")),
-        "status" => format!("status:{}", event["status"].as_str().unwrap_or("")),
-        "usage" => format!("usage:{}", event["usage"]["turns"]),
-        other => other.to_string(),
-    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -279,14 +165,12 @@ async fn guards_and_validation_match_the_node_routes() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn create_returns_the_id_and_get_reaches_idle() {
-    if !require_fake() {
-        return;
-    }
+    require_fake_engine();
     let fixture = Fixture::new("sessions-api-create");
     let server = start(fixture.options()).await.expect("start server");
     let client = Client::new();
 
-    let id = create(&client, &server, &teach_planned(false)).await;
+    let id = create(&client, &server, &teach_planned(Some(false))).await;
     let state = wait_for(&client, &server, &id, "idle").await;
 
     assert_eq!(state["title"], "Prima lezione");
@@ -308,13 +192,11 @@ async fn create_returns_the_id_and_get_reaches_idle() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn events_send_a_snapshot_then_the_live_turn() {
-    if !require_fake() {
-        return;
-    }
+    require_fake_engine();
     let fixture = Fixture::new("sessions-api-events");
     let server = start(fixture.options()).await.expect("start server");
     let client = Client::new();
-    let id = create(&client, &server, &teach_planned(false)).await;
+    let id = create(&client, &server, &teach_planned(Some(false))).await;
     wait_for(&client, &server, &id, "idle").await;
 
     let mut stream = client
@@ -376,15 +258,13 @@ async fn events_send_a_snapshot_then_the_live_turn() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn events_keep_the_connection_alive() {
-    if !require_fake() {
-        return;
-    }
+    require_fake_engine();
     let fixture = Fixture::new("sessions-api-keep-alive");
     let mut options = fixture.options();
     options.keep_alive = Duration::from_millis(100);
     let server = start(options).await.expect("start server");
     let client = Client::new();
-    let id = create(&client, &server, &teach_planned(false)).await;
+    let id = create(&client, &server, &teach_planned(Some(false))).await;
     wait_for(&client, &server, &id, "idle").await;
 
     let mut stream = client
@@ -403,13 +283,11 @@ async fn events_keep_the_connection_alive() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_busy_session_refuses_a_second_message() {
-    if !require_fake() {
-        return;
-    }
+    require_fake_engine();
     let fixture = Fixture::new("sessions-api-busy");
     let server = start(fixture.options()).await.expect("start server");
     let client = Client::new();
-    let id = create(&client, &server, &teach_planned(false)).await;
+    let id = create(&client, &server, &teach_planned(Some(false))).await;
     wait_for(&client, &server, &id, "idle").await;
 
     let path = format!("/api/sessions/{id}/message");
@@ -431,13 +309,11 @@ async fn a_busy_session_refuses_a_second_message() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_crashed_engine_is_retryable_and_the_next_message_resumes() {
-    if !require_fake() {
-        return;
-    }
+    require_fake_engine();
     let fixture = Fixture::new("sessions-api-crash");
     let server = start(fixture.options()).await.expect("start server");
     let client = Client::new();
-    let id = create(&client, &server, &teach_planned(false)).await;
+    let id = create(&client, &server, &teach_planned(Some(false))).await;
     wait_for(&client, &server, &id, "idle").await;
 
     let path = format!("/api/sessions/{id}/message");
@@ -465,14 +341,12 @@ async fn a_crashed_engine_is_retryable_and_the_next_message_resumes() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn list_is_newest_first_and_leaves_the_heavy_fields_out() {
-    if !require_fake() {
-        return;
-    }
+    require_fake_engine();
     let fixture = Fixture::new("sessions-api-list");
     let server = start(fixture.options()).await.expect("start server");
     let client = Client::new();
 
-    let teach = create(&client, &server, &teach_planned(false)).await;
+    let teach = create(&client, &server, &teach_planned(Some(false))).await;
     wait_for(&client, &server, &teach, "idle").await;
     let practice = create(
         &client,
@@ -506,13 +380,11 @@ async fn list_is_newest_first_and_leaves_the_heavy_fields_out() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn shutdown_stops_a_running_turn_and_writes_the_state_file() {
-    if !require_fake() {
-        return;
-    }
+    require_fake_engine();
     let fixture = Fixture::new("sessions-api-shutdown");
     let server = start(fixture.options()).await.expect("start server");
     let client = Client::new();
-    let id = create(&client, &server, &teach_planned(false)).await;
+    let id = create(&client, &server, &teach_planned(Some(false))).await;
     wait_for(&client, &server, &id, "idle").await;
 
     let response = post(
@@ -548,9 +420,7 @@ async fn shutdown_stops_a_running_turn_and_writes_the_state_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn global_events_announce_a_created_session() {
-    if !require_fake() {
-        return;
-    }
+    require_fake_engine();
     let fixture = Fixture::new("sessions-api-bus");
     let server = start(fixture.options()).await.expect("start server");
     let client = Client::new();

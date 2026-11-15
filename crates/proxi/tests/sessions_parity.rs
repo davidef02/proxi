@@ -9,13 +9,13 @@ mod common;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use reqwest::header::CONTENT_TYPE;
-use reqwest::{Client, Response, StatusCode};
+use reqwest::{Client, StatusCode};
 use serde_json::Value;
 
-use proxi::server::{RunningServer, ServerOptions, start};
+use common::sessions::{body_json, data_events, post, read_until, require_fake_engine, wait_for};
+use proxi::server::{ServerOptions, start};
 
 fn golden_file() -> PathBuf {
     common::repo_root()
@@ -64,98 +64,6 @@ fn write_seed(repo: &Path, seed: &Value) {
         )
         .unwrap_or_else(|error| panic!("write seed {rel}: {error}"));
     }
-}
-
-fn node_available() -> bool {
-    std::process::Command::new("node")
-        .arg("--version")
-        .output()
-        .map(|out| out.status.success())
-        .unwrap_or(false)
-}
-
-/// The fake engine is a node script: skip, with a message, when node is missing.
-fn require_fake() -> bool {
-    if node_available() {
-        return true;
-    }
-    eprintln!("skipping: node is not on PATH");
-    false
-}
-
-async fn post(client: &Client, server: &RunningServer, path: &str, body: &str) -> Response {
-    client
-        .post(format!("{}{path}", server.url))
-        .header("x-learner-client", "1")
-        .header(CONTENT_TYPE, "application/json")
-        .body(body.to_string())
-        .send()
-        .await
-        .unwrap_or_else(|error| panic!("POST {path}: {error}"))
-}
-
-async fn body_json(response: Response) -> Value {
-    let text = response.text().await.expect("read body");
-    serde_json::from_str(&text).unwrap_or_else(|error| panic!("not JSON ({error}): {text}"))
-}
-
-/// Polls `GET /api/sessions/:id` until the status matches; panics after 30 s.
-async fn wait_for(client: &Client, server: &RunningServer, id: &str, status: &str) -> Value {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        let response = client
-            .get(format!("{}/api/sessions/{id}", server.url))
-            .send()
-            .await
-            .expect("GET session");
-        let state = body_json(response).await;
-        if state["status"] == status {
-            return state;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "timed out waiting for {status}: {state}"
-        );
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-}
-
-/// Reads chunks into `buffer` until `done` holds; panics after `timeout`.
-async fn read_until(
-    response: &mut Response,
-    buffer: &mut String,
-    timeout: Duration,
-    done: impl Fn(&str) -> bool,
-) {
-    let deadline = tokio::time::Instant::now() + timeout;
-    while !done(buffer) {
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        let chunk = tokio::time::timeout(remaining, response.chunk())
-            .await
-            .unwrap_or_else(|_| panic!("timed out; got {buffer:?}"))
-            .expect("read chunk")
-            .expect("stream closed early");
-        buffer.push_str(&String::from_utf8_lossy(&chunk));
-    }
-}
-
-fn data_events(raw: &str) -> Vec<Value> {
-    raw.split("\n\n")
-        .filter_map(|block| {
-            let data: String = block
-                .lines()
-                .filter_map(|line| line.strip_prefix("data:"))
-                .map(str::trim)
-                .collect();
-            if data.is_empty() {
-                return None;
-            }
-            Some(
-                serde_json::from_str(&data)
-                    .unwrap_or_else(|error| panic!("bad SSE event ({error}): {data}")),
-            )
-        })
-        .collect()
 }
 
 /// Every path form the server may report for `dir`: the resolved path and, when it exists, the
@@ -339,9 +247,7 @@ fn pid_normaliser_matches_the_js_regex() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn sessions_match_the_node_golden() {
-    if !require_fake() {
-        return;
-    }
+    require_fake_engine();
     let raw = fs::read_to_string(golden_file())
         .unwrap_or_else(|error| panic!("read {}: {error}", golden_file().display()));
     let golden: Value = serde_json::from_str(&raw).expect("parse sessions golden");
@@ -406,8 +312,7 @@ async fn sessions_match_the_node_golden() {
         .await
         .expect("GET events");
     assert_eq!(stream.status(), StatusCode::OK);
-    let mut raw = String::new();
-    read_until(&mut stream, &mut raw, Duration::from_secs(10), |buffer| {
+    let mut raw = read_until(&mut stream, Duration::from_secs(10), |buffer| {
         buffer.contains("\n\n")
     })
     .await;
@@ -436,13 +341,13 @@ async fn sessions_match_the_node_golden() {
     );
 
     // Poll the stream until the turn's idle status has arrived after the snapshot.
-    read_until(&mut stream, &mut raw, Duration::from_secs(30), |buffer| {
+    let live = read_until(&mut stream, Duration::from_secs(30), |buffer| {
         data_events(buffer)
-            .into_iter()
-            .skip(snapshot_events)
+            .iter()
             .any(|event| event["type"] == "status" && event["status"] == "idle")
     })
     .await;
+    raw.push_str(&live);
     drop(stream);
 
     let events = data_events(&raw);

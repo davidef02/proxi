@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::http::StatusCode;
+use common::sessions::{describe, require_fake_engine, seed_demo_course, teach_planned};
 use proxi::anki_client::AnkiClient;
 use proxi::anki_import::ImportRegistry;
 use proxi::claude::ClaudeBin;
@@ -20,8 +21,6 @@ use proxi::protocol::{ANKI_OPT_IN_QUESTION, SessionState, SessionStatus};
 use proxi::sessions::{HttpError, ManagerOptions, SessionManager};
 use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedReceiver;
-
-const CURRICULUM: &str = r#"{"chapters":[{"title":"Demo","slug":"demo","lessons":[{"title":"Prima lezione","slug":"prima-lezione","plannedNodes":2}]}]}"#;
 
 struct TestEnv {
     repo: common::TempDir,
@@ -36,21 +35,13 @@ impl TestEnv {
             data: common::temp_dir("session-manager-data"),
             events: EventBus::new(),
         };
-        seed_data(&env.data.0);
+        seed_demo_course(&env.data.0);
         env
     }
 
     fn manager(&self) -> SessionManager {
         manager_for(&self.repo.0, &self.data.0, &self.events)
     }
-}
-
-fn seed_data(data: &Path) {
-    fs::write(data.join("curriculum.json"), CURRICULUM).expect("write curriculum");
-    let course = data.join("courses").join("demo");
-    fs::create_dir_all(course.join("lessons")).expect("create lessons dir");
-    fs::write(course.join("MISSION.md"), "# Mission\n").expect("write mission");
-    fs::write(course.join("NOTES.md"), "# Notes\n").expect("write notes");
 }
 
 fn fake_bin() -> ClaudeBin {
@@ -83,40 +74,10 @@ fn manager_for(repo: &Path, data: &Path, events: &EventBus) -> SessionManager {
     })
 }
 
-fn node_available() -> bool {
-    std::process::Command::new("node")
-        .arg("--version")
-        .output()
-        .map(|out| out.status.success())
-        .unwrap_or(false)
-}
-
-/// Each test that needs the fake engine skips, as the unit tests do, when node is missing.
-fn require_fake() -> bool {
-    if node_available() {
-        return true;
-    }
-    eprintln!("skipping: node is not on PATH");
-    false
-}
-
 fn settings(env: &TestEnv, body: &str) {
     let dir = env.repo.0.join(".learner");
     fs::create_dir_all(&dir).expect("create .learner");
     fs::write(dir.join("settings.json"), body).expect("write settings");
-}
-
-fn teach_planned(anki_opt_in: Option<bool>) -> Value {
-    let mut body = json!({
-        "kind": "teach",
-        "course": "demo",
-        "model": "haiku",
-        "target": {"mode": "planned", "title": "Prima lezione"},
-    });
-    if let Some(opt_in) = anki_opt_in {
-        body["ankiOptIn"] = json!(opt_in);
-    }
-    body
 }
 
 fn lesson_doc(title: &str, dag: &str) -> Value {
@@ -189,26 +150,9 @@ async fn next_event(receiver: &mut UnboundedReceiver<String>) -> Value {
     serde_json::from_str(&payload).expect("each event is JSON")
 }
 
-/// One line per live event, so the whole AC1 sequence is one assertion.
-fn describe(event: &Value) -> String {
-    match event["type"].as_str().unwrap_or("") {
-        "item" => format!(
-            "item:{}:{}",
-            event["item"]["kind"].as_str().unwrap_or(""),
-            event["item"]["text"].as_str().unwrap_or("")
-        ),
-        "delta" => format!("delta:{}", event["text"].as_str().unwrap_or("")),
-        "status" => format!("status:{}", event["status"].as_str().unwrap_or("")),
-        "usage" => format!("usage:{}", event["usage"]["turns"]),
-        other => other.to_string(),
-    }
-}
-
 #[tokio::test(flavor = "multi_thread")]
 async fn create_reaches_idle_with_the_node_state_shape() {
-    if !require_fake() {
-        return;
-    }
+    require_fake_engine();
     let env = TestEnv::new();
     let manager = env.manager();
 
@@ -248,9 +192,7 @@ async fn create_reaches_idle_with_the_node_state_shape() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn subscribe_sends_the_snapshot_then_the_live_turn() {
-    if !require_fake() {
-        return;
-    }
+    require_fake_engine();
     let env = TestEnv::new();
     let manager = env.manager();
     let id = manager.create(teach_planned(Some(false))).await.unwrap();
@@ -297,9 +239,7 @@ async fn subscribe_sends_the_snapshot_then_the_live_turn() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn state_file_keeps_node_key_order_and_parses_back() {
-    if !require_fake() {
-        return;
-    }
+    require_fake_engine();
     let env = TestEnv::new();
     let manager = env.manager();
     let id = manager.create(teach_planned(Some(false))).await.unwrap();
@@ -350,9 +290,7 @@ async fn invalid_configs_are_400() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn create_rejects_unknown_unplanned_and_already_taught_titles() {
-    if !require_fake() {
-        return;
-    }
+    require_fake_engine();
     let env = TestEnv::new();
     let manager = env.manager();
 
@@ -402,9 +340,7 @@ async fn create_rejects_unknown_unplanned_and_already_taught_titles() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn existing_lesson_restores_the_plan() {
-    if !require_fake() {
-        return;
-    }
+    require_fake_engine();
     let env = TestEnv::new();
     let dag = "graph TD\nN1[\"Nodo 1: a\"]\nN2[\"Nodo 2: b\"]";
     write_lesson(
@@ -471,9 +407,7 @@ async fn existing_target_rejects_a_missing_or_prose_lesson() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn free_standalone_lesson_provisions_the_course() {
-    if !require_fake() {
-        return;
-    }
+    require_fake_engine();
     let env = TestEnv::new();
     let manager = env.manager();
     let id = manager
@@ -503,9 +437,7 @@ async fn free_standalone_lesson_provisions_the_course() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn missing_anki_opt_in_waits_without_a_process() {
-    if !require_fake() {
-        return;
-    }
+    require_fake_engine();
     let env = TestEnv::new();
     let manager = env.manager();
     let id = manager.create(teach_planned(None)).await.unwrap();
@@ -531,9 +463,7 @@ async fn missing_anki_opt_in_waits_without_a_process() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn message_while_waiting_or_running_is_409() {
-    if !require_fake() {
-        return;
-    }
+    require_fake_engine();
     let env = TestEnv::new();
     let manager = env.manager();
 
@@ -560,6 +490,52 @@ async fn message_while_waiting_or_running_is_409() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn concurrent_messages_let_exactly_one_turn_through() {
+    require_fake_engine();
+    let env = TestEnv::new();
+    let manager = env.manager();
+    let id = manager.create(teach_planned(Some(false))).await.unwrap();
+    wait_for(&manager, &id, SessionStatus::Idle).await;
+
+    // AC: the closed/busy check and the turn are recorded in one lock, so only the first message
+    // finds the session free (Node checks and marks it busy in one synchronous tick).
+    let mut tasks = Vec::new();
+    for _ in 0..4 {
+        let manager = manager.clone();
+        let id = id.clone();
+        tasks.push(tokio::spawn(async move {
+            manager.message(&id, json!({"text": "FAKE:slow:5"})).await
+        }));
+    }
+    let mut accepted = 0;
+    let mut busy = 0;
+    for task in tasks {
+        match task.await.expect("message task") {
+            Ok(()) => accepted += 1,
+            Err(error) => {
+                assert_eq!(error.status, StatusCode::CONFLICT, "{}", error.message);
+                assert!(error.message.contains("busy"), "{}", error.message);
+                busy += 1;
+            }
+        }
+    }
+    assert_eq!((accepted, busy), (1, 3), "one turn accepted, three 409");
+
+    let state = wait_for(&manager, &id, SessionStatus::Idle).await;
+    assert_eq!(
+        state["usage"]["turns"], 2,
+        "one engine turn for the message: {state}"
+    );
+    let learner = state["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .filter(|item| item["kind"] == "learner")
+        .count();
+    assert_eq!(learner, 2, "the opening and one message: {state}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn message_validation_runs_before_the_id_lookup() {
     let env = TestEnv::new();
     let manager = env.manager();
@@ -583,9 +559,7 @@ async fn message_validation_runs_before_the_id_lookup() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn crash_marks_the_session_retryable_and_the_next_message_resumes() {
-    if !require_fake() {
-        return;
-    }
+    require_fake_engine();
     let env = TestEnv::new();
     let manager = env.manager();
     let id = manager.create(teach_planned(Some(false))).await.unwrap();
@@ -651,9 +625,7 @@ async fn crash_marks_the_session_retryable_and_the_next_message_resumes() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn failed_turn_state_file_carries_last_turn_and_can_retry() {
-    if !require_fake() {
-        return;
-    }
+    require_fake_engine();
     let env = TestEnv::new();
     let manager = env.manager();
 
@@ -698,9 +670,7 @@ async fn failed_turn_state_file_carries_last_turn_and_can_retry() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn api_key_without_a_key_reports_the_missing_key() {
-    if !require_fake() {
-        return;
-    }
+    require_fake_engine();
     let env = TestEnv::new();
     settings(&env, r#"{"claudeAuth": "apiKey", "anthropicApiKey": ""}"#);
     let manager = env.manager();
@@ -716,9 +686,7 @@ async fn api_key_without_a_key_reports_the_missing_key() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn unsupported_provider_fails_the_create_and_marks_the_session() {
-    if !require_fake() {
-        return;
-    }
+    require_fake_engine();
     let env = TestEnv::new();
     settings(&env, r#"{"provider": "agy"}"#);
     let manager = env.manager();
@@ -891,9 +859,7 @@ async fn load_re_asks_the_anki_opt_in_of_an_unstarted_teach_session() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn load_keeps_the_has_run_token_for_the_next_message() {
-    if !require_fake() {
-        return;
-    }
+    require_fake_engine();
     let env = TestEnv::new();
     let token = "11111111-1111-4111-8111-111111111111";
     write_state_file(
@@ -925,9 +891,7 @@ async fn load_keeps_the_has_run_token_for_the_next_message() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn list_is_newest_first_without_heavy_fields() {
-    if !require_fake() {
-        return;
-    }
+    require_fake_engine();
     let env = TestEnv::new();
     let manager = env.manager();
     let teach = manager.create(teach_planned(Some(false))).await.unwrap();
@@ -951,9 +915,7 @@ async fn list_is_newest_first_without_heavy_fields() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn creating_a_session_emits_the_sessions_event() {
-    if !require_fake() {
-        return;
-    }
+    require_fake_engine();
     let env = TestEnv::new();
     let manager = env.manager();
     let mut events = env.events.subscribe();

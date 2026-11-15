@@ -160,17 +160,6 @@ pub fn uuid_v4() -> String {
     )
 }
 
-/// JS `String(n)` for the values the parser yields; item ids embed the index this way.
-pub fn js_number_string(n: f64) -> String {
-    if n == 0.0 {
-        return "0".into();
-    }
-    if n.is_finite() && n.fract() == 0.0 && n.abs() < 1e21 {
-        return format!("{n:.0}");
-    }
-    format!("{n}")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,12 +214,5 @@ mod tests {
         assert_eq!(&id[14..15], "4", "{id}");
         assert!(matches!(&id[19..20], "8" | "9" | "a" | "b"), "{id}");
         assert_ne!(uuid_v4(), id);
-    }
-
-    #[test]
-    fn js_number_string_follows_js() {
-        assert_eq!(js_number_string(1.0), "1");
-        assert_eq!(js_number_string(0.0), "0");
-        assert_eq!(js_number_string(1.5), "1.5");
     }
 }

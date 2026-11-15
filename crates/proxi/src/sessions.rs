@@ -652,7 +652,7 @@ impl SessionData {
     }
 
     fn teacher_item(&mut self, message_id: &str, index: f64) -> String {
-        let id = format!("t:{message_id}:{}", engine::js_number_string(index));
+        let id = format!("t:{message_id}:{}", js::js_number_string(index));
         if self.item_index(&id).is_none() {
             self.streamed
                 .entry(message_id.to_string())
@@ -1312,21 +1312,27 @@ impl SessionManager {
         learner_text: Option<String>,
         attachments: Option<Value>,
     ) -> Result<(), String> {
-        let (id, text, show) = {
-            let guard = session.lock().expect("session lock");
-            let id = guard.data.state.id.clone();
-            let opening = context::opening_message(&guard.data.state.config, Some(title));
+        let needs_launch = {
+            let mut guard = session.lock().expect("session lock");
+            let Session { data, turns } = &mut *guard;
+            let opening = context::opening_message(&data.state.config, Some(title));
             // One turn: the opening, then what the learner typed (the process has to see both, in this order).
-            match learner_text {
+            let (text, show) = match learner_text {
                 Some(learner_text) => (
-                    id,
                     format!("{opening}\n\nMessaggio dello studente:\n\n{learner_text}"),
                     vec![opening, learner_text],
                 ),
-                None => (id, opening.clone(), vec![opening]),
+                None => (opening.clone(), vec![opening]),
+            };
+            let needs_launch = turns.begin_send(data, Some(text), show, attachments);
+            if !needs_launch {
+                turns.finish_send(data);
             }
+            needs_launch
         };
-        self.send_turn(&id, text, show, attachments).await?;
+        if needs_launch {
+            self.launch_turn(session).await?;
+        }
         let mut guard = session.lock().expect("session lock");
         let Session { data, turns } = &mut *guard;
         data.pending_start = None;
@@ -1340,100 +1346,101 @@ impl SessionManager {
         let Some(session) = self.0.session(id) else {
             return Err(HttpError::new(404, "Session not found"));
         };
-        let (closed, busy, pending_start, teach, anki_decided) = {
-            let guard = session.lock().expect("session lock");
-            let data = &guard.data;
-            (
-                data.state.status == SessionStatus::Closed,
-                data.state.status.is_busy(),
-                data.pending_start.clone(),
-                data.state.config.get("kind").and_then(Value::as_str) == Some("teach"),
-                matches!(data.state.config.get("ankiOptIn"), Some(Value::Bool(_))),
-            )
-        };
-        if closed {
+        let (needs_launch, opening) = self.begin_message(&session, text, attachments)?;
+        if needs_launch {
+            self.launch_turn(&session)
+                .await
+                .map_err(|message| HttpError::new(500, message))?;
+        }
+        if opening {
+            let mut guard = session.lock().expect("session lock");
+            let Session { data, turns } = &mut *guard;
+            data.pending_start = None;
+            flush(&self.0, data, turns);
+        }
+        Ok(())
+    }
+
+    /// The closed/busy checks, the `pendingStart` decision and the turn under one lock: Node checks
+    /// the status and marks the session busy in the same synchronous tick, so a second concurrent
+    /// message gets 409. Returns `(needs_launch, opening)`.
+    fn begin_message(
+        &self,
+        session: &Arc<Mutex<Session>>,
+        text: String,
+        attachments: Option<Value>,
+    ) -> Result<(bool, bool), HttpError> {
+        let mut guard = session.lock().expect("session lock");
+        let Session { data, turns } = &mut *guard;
+        if data.state.status == SessionStatus::Closed {
             return Err(HttpError::new(409, "Session is closed"));
         }
-        if busy {
+        if data.state.status.is_busy() {
             return Err(HttpError::new(
                 409,
                 "The teacher is busy: wait for the current turn to finish",
             ));
         }
-        if let Some(title) = pending_start {
+        let opening = data.pending_start.clone().map(|title| {
             // Never ran (Anki card dismissed, start failed, app restarted): open the lesson, with his message in the same turn.
+            let opening = context::opening_message(&data.state.config, Some(&title));
             // No answer to the Anki question means no opt-in: cards are never created by default.
-            if teach && !anki_decided {
-                let mut guard = session.lock().expect("session lock");
-                guard
-                    .data
-                    .state
+            if data.state.config.get("kind").and_then(Value::as_str) == Some("teach")
+                && !matches!(data.state.config.get("ankiOptIn"), Some(Value::Bool(_)))
+            {
+                data.state
                     .config
                     .insert("ankiOptIn".to_string(), Value::Bool(false));
             }
-            return self
-                .start(&session, &title, Some(text), attachments)
-                .await
-                .map_err(|message| HttpError::new(500, message));
+            opening
+        });
+        let (turn_text, show) = match &opening {
+            Some(opening) => (
+                format!("{opening}\n\nMessaggio dello studente:\n\n{text}"),
+                vec![opening.clone(), text],
+            ),
+            None => (text.clone(), vec![text]),
+        };
+        let needs_launch = turns.begin_send(data, Some(turn_text), show, attachments);
+        if !needs_launch {
+            turns.finish_send(data);
         }
-        let show = vec![text.clone()];
-        self.send_turn(id, text, show, attachments)
-            .await
-            .map_err(|message| HttpError::new(500, message))
+        Ok((needs_launch, opening.is_some()))
     }
 
-    async fn send_turn(
-        &self,
-        id: &str,
-        text: String,
-        show: Vec<String>,
-        attachments: Option<Value>,
-    ) -> Result<(), String> {
-        let session = self
-            .0
-            .session(id)
-            .ok_or_else(|| "Session not found".to_string())?;
-        let needs_launch = {
-            let mut guard = session.lock().expect("session lock");
-            let Session { data, turns } = &mut *guard;
-            turns.begin_send(data, Some(text), show, attachments)
-        };
-        if needs_launch {
-            let (handle, receiver) = match self.launch(&session).await {
-                Ok(started) => started,
-                Err(message) => {
-                    let mut guard = session.lock().expect("session lock");
-                    let Session { data, turns } = &mut *guard;
-                    turns.launch_failed(data, &message);
-                    return Err(message);
-                }
-            };
-            let mut stop_after = None;
-            {
-                let mut guard = session.lock().expect("session lock");
-                let Session { data, turns } = &mut *guard;
-                match turns.attach(handle) {
-                    Ok(generation) => {
-                        tokio::spawn(self.clone().pump(id.to_string(), generation, receiver));
-                        turns.finish_send(data);
-                    }
-                    Err(handle) => stop_after = Some(handle),
-                }
-            }
-            if let Some(mut handle) = stop_after {
-                // The session closed while the engine was starting: the turn never goes out.
-                let message = "Session is closed".to_string();
-                tokio::spawn(async move { handle.stop().await });
+    /// The async half of a turn: start the engine, attach it, push the learner bubbles, mark running.
+    async fn launch_turn(&self, session: &Arc<Mutex<Session>>) -> Result<(), String> {
+        let id = session.lock().expect("session lock").data.state.id.clone();
+        let (handle, receiver) = match self.launch(session).await {
+            Ok(started) => started,
+            Err(message) => {
                 let mut guard = session.lock().expect("session lock");
                 let Session { data, turns } = &mut *guard;
                 turns.launch_failed(data, &message);
                 return Err(message);
             }
-            return Ok(());
+        };
+        let mut stop_after = None;
+        {
+            let mut guard = session.lock().expect("session lock");
+            let Session { data, turns } = &mut *guard;
+            match turns.attach(handle) {
+                Ok(generation) => {
+                    tokio::spawn(self.clone().pump(id, generation, receiver));
+                    turns.finish_send(data);
+                }
+                Err(handle) => stop_after = Some(handle),
+            }
         }
-        let mut guard = session.lock().expect("session lock");
-        let Session { data, turns } = &mut *guard;
-        turns.finish_send(data);
+        if let Some(mut handle) = stop_after {
+            // The session closed while the engine was starting: the turn never goes out.
+            let message = "Session is closed".to_string();
+            tokio::spawn(async move { handle.stop().await });
+            let mut guard = session.lock().expect("session lock");
+            let Session { data, turns } = &mut *guard;
+            turns.launch_failed(data, &message);
+            return Err(message);
+        }
         Ok(())
     }
 

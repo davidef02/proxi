@@ -152,7 +152,8 @@ pub fn js_string(v: Option<&Value>) -> String {
     }
 }
 
-fn js_number_string(f: f64) -> String {
+/// JS `String(n)` for a plain number: integral values lose the fraction (item ids embed the index this way).
+pub fn js_number_string(f: f64) -> String {
     if f == 0.0 {
         return "0".into();
     }
