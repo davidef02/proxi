@@ -37,6 +37,19 @@ async function waitFor<T>(fn: () => T | undefined | false | Promise<T | undefine
   }
 }
 
+/** Windows: a killed binary leaves its agy child holding the folder for a moment; retry instead of failing the teardown. */
+async function removeTree(dir: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 1 });
+      return;
+    } catch (error) {
+      if (attempt === 40) throw error;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+  }
+}
+
 describe("agy session over HTTP", () => {
   let root: string;
   let data: string;
@@ -65,8 +78,8 @@ describe("agy session over HTTP", () => {
   });
   after(async () => {
     await server.close();
-    fs.rmSync(root, { recursive: true, force: true, maxRetries: 3 });
-    fs.rmSync(data, { recursive: true, force: true, maxRetries: 3 });
+    await removeTree(root);
+    await removeTree(data);
   });
 
   it("opens the lesson on agy: conversation token, agent file, state.json and usage", async () => {
@@ -109,6 +122,18 @@ describe("agy session over HTTP", () => {
   });
 
   it("keeps its engine after a settings switch and a restart", async () => {
+    // The harness stops the binary by killing it, so the debounced state.json save (300 ms) must land
+    // before the restart: wait for the two answers and the conversation, as a normal close would leave them.
+    const scratch = path.join(root, ".learner", "sessions", id);
+    await waitFor(() => {
+      try {
+        const raw = JSON.parse(fs.readFileSync(path.join(scratch, "state.json"), "utf-8"));
+        const teacher = (raw.state?.items ?? []).filter((item: { kind?: string }) => item.kind === "teacher");
+        return raw.state?.status === "idle" && raw.resume === conv && teacher.length >= 2 ? raw : undefined;
+      } catch {
+        return undefined; // not written yet
+      }
+    }, 3000);
     assert.equal((await post("/api/settings", { provider: "claude" })).status, 200);
     await server.close();
     server = await start();

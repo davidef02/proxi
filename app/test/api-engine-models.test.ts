@@ -59,4 +59,18 @@ describe("engine model lists", () => {
       );
     });
   });
+
+  it("serves the opencode list once per server", async () => {
+    const script = path.join(tempDir("api-engine-models-opencode-"), "opencode-models.mjs");
+    const write = (lines: string) => fs.writeFileSync(script, `if (process.argv.includes("models")) process.stdout.write(${JSON.stringify(lines)});\n`);
+    write("opencode-a\nopencode-b\n");
+    await withServer({ opencode: { cmd: process.execPath, args: [script] } }, async (srv) => {
+      const first = await get(srv.url + "/api/opencode/models");
+      // Node caches the list for the whole process (the fake's, from the test above): only the binary can
+      // be shown reading this server's script. Both must keep the first answer after the rewrite.
+      if (srv.mode === "binary") assert.equal(first, JSON.stringify(["opencode-a", "opencode-b"]));
+      write("opencode-z\n");
+      assert.equal(await get(srv.url + "/api/opencode/models"), first);
+    });
+  });
 });
