@@ -1309,12 +1309,8 @@ mod tests {
         assert_eq!(item["lessonPath"], json!(rel));
         assert_eq!(item["node"]["nodeId"], json!("prima-cosa"));
         assert_eq!(item["node"]["quiz"]["correctAnswer"], json!("b"));
-        // One object, one stamp: the chat item is the node the island holds, `capturedAt` included.
-        assert_eq!(
-            item["node"]["capturedAt"],
-            island(&host)["nodes"][0]["capturedAt"],
-            "{item}"
-        );
+        // One object, one stamp: the chat item is the node the island holds.
+        assert_eq!(item["node"], island(&host)["nodes"][0], "{item}");
 
         assert!(
             host.events().contains(&json!({
@@ -1330,6 +1326,27 @@ mod tests {
         let again = host.call(&TOOL, node_in(json!({"title": "Nuovo titolo"}))).await;
         assert_eq!(again.text, r#"{"ok":true,"nodeCount":1}"#);
         assert_eq!(island(&host)["nodes"].as_array().map(Vec::len), Some(1));
+    }
+
+    #[tokio::test]
+    async fn the_item_node_is_the_node_the_island_holds() {
+        // A tool-side pre-stamp (the review round 1 bug) and `append_node`'s own stamp often land in
+        // the same millisecond, which makes a plain equality check pass on the old code. Padding the
+        // lesson so that the read and parse inside `append_node` outlast a millisecond removes the
+        // tie: the two stamps differ, and only the node `append_node` wrote can match the island.
+        let host = FakeHost::with_lesson(teach(), DAG);
+        let rel = host.lesson_path().expect("a lesson");
+        let abs = host.data_root().join(&rel);
+        let html = fs::read_to_string(&abs).expect("read the lesson");
+        let filler = "<!-- filler -->\n".repeat(1_000_000);
+        fs::write(&abs, html.replacen("</body>", &format!("{filler}</body>"), 1))
+            .expect("write the padded lesson");
+
+        let out = host.call(&TOOL, node_in(json!({}))).await;
+        assert!(!out.is_error, "{}", out.text);
+
+        let item = host.items().last().cloned().expect("an item");
+        assert_eq!(item["node"], island(&host)["nodes"][0], "{item}");
     }
 
     #[tokio::test]
