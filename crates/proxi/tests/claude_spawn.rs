@@ -2,6 +2,10 @@
 //! `prepare` must not turn an unavailable folder into `spawn error: spawn claude ENOENT`, which
 //! tells the learner to install Claude when the folder is the problem (AC5's ENOENT is for a
 //! missing binary only).
+//!
+//! Windows only: the exact `NotFound` filesystem error is Windows' `ERROR_PATH_NOT_FOUND` for an
+//! unused drive letter.
+#![cfg(windows)]
 
 mod common;
 
@@ -42,7 +46,6 @@ fn launch(repo: &Path, scratch_dir: PathBuf) -> ClaudeLaunch {
 
 /// An unused drive letter: creating a directory under it fails with a `NotFound` io error, the
 /// same kind a missing executable gives, so only the prepare branch's own text tells them apart.
-#[cfg(windows)]
 fn unused_drive() -> Option<PathBuf> {
     ('Q'..='Z').rev().find_map(|letter| {
         let root = PathBuf::from(format!("{letter}:\\"));
@@ -52,10 +55,6 @@ fn unused_drive() -> Option<PathBuf> {
 
 #[tokio::test]
 async fn a_scratch_dir_not_found_is_not_reported_as_a_missing_executable() {
-    if !cfg!(windows) {
-        // The exact `NotFound` filesystem error below is Windows' `ERROR_PATH_NOT_FOUND`.
-        return;
-    }
     let Some(drive) = unused_drive() else {
         // Every letter is taken: no deterministic `NotFound` to build here.
         return;
