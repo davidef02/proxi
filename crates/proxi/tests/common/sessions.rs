@@ -1,6 +1,6 @@
-//! Helpers shared by the session test binaries: the fake engine, the HTTP client over its routes,
-//! the SSE frames. One copy, so `sessions_api`, `sessions_parity` and `session_manager` check the
-//! same shapes.
+//! Helpers shared by the session test binaries: the fake engine and what it received, the HTTP
+//! client over its routes, uploads, the SSE frames, the saved state. One copy, so `sessions_api`,
+//! `sessions_parity` and `session_manager` check the same shapes.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -8,6 +8,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use reqwest::header::CONTENT_TYPE;
+use reqwest::multipart::{Form, Part};
 use reqwest::{Client, Response};
 use serde_json::{Value, json};
 
@@ -29,6 +30,55 @@ pub fn require_fake_engine() {
         "session tests need node on PATH (the fake engine is a node script)"
     );
 }
+
+/// The fake engine command line: the node script, then `extra` (test hooks such as `--input-out`).
+pub fn fake_args(extra: &[&str]) -> Vec<String> {
+    let fake = super::repo_root()
+        .join("app")
+        .join("test")
+        .join("fake-claude.mjs");
+    let mut args = vec![fake.display().to_string()];
+    args.extend(extra.iter().map(|arg| arg.to_string()));
+    args
+}
+
+/// The raw stdin lines the fake engine kept in its `--input-out` file; empty before they exist.
+pub fn raw_inputs(file: &Path) -> Vec<String> {
+    match fs::read_to_string(file) {
+        Ok(raw) => raw.lines().map(str::to_string).collect(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(error) => panic!("read {}: {error}", file.display()),
+    }
+}
+
+/// Every stdin line of the fake engine (`--input-out`), parsed.
+pub fn fake_inputs(file: &Path) -> Vec<Value> {
+    raw_inputs(file)
+        .into_iter()
+        .map(|line| {
+            serde_json::from_str(&line)
+                .unwrap_or_else(|error| panic!("bad input line ({error}): {line}"))
+        })
+        .collect()
+}
+
+/// The user prompts the fake engine received, in order: what the server actually sent.
+pub fn user_texts(file: &Path) -> Vec<String> {
+    fake_inputs(file)
+        .into_iter()
+        .filter(|line| line["type"] == "user")
+        .map(|line| {
+            line["message"]["content"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string()
+        })
+        .collect()
+}
+
+/// The exact in-band interrupt Claude receives; the counter starts at 1 per process.
+pub const INTERRUPT_REQUEST: &str =
+    r#"{"type":"control_request","request_id":"int-1","request":{"subtype":"interrupt"}}"#;
 
 /// Writes `curriculum.json` and the `demo` course under `data`.
 pub fn seed_demo_course(data: &Path) {
@@ -57,6 +107,13 @@ impl Fixture {
 
     pub fn options(&self) -> ServerOptions {
         fake_engine_options(&self.repo.0, &self.data.0)
+    }
+
+    /// The same with test-hook flags before the fake script (`--input-out`, `--env-out`).
+    pub fn options_with(&self, extra: &[&str]) -> ServerOptions {
+        let mut options = self.options();
+        options.bins.claude_args = fake_args(extra);
+        options
     }
 }
 
@@ -89,6 +146,49 @@ pub async fn post(client: &Client, server: &RunningServer, path: &str, body: &st
         .unwrap_or_else(|error| panic!("POST {path}: {error}"))
 }
 
+/// One file of a multipart upload: a `files` (or `file`) part carrying a filename.
+pub struct UploadPart<'a> {
+    pub field: &'a str,
+    pub file_name: &'a str,
+    pub mime: &'a str,
+    pub bytes: &'a [u8],
+}
+
+/// A multipart POST, parts in the order given (the route reads all `files`, then all `file`).
+pub async fn upload(
+    client: &Client,
+    server: &RunningServer,
+    id: &str,
+    parts: &[UploadPart<'_>],
+) -> Response {
+    let mut form = Form::new();
+    for part in parts {
+        let field = Part::bytes(part.bytes.to_vec())
+            .file_name(part.file_name.to_string())
+            .mime_str(part.mime)
+            .expect("mime");
+        form = form.part(part.field.to_string(), field);
+    }
+    let path = format!("/api/sessions/{id}/attachments");
+    client
+        .post(format!("{}{path}", server.url))
+        .header("x-learner-client", "1")
+        .multipart(form)
+        .send()
+        .await
+        .unwrap_or_else(|error| panic!("POST {path}: {error}"))
+}
+
+/// A DELETE with the CSRF header the routes require.
+pub async fn delete(client: &Client, server: &RunningServer, path: &str) -> Response {
+    client
+        .delete(format!("{}{path}", server.url))
+        .header("x-learner-client", "1")
+        .send()
+        .await
+        .unwrap_or_else(|error| panic!("DELETE {path}: {error}"))
+}
+
 pub async fn body_json(response: Response) -> Value {
     let text = response.text().await.expect("read body");
     serde_json::from_str(&text).unwrap_or_else(|error| panic!("not JSON ({error}): {text}"))
@@ -113,6 +213,59 @@ pub async fn wait_for(client: &Client, server: &RunningServer, id: &str, status:
         );
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
+}
+
+/// Polls the saved state of `id` every 25 ms until `done` accepts it; panics after 20 s with the
+/// last content. A flush after the last event is asynchronous, so a test that reads `canRetry`
+/// off the file waits here instead of racing it.
+pub async fn wait_for_state_file(repo: &Path, id: &str, done: impl Fn(&Value) -> bool) -> Value {
+    let file = repo
+        .join(".learner")
+        .join("sessions")
+        .join(id)
+        .join("state.json");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    let mut last = String::from("<no state.json>");
+    loop {
+        if let Ok(raw) = fs::read_to_string(&file) {
+            if let Ok(value) = serde_json::from_str::<Value>(&raw) {
+                if done(&value) {
+                    return value;
+                }
+            }
+            last = raw;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "state.json never matched: {last}"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
+/// Whether `pid` is still a live process: `tasklist` on Windows, signal 0 elsewhere.
+#[cfg(windows)]
+pub fn pid_running(pid: u32) -> bool {
+    let pid = pid.to_string();
+    let output = Command::new("tasklist")
+        .arg("/FI")
+        .arg(format!("PID eq {pid}"))
+        .arg("/NH")
+        .output()
+        .expect("run tasklist");
+    String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .any(|token| token == pid.as_str())
+}
+
+#[cfg(not(windows))]
+pub fn pid_running(pid: u32) -> bool {
+    Command::new("kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
 }
 
 /// Reads SSE chunks until `done` sees the accumulated text; returns it; panics after `timeout`.

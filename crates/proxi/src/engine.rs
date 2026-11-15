@@ -88,6 +88,8 @@ pub enum EngineMsg {
 /// The handle a turn drives: write a user line, stop the process tree, read the pid.
 pub trait EngineHandle: Send {
     fn send(&mut self, text: &str);
+    /// Aborts the running turn: Claude asks in-band (control request); a kill-based adapter kills the tree and keeps the handle.
+    fn interrupt(&mut self);
     /// Kills the tree and resolves on exit or after 5 s; calling it twice is safe.
     fn stop(&mut self) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
     fn pid(&self) -> Option<u32>;

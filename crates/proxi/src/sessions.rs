@@ -113,6 +113,8 @@ struct SessionData {
     streamed: HashMap<String, Vec<String>>,
     finalised: HashMap<String, usize>,
     save_pending: bool,
+    /// Deleted: a flush that runs late must not recreate the dir.
+    deleted: bool,
     manager: Weak<Shared>,
 }
 
@@ -346,40 +348,155 @@ fn validate_string_array(
     }
 }
 
-/// `main.ts`'s `textBody`, before the id lookup.
+/// The value's name as zod prints it; `None` is a missing key.
+fn js_type(value: Option<&Value>) -> &'static str {
+    match value {
+        None => "undefined",
+        Some(Value::Null) => "null",
+        Some(Value::Bool(_)) => "boolean",
+        Some(Value::Number(_)) => "number",
+        Some(Value::String(_)) => "string",
+        Some(Value::Array(_)) => "array",
+        Some(Value::Object(_)) => "object",
+    }
+}
+
+/// `main.ts`'s `textBody`, before the id lookup: zod's issues in schema order, joined as Node does.
 fn validate_message(body: &Value) -> Result<(String, Option<Value>), HttpError> {
     let Some(object) = body.as_object() else {
         return Err(HttpError::new(400, "Invalid input: expected object"));
     };
+    let mut issues: Vec<String> = Vec::new();
     let text = match object.get("text") {
-        Some(Value::String(text)) if (1..=20000).contains(&utf16_len(text)) => text.clone(),
+        Some(Value::String(text)) if (1..=20000).contains(&utf16_len(text)) => Some(text.clone()),
         Some(Value::String(_)) => {
-            return Err(HttpError::new(
-                400,
-                "text: Too small or too big: expected string to have >=1 and <=20000 characters",
-            ));
+            issues.push(
+                "text: Too small or too big: expected string to have >=1 and <=20000 characters"
+                    .to_string(),
+            );
+            None
         }
         _ => {
-            return Err(HttpError::new(400, "text: Invalid input: expected string"));
+            issues.push("text: Invalid input: expected string".to_string());
+            None
         }
     };
     let attachments = match object.get("attachments") {
-        None | Some(Value::Null) => None,
-        Some(Value::Array(items)) if items.is_empty() => Some(Value::Array(Vec::new())),
-        Some(Value::Array(_)) => {
-            return Err(HttpError::new(
-                400,
-                "Gli allegati non sono ancora supportati.",
-            ));
+        None => None,
+        Some(Value::Array(items)) => {
+            let mut metas = Vec::new();
+            for (index, item) in items.iter().enumerate() {
+                let Some(element) = item.as_object() else {
+                    issues.push(format!(
+                        "attachments.{index}: Invalid input: expected object, received {}",
+                        js_type(Some(item))
+                    ));
+                    continue;
+                };
+                // A valid one is rebuilt in schema order with its unknown keys dropped.
+                let mut meta = Map::new();
+                let mut valid = true;
+                for key in ["id", "name", "path", "mimeType"] {
+                    match element.get(key) {
+                        Some(Value::String(value)) => {
+                            meta.insert(key.to_string(), Value::String(value.clone()));
+                        }
+                        other => {
+                            valid = false;
+                            issues.push(format!(
+                                "attachments.{index}.{key}: Invalid input: expected string, received {}",
+                                js_type(other)
+                            ));
+                        }
+                    }
+                }
+                match element.get("size") {
+                    Some(Value::Number(value)) => {
+                        meta.insert("size".to_string(), Value::Number(value.clone()));
+                    }
+                    other => {
+                        valid = false;
+                        issues.push(format!(
+                            "attachments.{index}.size: Invalid input: expected number, received {}",
+                            js_type(other)
+                        ));
+                    }
+                }
+                if valid {
+                    metas.push(Value::Object(meta));
+                }
+            }
+            Some(Value::Array(metas))
         }
-        Some(_) => {
-            return Err(HttpError::new(
-                400,
-                "attachments: Invalid input: expected array",
+        Some(other) => {
+            issues.push(format!(
+                "attachments: Invalid input: expected array, received {}",
+                js_type(Some(other))
             ));
+            None
         }
     };
-    Ok((text, attachments))
+    if !issues.is_empty() {
+        return Err(HttpError::new(400, issues.join("; ")));
+    }
+    Ok((text.expect("a valid text"), attachments))
+}
+
+/// One uploaded file as the route read it; `mime_type` is the part's content type, when it had one.
+pub struct AttachmentUpload {
+    pub name: String,
+    pub mime_type: Option<String>,
+    pub bytes: Vec<u8>,
+}
+
+/// Node's allowed upload types (`sessions.ts` `saveAttachments`).
+const ALLOWED_ATTACHMENT_EXTS: [&str; 9] = [
+    ".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".pdf", ".txt", ".md",
+];
+
+/// Node's win32 `path.basename`: what follows the last separator, trailing separators ignored, and
+/// no leading drive designator (`C:foo.png` → `foo.png`).
+fn attachment_base(raw: &str) -> &str {
+    let trimmed = raw.trim_end_matches(|c| c == '/' || c == '\\');
+    match trimmed.rfind(|c| c == '/' || c == '\\') {
+        Some(index) => &trimmed[index + 1..],
+        None => {
+            // With no separator left, win32 still drops a `C:` prefix, but only at position 0.
+            let bytes = trimmed.as_bytes();
+            if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+                &trimmed[2..]
+            } else {
+                trimmed
+            }
+        }
+    }
+}
+
+/// Node's `rawName.replace(/[^A-Za-z0-9._-]/g, "_") || "attachment"`: one `_` per UTF-16 unit.
+fn safe_attachment_name(base: &str) -> String {
+    let mut out = String::new();
+    for c in base.chars() {
+        if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+            out.push(c);
+        } else {
+            for _ in 0..c.len_utf16() {
+                out.push('_');
+            }
+        }
+    }
+    if out.is_empty() {
+        "attachment".to_string()
+    } else {
+        out
+    }
+}
+
+/// Node's `path.extname(...).toLowerCase()`: from the last dot, but never the leading one or `..`.
+fn attachment_ext(safe: &str) -> String {
+    match safe.rfind('.') {
+        Some(index) if index > 0 && safe != ".." => safe[index..].to_ascii_lowercase(),
+        _ => String::new(),
+    }
 }
 
 /// Node's `answerBody` (`main.ts:104-114`): the discriminated union, rebuilt in schema key order
@@ -711,13 +828,18 @@ impl SessionData {
         }));
     }
 
-    fn learner(&mut self, text: &str) {
-        self.upsert(json!({
-            "id": format!("l:{}", engine::uuid_v4()),
-            "at": events::iso_now(),
-            "kind": "learner",
-            "text": text,
-        }));
+    fn learner(&mut self, text: &str, attachments: Option<&Value>) {
+        let mut item = Map::new();
+        item.insert("id".to_string(), json!(format!("l:{}", engine::uuid_v4())));
+        item.insert("at".to_string(), json!(events::iso_now()));
+        item.insert("kind".to_string(), json!("learner"));
+        item.insert("text".to_string(), json!(text));
+        if let Some(attachments) = attachments
+            .filter(|value| value.as_array().is_some_and(|items| !items.is_empty()))
+        {
+            item.insert("attachments".to_string(), attachments.clone());
+        }
+        self.upsert(Value::Object(item));
     }
 
     /// Node's `onEvent`: engine events to chat items and usage.
@@ -903,8 +1025,8 @@ impl TurnHost for SessionData {
         SessionData::notice(self, level, text);
     }
 
-    fn learner(&mut self, text: &str) {
-        SessionData::learner(self, text);
+    fn learner(&mut self, text: &str, attachments: Option<&Value>) {
+        SessionData::learner(self, text, attachments);
     }
 
     fn event(&mut self, event: &EngineEvent, late: bool) {
@@ -968,6 +1090,16 @@ impl Shared {
             .expect("sessions lock")
             .get(id)
             .cloned()
+    }
+
+    /// The interrupt watchdog of `id`: the turn never reported its result, so give it up.
+    fn watchdog_fired(&self, id: &str, ticket: u64) {
+        let Some(session) = self.session(id) else {
+            return;
+        };
+        let mut guard = session.lock().expect("session lock");
+        let Session { data, turns } = &mut *guard;
+        turns.watchdog_fired(data, ticket);
     }
 }
 
@@ -1145,6 +1277,9 @@ impl tools::ToolHost for SessionToolHost {
 
 fn flush(shared: &Shared, data: &mut SessionData, turns: &Turns) {
     data.save_pending = false;
+    if data.deleted {
+        return;
+    }
     let dir = shared.session_dir(&data.state.id);
     if let Err(error) = fs::create_dir_all(&dir) {
         eprintln!("[sessions] save failed: {error}");
@@ -1190,6 +1325,7 @@ fn make_session(
         streamed: HashMap::new(),
         finalised: HashMap::new(),
         save_pending: false,
+        deleted: false,
         manager: Arc::downgrade(shared),
     };
     Arc::new(Mutex::new(Session { data, turns }))
@@ -2120,6 +2256,238 @@ impl SessionManager {
         attached.map(|generation| (generation, receiver))
     }
 
+    // ───────────── session control ─────────────
+
+    /// Node's `saveAttachments`: the files land under the session, the metadata keeps Node's order.
+    pub fn save_attachments(
+        &self,
+        id: &str,
+        files: Vec<AttachmentUpload>,
+    ) -> Result<Value, HttpError> {
+        let Some(session) = self.0.session(id) else {
+            return Err(HttpError::new(404, "Session not found"));
+        };
+        let closed = session.lock().expect("session lock").data.state.status == SessionStatus::Closed;
+        if closed {
+            return Err(HttpError::new(409, "Session is closed"));
+        }
+        let dir = self.0.session_dir(id).join("attachments");
+        fs::create_dir_all(&dir).map_err(|error| HttpError::new(500, error.to_string()))?;
+        let mut metas = Vec::new();
+        for file in files {
+            if file.name.is_empty() {
+                continue;
+            }
+            let raw = attachment_base(&file.name);
+            let safe = safe_attachment_name(raw);
+            let ext = attachment_ext(&safe);
+            if !ALLOWED_ATTACHMENT_EXTS.contains(&ext.as_str()) {
+                // The files already written stay, as in Node.
+                let shown = if ext.is_empty() {
+                    "sconosciuto".to_string()
+                } else {
+                    ext
+                };
+                return Err(HttpError::new(
+                    400,
+                    format!("Tipo di file non supportato: {shown}"),
+                ));
+            }
+            let file_id = engine::uuid_v4();
+            let stored = format!("{}_{}", &file_id[..8], safe);
+            fs::write(dir.join(&stored), &file.bytes)
+                .map_err(|error| HttpError::new(500, error.to_string()))?;
+            let mime_type = file
+                .mime_type
+                .filter(|mime| !mime.is_empty())
+                .map(|mime| mime.to_ascii_lowercase())
+                .unwrap_or_else(|| "application/octet-stream".to_string());
+            let mut meta = Map::new();
+            meta.insert("id".to_string(), json!(file_id));
+            meta.insert("name".to_string(), json!(raw));
+            meta.insert(
+                "path".to_string(),
+                json!(format!(".learner/sessions/{id}/attachments/{stored}")),
+            );
+            meta.insert("mimeType".to_string(), json!(mime_type));
+            meta.insert("size".to_string(), json!(file.bytes.len()));
+            metas.push(Value::Object(meta));
+        }
+        Ok(Value::Array(metas))
+    }
+
+    /// Node's `interrupt`: in-band for Claude, so the process stays up. `Some(ticket)` arms the watchdog.
+    pub fn interrupt(&self, id: &str) -> Result<(), HttpError> {
+        let Some(session) = self.0.session(id) else {
+            return Err(HttpError::new(404, "Session not found"));
+        };
+        let ticket = {
+            let mut guard = session.lock().expect("session lock");
+            let Session { data, turns } = &mut *guard;
+            turns.interrupt(data)
+        };
+        if let Some(ticket) = ticket {
+            let weak = Arc::downgrade(&self.0);
+            let id = id.to_string();
+            spawn_delayed(crate::turns::WATCHDOG, move || {
+                if let Some(shared) = weak.upgrade() {
+                    shared.watchdog_fired(&id, ticket);
+                }
+            });
+        }
+        Ok(())
+    }
+
+    /// Node's `retry`: reruns the saved turn. Checks, trim and turn under one lock (rules.md).
+    pub async fn retry(&self, id: &str) -> Result<(), HttpError> {
+        let Some(session) = self.0.session(id) else {
+            return Err(HttpError::new(404, "Session not found"));
+        };
+        let needs_launch = {
+            let mut guard = session.lock().expect("session lock");
+            let Session { data, turns } = &mut *guard;
+            if data.state.status == SessionStatus::Closed {
+                return Err(HttpError::new(409, "Session is closed"));
+            }
+            if data.state.status.is_busy() {
+                return Err(HttpError::new(
+                    409,
+                    "The teacher is busy: wait for the current turn to finish",
+                ));
+            }
+            if !turns.can_retry() {
+                return Err(HttpError::new(400, "Nessun turno fallito da riprovare"));
+            }
+            if turns
+                .saved_last_turn()
+                .is_some_and(|turn| turn.pushed_learner)
+            {
+                let last = data.state.items.iter().rposition(|item| {
+                    item.get("kind").and_then(Value::as_str) == Some("learner")
+                });
+                if let Some(index) = last {
+                    data.state.items.truncate(index + 1);
+                }
+            } else {
+                data.state.items.retain(|item| {
+                    let kind = item.get("kind").and_then(Value::as_str);
+                    let error_notice = kind == Some("notice")
+                        && item.get("level").and_then(Value::as_str) == Some("error");
+                    let streaming_teacher = kind == Some("teacher")
+                        && item.get("streaming").and_then(Value::as_bool) == Some(true);
+                    !error_notice && !streaming_teacher
+                });
+            }
+            data.streamed.clear();
+            data.finalised.clear();
+            data.state.updated_at = events::iso_now();
+            let state = data.state.clone();
+            data.notify(ServerEvent::Snapshot { state });
+            let needs_launch = turns.begin_retry(data).map_err(|message| {
+                HttpError::new(if message == "Session is closed" { 409 } else { 400 }, message)
+            })?;
+            if !needs_launch {
+                turns.finish_send(data);
+            }
+            needs_launch
+        };
+        if needs_launch {
+            self.launch_turn(&session)
+                .await
+                .map_err(|message| HttpError::new(500, message))?;
+        }
+        let mut guard = session.lock().expect("session lock");
+        let Session { data, turns } = &mut *guard;
+        flush(&self.0, data, turns);
+        Ok(())
+    }
+
+    /// No more turns: the pending cards are cancelled and the engine is stopped.
+    async fn halt(&self, session: &Arc<Mutex<Session>>) {
+        let handle = {
+            let mut guard = session.lock().expect("session lock");
+            let Session { data, turns } = &mut *guard;
+            data.closing = true;
+            data.cancel_pending();
+            turns.stop()
+        };
+        if let Some(mut handle) = handle {
+            handle.stop().await;
+        }
+    }
+
+    pub async fn close(&self, id: &str) -> Result<(), HttpError> {
+        let Some(session) = self.0.session(id) else {
+            return Err(HttpError::new(404, "Session not found"));
+        };
+        self.halt(&session).await;
+        let mut guard = session.lock().expect("session lock");
+        let Session { data, turns } = &mut *guard;
+        let retryable = turns.can_retry();
+        data.apply_status(SessionStatus::Closed, None, retryable);
+        flush(&self.0, data, turns);
+        Ok(())
+    }
+
+    /// Stops the session and forgets it: its `.learner/sessions/<id>` dir (attachments included) goes.
+    pub async fn delete(&self, id: &str) -> Result<(), HttpError> {
+        let Some(session) = self.0.session(id) else {
+            return Err(HttpError::new(404, "Session not found"));
+        };
+        self.halt(&session).await;
+        {
+            let mut guard = session.lock().expect("session lock");
+            guard.data.deleted = true;
+            guard.data.save_pending = false;
+        }
+        self.0
+            .sessions
+            .lock()
+            .expect("sessions lock")
+            .shift_remove(id);
+        let dir = self.0.session_dir(id);
+        let mut failure: Option<std::io::Error> = None;
+        for attempt in 0..3 {
+            match fs::remove_dir_all(&dir) {
+                Ok(()) => {
+                    failure = None;
+                    break;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    failure = None;
+                    break;
+                }
+                Err(error) => {
+                    failure = Some(error);
+                    if attempt < 2 {
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                }
+            }
+        }
+        self.0.touch_sessions();
+        match failure {
+            Some(error) => Err(HttpError::new(500, error.to_string())),
+            None => Ok(()),
+        }
+    }
+
+    /// The pids of the live engines, in session map order.
+    pub fn live_pids(&self) -> Vec<u32> {
+        let sessions: Vec<Arc<Mutex<Session>>> = self
+            .0
+            .sessions
+            .lock()
+            .expect("sessions lock")
+            .values()
+            .cloned()
+            .collect();
+        sessions
+            .iter()
+            .filter_map(|session| session.lock().expect("session lock").turns.pid())
+            .collect()
+    }
+
     /// Server shutdown: stop every process and persist. The retry flag is written before `stop`
     /// clears it, so a crashed turn stays retryable across a graceful quit (Node writes false here;
     /// its `state.retryable` covers the reload either way).
@@ -2222,12 +2590,65 @@ mod tests {
         assert_eq!(text, "x");
         assert_eq!(attachments, Some(json!([])));
 
+        // zod's `.optional()` refuses null: a missing key is the only "no attachments".
+        let error = validate_message(&json!({"text": "x", "attachments": null})).unwrap_err();
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
         assert_eq!(
-            validate_message(&json!({"text": "x", "attachments": null}))
-                .unwrap()
-                .1,
-            None
+            error.message,
+            "attachments: Invalid input: expected array, received null"
         );
+
+        let error =
+            validate_message(&json!({"text": "x", "attachments": [{"name": "a"}]})).unwrap_err();
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            error.message,
+            "attachments.0.id: Invalid input: expected string, received undefined; \
+             attachments.0.path: Invalid input: expected string, received undefined; \
+             attachments.0.mimeType: Invalid input: expected string, received undefined; \
+             attachments.0.size: Invalid input: expected number, received undefined"
+        );
+
+        // A valid element is rebuilt in schema order, unknown keys dropped.
+        let (_, attachments) = validate_message(&json!({
+            "text": "x",
+            "attachments": [{
+                "size": 3,
+                "extra": true,
+                "mimeType": "m",
+                "path": "p",
+                "name": "n",
+                "id": "i",
+            }],
+        }))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_string(&attachments.expect("the metas")).unwrap(),
+            r#"[{"id":"i","name":"n","path":"p","mimeType":"m","size":3}]"#
+        );
+    }
+
+    #[test]
+    fn attachment_name_helpers_follow_node() {
+        assert_eq!(attachment_base("../../../etc/passwd.png"), "passwd.png");
+        assert_eq!(attachment_base("notes.pdf/"), "notes.pdf");
+        assert_eq!(attachment_base("C:foo.png"), "foo.png");
+        assert_eq!(attachment_base(""), "");
+
+        // basename, then the safe name, then Node's extname.
+        let base = attachment_base("C:\\x\\a b.PDF");
+        assert_eq!(base, "a b.PDF");
+        let safe = safe_attachment_name(base);
+        assert_eq!(safe, "a_b.PDF");
+        assert_eq!(attachment_ext(&safe), ".pdf");
+
+        assert_eq!(safe_attachment_name("😀.png"), "__.png", "one _ per UTF-16 unit");
+        assert_eq!(safe_attachment_name(""), "attachment");
+
+        assert_eq!(attachment_ext(".png"), "");
+        assert_eq!(attachment_ext("..png"), ".png");
+        assert_eq!(attachment_ext(".."), "");
+        assert_eq!(attachment_ext("attachment"), "");
     }
 
     #[test]
@@ -2364,6 +2785,8 @@ mod tests {
 
     impl EngineHandle for FakeHandle {
         fn send(&mut self, _text: &str) {}
+
+        fn interrupt(&mut self) {}
 
         fn stop(&mut self) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
             Box::pin(async {})
