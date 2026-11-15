@@ -2,12 +2,11 @@
 
 use serde_json::{Map, Value, json};
 
-use crate::events::iso_now;
 use crate::graph::store::GraphStore;
 use crate::js;
 use crate::lesson::doc;
 use crate::lesson::js::text;
-use crate::sessions::{issue, utf16_len};
+use crate::sessions::{invalid_type, issue, utf16_len};
 use crate::tools::util::{self, fail};
 use crate::tools::{ToolDef, ToolFuture, ToolHost};
 
@@ -258,18 +257,6 @@ impl Issues {
     }
 }
 
-fn js_type(value: Option<&Value>) -> &'static str {
-    match value {
-        None => "undefined",
-        Some(Value::Null) => "null",
-        Some(Value::Bool(_)) => "boolean",
-        Some(Value::Number(_)) => "number",
-        Some(Value::String(_)) => "string",
-        Some(Value::Array(_)) => "array",
-        Some(Value::Object(_)) => "object",
-    }
-}
-
 fn expect_object<'a>(
     value: Option<&'a Value>,
     path: &str,
@@ -278,10 +265,7 @@ fn expect_object<'a>(
     match value.and_then(Value::as_object) {
         Some(object) => Some(object),
         None => {
-            issues.abort(
-                path,
-                format!("Invalid input: expected object, received {}", js_type(value)),
-            );
+            issues.abort(path, invalid_type("object", value));
             None
         }
     }
@@ -295,10 +279,7 @@ fn expect_array<'a>(
     match value.and_then(Value::as_array) {
         Some(items) => Some(items),
         None => {
-            issues.abort(
-                path,
-                format!("Invalid input: expected array, received {}", js_type(value)),
-            );
+            issues.abort(path, invalid_type("array", value));
             None
         }
     }
@@ -308,10 +289,7 @@ fn expect_string(value: Option<&Value>, path: &str, issues: &mut Issues) -> Opti
     match value {
         Some(Value::String(plain)) => Some(plain.clone()),
         other => {
-            issues.abort(
-                path,
-                format!("Invalid input: expected string, received {}", js_type(other)),
-            );
+            issues.abort(path, invalid_type("string", other));
             None
         }
     }
@@ -334,10 +312,7 @@ fn min_one(text: String, path: &str, issues: &mut Issues) -> Option<String> {
 fn optional_int(value: Option<&Value>, path: &str, issues: &mut Issues) -> Option<f64> {
     let value = value?;
     let Some(number) = value.as_f64() else {
-        issues.abort(
-            path,
-            format!("Invalid input: expected number, received {}", js_type(Some(value))),
-        );
+        issues.abort(path, invalid_type("number", Some(value)));
         return None;
     };
     if !number.is_finite() || number.fract() != 0.0 {
@@ -858,13 +833,7 @@ fn parse_node(value: &Value, path: &str, issues: &mut Issues) -> Value {
 pub fn validate(input: &Value) -> Result<Value, Vec<String>> {
     let Some(object) = input.as_object() else {
         let mut issues = Issues::default();
-        issues.abort(
-            "",
-            format!(
-                "Invalid input: expected object, received {}",
-                js_type(Some(input))
-            ),
-        );
+        issues.abort("", invalid_type("object", Some(input)));
         return Err(issues.out);
     };
     let mut issues = Issues::default();
@@ -1113,12 +1082,10 @@ pub fn run(input: Value, host: &dyn ToolHost) -> ToolFuture<'_> {
 
         let abs = lesson.abs.clone();
         let lesson_path = util::to_rel(host.data_root(), &abs);
-        // Node's `appendNode` stamps the same object it writes; keep the item's copy in step.
-        node["capturedAt"] = Value::String(iso_now());
         let appended = doc::append_node(doc::AppendOptions {
             lesson_path: Some(abs.to_string_lossy().into_owned()),
             slug: None,
-            node: node.clone(),
+            node,
             base_dir: Some(host.data_root().to_string_lossy().into_owned()),
         });
         let appended = match appended {
@@ -1131,9 +1098,9 @@ pub fn run(input: Value, host: &dyn ToolHost) -> ToolFuture<'_> {
             "kind": "node",
             "nodeId": node_id,
             "planNode": plan_node,
-            "title": text(node.get("title")),
+            "title": text(appended.node.get("title")),
             "lessonPath": lesson_path,
-            "node": node,
+            "node": appended.node,
         }));
         host.set_lesson(lesson_path, Some(node_id.clone()));
         util::recompute_plan(host);
@@ -1342,7 +1309,12 @@ mod tests {
         assert_eq!(item["lessonPath"], json!(rel));
         assert_eq!(item["node"]["nodeId"], json!("prima-cosa"));
         assert_eq!(item["node"]["quiz"]["correctAnswer"], json!("b"));
-        assert!(item["node"]["capturedAt"].is_string(), "{item}");
+        // One object, one stamp: the chat item is the node the island holds, `capturedAt` included.
+        assert_eq!(
+            item["node"]["capturedAt"],
+            island(&host)["nodes"][0]["capturedAt"],
+            "{item}"
+        );
 
         assert!(
             host.events().contains(&json!({
@@ -1794,7 +1766,8 @@ mod tests {
             .call(&TOOL, node_in(json!({"ankiParams": anki})))
             .await;
         assert!(none.text.contains("kept after the check passes"), "{}", none.text);
-        host.log_progress(progress(&host, "N1", false));
+        host.log_progress(progress(&host, "N1", false))
+            .expect("append a missed check");
         let missed = host
             .call(&TOOL, node_in(json!({"ankiParams": anki})))
             .await;
@@ -1804,7 +1777,8 @@ mod tests {
             missed.text
         );
         // a passed check keeps them
-        host.log_progress(progress(&host, "N1", true));
+        host.log_progress(progress(&host, "N1", true))
+            .expect("append a passed check");
         let passed = host
             .call(&TOOL, node_in(json!({"ankiParams": anki})))
             .await;

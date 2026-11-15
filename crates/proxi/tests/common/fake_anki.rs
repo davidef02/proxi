@@ -3,12 +3,12 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use axum::Router;
 use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use serde_json::{Map, Value, json};
+use axum::Router;
+use serde_json::{json, Map, Value};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 

@@ -16,8 +16,10 @@ use reqwest::{Client, Response, StatusCode};
 use serde_json::{Value, json};
 
 use common::cli_golden;
-use common::sessions::{body_json, data_events, post, read_until, require_fake_engine, wait_for};
-use proxi::server::{ServerOptions, start};
+use common::sessions::{
+    body_json, data_events, fake_engine_options, post, read_until, require_fake_engine, wait_for,
+};
+use proxi::server::start;
 
 fn golden_file() -> PathBuf {
     common::repo_root()
@@ -267,20 +269,9 @@ async fn sessions_match_the_node_golden() {
         data: root_variants(&data),
     };
 
-    let mut options = ServerOptions::new(repo.clone());
-    options.data_root = Some(data.clone());
-    options.memory_secrets = true;
+    let mut options = fake_engine_options(&repo, &data);
     // Long enough that only the turn's events can appear in the stream, like the Node capture.
     options.keep_alive = Duration::from_secs(120);
-    options.bins.claude = Some(PathBuf::from("node"));
-    options.bins.claude_args = vec![
-        common::repo_root()
-            .join("app")
-            .join("test")
-            .join("fake-claude.mjs")
-            .display()
-            .to_string(),
-    ];
     let server = start(options).await.expect("start Rust server");
     let client = Client::new();
 
@@ -474,18 +465,7 @@ async fn mcp_matches_the_node_golden() {
         data: root_variants(&data),
     };
 
-    let mut options = ServerOptions::new(repo.clone());
-    options.data_root = Some(data.clone());
-    options.memory_secrets = true;
-    options.bins.claude = Some(PathBuf::from("node"));
-    options.bins.claude_args = vec![
-        common::repo_root()
-            .join("app")
-            .join("test")
-            .join("fake-claude.mjs")
-            .display()
-            .to_string(),
-    ];
+    let options = fake_engine_options(&repo, &data);
     let server = start(options).await.expect("start Rust server");
     let client = Client::new();
 

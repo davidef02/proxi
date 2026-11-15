@@ -8,6 +8,7 @@ use std::path::Path;
 
 use serde_json::{Map, Value};
 
+use crate::course_data;
 use crate::js;
 use crate::lesson;
 
@@ -84,10 +85,7 @@ pub fn append_progress(data_root: &Path, record: &Value) -> std::io::Result<()> 
             "progress record without a course",
         ));
     };
-    let file = data_root
-        .join("courses")
-        .join(course)
-        .join("progress.jsonl");
+    let file = course_data::progress_file(data_root, course);
     let mut line = record.to_string();
     line.push('\n');
     let mut handle = fs::OpenOptions::new()

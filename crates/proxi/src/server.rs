@@ -689,7 +689,7 @@ fn body_object(bytes: &Bytes) -> Result<serde_json::Map<String, Value>, Response
             StatusCode::BAD_REQUEST,
             &format!(
                 ": Invalid input: expected object, received {}",
-                js_type(&other)
+                js::js_type(&other)
             ),
         )),
     }
@@ -709,17 +709,6 @@ fn course_from_body(body: &Bytes) -> Result<String, Response> {
         return Err(json_error(StatusCode::BAD_REQUEST, &issues.join("; ")));
     }
     Ok(course.expect("a required string"))
-}
-
-fn js_type(value: &Value) -> &'static str {
-    match value {
-        Value::Array(_) => "array",
-        Value::Null => "null",
-        Value::String(_) => "string",
-        Value::Number(_) => "number",
-        Value::Bool(_) => "boolean",
-        Value::Object(_) => "object",
-    }
 }
 
 /// `GET /api/anki`: one course's deck, else every course (Hono's `c.req.query` reads the first one).
@@ -1168,7 +1157,7 @@ fn required_string(
                 key,
                 &format!(
                     "Invalid input: expected string, received {}",
-                    js_type(other)
+                    js::js_type(other)
                 ),
             );
             None
@@ -1250,7 +1239,7 @@ fn exercise_body(bytes: &Bytes, save: bool) -> Result<ExerciseBody, Response> {
                 "baseVersion",
                 &format!(
                     "Invalid input: expected string, received {}",
-                    js_type(other)
+                    js::js_type(other)
                 ),
             ),
         }
@@ -1261,7 +1250,7 @@ fn exercise_body(bytes: &Bytes, save: bool) -> Result<ExerciseBody, Response> {
                 "sessionId",
                 &format!(
                     "Invalid input: expected string, received {}",
-                    js_type(other)
+                    js::js_type(other)
                 ),
             );
         }

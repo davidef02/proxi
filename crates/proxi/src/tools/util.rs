@@ -158,6 +158,37 @@ fn unique(values: Vec<String>) -> Vec<String> {
     out
 }
 
+/// `option.value ?? option.label`: the value a card answers with (Node's `valueOf`).
+pub fn option_value(option: &Value) -> String {
+    match option.get("value") {
+        Some(Value::String(value)) => value.clone(),
+        _ => js::js_string(option.get("label")),
+    }
+}
+
+/// The label of the matching option, or the value itself when no option has it.
+pub fn label_of(options: &[Value], value: &Value) -> Value {
+    let Some(selected) = value.as_str() else {
+        return value.clone();
+    };
+    options
+        .iter()
+        .find(|option| option_value(option) == selected)
+        .and_then(|option| option.get("label").cloned())
+        .unwrap_or_else(|| serde_json::json!(selected))
+}
+
+/// A JS `Set` size.
+pub fn unique_count(values: &[String]) -> usize {
+    let mut seen: Vec<&String> = Vec::new();
+    for value in values {
+        if !seen.contains(&value) {
+            seen.push(value);
+        }
+    }
+    seen.len()
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;

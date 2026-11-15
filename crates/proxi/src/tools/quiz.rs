@@ -4,7 +4,7 @@ use serde_json::{Map, Value, json};
 
 use crate::js;
 use crate::lesson::artifact;
-use crate::sessions::issue;
+use crate::sessions::{invalid_type, issue};
 use crate::tools::util;
 use crate::tools::{Cancelled, ToolDef, ToolFuture, ToolHost, ToolOutcome};
 
@@ -29,7 +29,7 @@ const BAD_KIND: &str = "Invalid option: expected one of \"probe\"|\"predict\"|\"
 /// Node's `quizSchema`, hand-rolled: the cleaned data or one `"<path>: <message>"` per issue.
 fn validate(input: &Value) -> Result<Value, Vec<String>> {
     let Some(object) = input.as_object() else {
-        return Err(vec![issue("(input)", &invalid_type("object", input))]);
+        return Err(vec![issue("(input)", &invalid_type("object", Some(input)))]);
     };
     let mut issues = Vec::new();
     let mut data = Map::new();
@@ -50,7 +50,7 @@ fn validate(input: &Value) -> Result<Value, Vec<String>> {
                 "nodeId",
                 "Invalid string: must match pattern /^N\\d+$/",
             )),
-            other => issues.push(issue("nodeId", &invalid_type("string", other))),
+            other => issues.push(issue("nodeId", &invalid_type("string", Some(other)))),
         }
     }
 
@@ -61,13 +61,13 @@ fn validate(input: &Value) -> Result<Value, Vec<String>> {
         Some(Value::String(question)) => {
             data.insert("question".to_string(), Value::String(question.clone()));
         }
-        Some(other) => issues.push(issue("question", &invalid_type("string", other))),
+        Some(other) => issues.push(issue("question", &invalid_type("string", Some(other)))),
         None => issues.push(issue("question", MISSING_STRING)),
     }
 
     if let Some(options) = object.get("options") {
         match options.as_array() {
-            None => issues.push(issue("options", &invalid_type("array", options))),
+            None => issues.push(issue("options", &invalid_type("array", Some(options)))),
             Some(items) if items.len() > 6 => {
                 issues.push(issue("options", "Too big: expected array to have <=6 items"));
             }
@@ -76,7 +76,7 @@ fn validate(input: &Value) -> Result<Value, Vec<String>> {
                 for (index, item) in items.iter().enumerate() {
                     let path = format!("options.{index}");
                     match item.as_object() {
-                        None => issues.push(issue(&path, &invalid_type("object", item))),
+                        None => issues.push(issue(&path, &invalid_type("object", Some(item)))),
                         Some(option) => clean.push(read_option(option, &path, &mut issues)),
                     }
                 }
@@ -88,10 +88,7 @@ fn validate(input: &Value) -> Result<Value, Vec<String>> {
             }
         }
     } else {
-        issues.push(issue(
-            "options",
-            "Invalid input: expected array, received undefined",
-        ));
+        issues.push(issue("options", &invalid_type("array", None)));
     }
 
     if let Some(multi_select) = object.get("multiSelect") {
@@ -99,7 +96,7 @@ fn validate(input: &Value) -> Result<Value, Vec<String>> {
             Value::Bool(_) => {
                 data.insert("multiSelect".to_string(), multi_select.clone());
             }
-            other => issues.push(issue("multiSelect", &invalid_type("boolean", other))),
+            other => issues.push(issue("multiSelect", &invalid_type("boolean", Some(other)))),
         }
     }
 
@@ -110,7 +107,7 @@ fn validate(input: &Value) -> Result<Value, Vec<String>> {
         Some(Value::String(explanation)) => {
             data.insert("explanation".to_string(), Value::String(explanation.clone()));
         }
-        Some(other) => issues.push(issue("explanation", &invalid_type("string", other))),
+        Some(other) => issues.push(issue("explanation", &invalid_type("string", Some(other)))),
         None => issues.push(issue("explanation", MISSING_STRING)),
     }
 
@@ -127,13 +124,16 @@ fn validate(input: &Value) -> Result<Value, Vec<String>> {
 
     if let Some(misconceptions) = object.get("misconceptions") {
         match misconceptions.as_array() {
-            None => issues.push(issue("misconceptions", &invalid_type("array", misconceptions))),
+            None => issues.push(issue(
+                "misconceptions",
+                &invalid_type("array", Some(misconceptions)),
+            )),
             Some(items) => {
                 let mut clean = Vec::with_capacity(items.len());
                 for (index, item) in items.iter().enumerate() {
                     let path = format!("misconceptions.{index}");
                     match item.as_object() {
-                        None => issues.push(issue(&path, &invalid_type("object", item))),
+                        None => issues.push(issue(&path, &invalid_type("object", Some(item)))),
                         Some(misconception) => {
                             clean.push(read_misconception(misconception, &path, &mut issues))
                         }
@@ -162,7 +162,7 @@ fn read_option(option: &Map<String, Value>, path: &str, issues: &mut Vec<String>
         }
         Some(other) => issues.push(issue(
             &format!("{path}.label"),
-            &invalid_type("string", other),
+            &invalid_type("string", Some(other)),
         )),
         None => issues.push(issue(&format!("{path}.label"), MISSING_STRING)),
     }
@@ -174,7 +174,10 @@ fn read_option(option: &Map<String, Value>, path: &str, issues: &mut Vec<String>
         Some(Value::String(value)) => {
             clean.insert("value".to_string(), Value::String(value.clone()));
         }
-        Some(other) => issues.push(issue(&format!("{path}.value"), &invalid_type("string", other))),
+        Some(other) => issues.push(issue(
+            &format!("{path}.value"),
+            &invalid_type("string", Some(other)),
+        )),
     }
     Value::Object(clean)
 }
@@ -192,31 +195,12 @@ fn read_misconception(
             }
             Some(other) => issues.push(issue(
                 &format!("{path}.{key}"),
-                &invalid_type("string", other),
+                &invalid_type("string", Some(other)),
             )),
             None => issues.push(issue(&format!("{path}.{key}"), MISSING_STRING)),
         }
     }
     Value::Object(clean)
-}
-
-fn invalid_type(expected: &str, value: &Value) -> String {
-    format!(
-        "Invalid input: expected {expected}, received {}",
-        received(value)
-    )
-}
-
-/// The JS type name zod prints after `received`.
-fn received(value: &Value) -> &'static str {
-    match value {
-        Value::Null => "null",
-        Value::Bool(_) => "boolean",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Array(_) => "array",
-        Value::Object(_) => "object",
-    }
 }
 
 /// `^N\d+$`, JS `\d` being ASCII digits.
@@ -231,8 +215,8 @@ fn is_plan_node(text: &str) -> bool {
 fn validate_quiz(input: &Value, dag: Option<&str>) -> Vec<String> {
     let mut errs = Vec::new();
     let options = option_list(input);
-    let values: Vec<String> = options.iter().map(option_value).collect();
-    if unique_count(&values) != values.len() {
+    let values: Vec<String> = options.iter().map(util::option_value).collect();
+    if util::unique_count(&values) != values.len() {
         errs.push("option values must be unique".to_string());
     }
     let correct = as_strings(input.get("correctAnswer"));
@@ -241,7 +225,7 @@ fn validate_quiz(input: &Value, dag: Option<&str>) -> Vec<String> {
             errs.push(format!("correctAnswer \"{value}\" is not an option value"));
         }
     }
-    if unique_count(&correct) > 1 && !js::truthy(input.get("multiSelect")) {
+    if util::unique_count(&correct) > 1 && !js::truthy(input.get("multiSelect")) {
         errs.push("more than one correct answer requires multiSelect: true".to_string());
     }
     for misconception in input
@@ -322,7 +306,9 @@ async fn quiz(input: Value, host: &dyn ToolHost) -> ToolOutcome {
     };
 
     let result = util::grade_quiz(&input, &answer);
-    log_progress(&input, &result, host);
+    if let Err(message) = log_progress(&input, &result, host) {
+        return util::fail(message);
+    }
     util::recompute_plan(host);
 
     let mut out = Map::new();
@@ -349,7 +335,7 @@ async fn quiz(input: Value, host: &dyn ToolHost) -> ToolOutcome {
     if result.get("correct") != Some(&Value::Bool(true)) {
         let correct = as_strings(input.get("correctAnswer"))
             .iter()
-            .map(|value| label_of(&options, &Value::String(value.clone())))
+            .map(|value| util::label_of(&options, &Value::String(value.clone())))
             .collect();
         out.insert("correctAnswer".to_string(), Value::Array(correct));
     }
@@ -357,7 +343,8 @@ async fn quiz(input: Value, host: &dyn ToolHost) -> ToolOutcome {
 }
 
 /// The progress record Node writes after a grade; absent values are left out, as JSON.stringify does.
-fn log_progress(input: &Value, result: &Value, host: &dyn ToolHost) {
+/// An append failure rejects the call, like Node's `appendFileSync`.
+fn log_progress(input: &Value, result: &Value, host: &dyn ToolHost) -> Result<(), String> {
     let mut record = Map::new();
     if let Some(path) = host.lesson_path() {
         record.insert(
@@ -379,7 +366,7 @@ fn log_progress(input: &Value, result: &Value, host: &dyn ToolHost) {
     if let Some(confidence) = result.get("confidence") {
         record.insert("confidence".to_string(), confidence.clone());
     }
-    host.log_progress(record);
+    host.log_progress(record)
 }
 
 fn option_list(input: &Value) -> Vec<Value> {
@@ -390,31 +377,17 @@ fn option_list(input: &Value) -> Vec<Value> {
         .unwrap_or_default()
 }
 
-/// `option.value ?? option.label`: the value a card answers with.
-fn option_value(option: &Value) -> String {
-    match option.get("value") {
-        Some(Value::String(value)) => value.clone(),
-        _ => js::js_string(option.get("label")),
-    }
-}
-
 /// The labels of the selected values; a value with no option comes back unchanged.
 fn labels(options: &[Value], selected: Option<&Value>) -> Vec<Value> {
     selected
         .and_then(Value::as_array)
-        .map(|items| items.iter().map(|value| label_of(options, value)).collect())
+        .map(|items| {
+            items
+                .iter()
+                .map(|value| util::label_of(options, value))
+                .collect()
+        })
         .unwrap_or_default()
-}
-
-fn label_of(options: &[Value], value: &Value) -> Value {
-    let Some(selected) = value.as_str() else {
-        return value.clone();
-    };
-    options
-        .iter()
-        .find(|option| option_value(option) == selected)
-        .and_then(|option| option.get("label").cloned())
-        .unwrap_or_else(|| json!(selected))
 }
 
 /// Node's `asArray`: one answer or several, always a list.
@@ -424,17 +397,6 @@ fn as_strings(value: Option<&Value>) -> Vec<String> {
         Some(Value::String(text)) => vec![text.clone()],
         _ => Vec::new(),
     }
-}
-
-/// A JS `Set` size.
-fn unique_count(values: &[String]) -> usize {
-    let mut seen: Vec<&String> = Vec::new();
-    for value in values {
-        if !seen.contains(&value) {
-            seen.push(value);
-        }
-    }
-    seen.len()
 }
 
 #[cfg(test)]
@@ -530,6 +492,21 @@ mod tests {
             serde_json::to_string(&progress[0]).unwrap(),
             r#"{"nodeRefs":[],"kind":"probe","question":"Q?","correct":false,"dontKnow":false,"confidence":80}"#
         );
+    }
+
+    #[tokio::test]
+    async fn a_failed_progress_append_fails_the_call() {
+        let host = FakeHost::new(config());
+        // Node's `appendFileSync` creates the file but not the folder: with the course gone the
+        // awaited `logProgress` rejects, so the quiz call is an error, not a silent success.
+        std::fs::remove_dir_all(host.data_root().join("courses").join("demo"))
+            .expect("remove the course folder");
+        host.queue_answer(json!({"selected": ["B"], "dontKnow": false}));
+
+        let out = host.call(&TOOL, quiz_in()).await;
+
+        assert!(out.is_error, "{}", out.text);
+        assert!(out.text.contains("os error"), "{}", out.text);
     }
 
     #[tokio::test]

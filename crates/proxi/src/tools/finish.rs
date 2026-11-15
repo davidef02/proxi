@@ -11,6 +11,7 @@ use crate::anki_client;
 use crate::js;
 use crate::lesson::artifact;
 use crate::lesson::reference::{self, CompileReferenceOptions};
+use crate::sessions::{invalid_type, issue};
 use crate::settings;
 use crate::slug;
 use crate::tools::util::{self, course_dir, current_lesson, fail, to_rel};
@@ -44,9 +45,9 @@ fn schema() -> Value {
 /// zod's `safeParse`: the cleaned object in schema key order, or one `"<path>: <message>"` per issue.
 fn validate(input: &Value) -> Result<Value, Vec<String>> {
     let Some(object) = input.as_object() else {
-        return Err(vec![format!(
-            "(input): Invalid input: expected object, received {}",
-            js_type(input)
+        return Err(vec![issue(
+            "(input)",
+            &invalid_type("object", Some(input)),
         )]);
     };
     let mut issues = Vec::new();
@@ -54,9 +55,7 @@ fn validate(input: &Value) -> Result<Value, Vec<String>> {
     for (key, required) in FIELDS {
         match object.get(key) {
             None if required => {
-                issues.push(format!(
-                    "{key}: Invalid input: expected string, received undefined"
-                ));
+                issues.push(issue(key, &invalid_type("string", None)));
             }
             None => {}
             Some(Value::String(text)) => {
@@ -68,28 +67,13 @@ fn validate(input: &Value) -> Result<Value, Vec<String>> {
                     out.insert(key.to_string(), Value::String(text.clone()));
                 }
             }
-            Some(value) => issues.push(format!(
-                "{key}: Invalid input: expected string, received {}",
-                js_type(value)
-            )),
+            Some(value) => issues.push(issue(key, &invalid_type("string", Some(value)))),
         }
     }
     if issues.is_empty() {
         Ok(Value::Object(out))
     } else {
         Err(issues)
-    }
-}
-
-/// A JSON value's `typeof` as zod names it.
-fn js_type(value: &Value) -> &'static str {
-    match value {
-        Value::Null => "null",
-        Value::Bool(_) => "boolean",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Array(_) => "array",
-        Value::Object(_) => "object",
     }
 }
 

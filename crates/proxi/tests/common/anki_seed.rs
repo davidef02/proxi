@@ -3,9 +3,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
-use super::fake_anki::{FakeCard, FakeState, card};
+use super::fake_anki::{card, FakeCard, FakeState};
 use proxi::course_data::progress_file;
 
 pub const CURRICULUM: &str = r#"{"chapters":[{"title":"Demo","slug":"demo","lessons":[{"title":"Lesson T","slug":"t","plannedNodes":2},{"title":"Lesson U","slug":"u","plannedNodes":1}]},{"title":"Vuoto","slug":"vuoto","lessons":[]}]}"#;
@@ -58,12 +58,7 @@ pub fn seed(data_root: &Path) {
         "0002-u.html",
         lesson_doc(2, "Lesson U", "u", &["dup"]),
     );
-    write_lesson(
-        data_root,
-        "orfano",
-        "0001-o.html",
-        lesson_doc(1, "O", "o", &["x"]),
-    );
+    write_lesson(data_root, "orfano", "0001-o.html", lesson_doc(1, "O", "o", &["x"]));
     fs::write(progress_file(data_root, "demo"), SEED_LINE).expect("seed progress log");
 }
 
@@ -114,15 +109,7 @@ pub fn golden_cards() -> Vec<FakeCard> {
             0,
             &[(1_700_000_005_000, 3)],
         ),
-        card(
-            1004,
-            2004,
-            "Proxi::Demo",
-            &[],
-            1,
-            0,
-            &[(1_700_000_006_000, 3)],
-        ),
+        card(1004, 2004, "Proxi::Demo", &[], 1, 0, &[(1_700_000_006_000, 3)]),
         card(
             1005,
             2005,

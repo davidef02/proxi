@@ -55,22 +55,26 @@ impl Fixture {
         fixture
     }
 
-    /// The fake engine, wired the way `proxi serve --claude-bin node --claude-bin-arg <fake>` is.
     pub fn options(&self) -> ServerOptions {
-        let mut options = ServerOptions::new(self.repo.0.clone());
-        options.data_root = Some(self.data.0.clone());
-        options.memory_secrets = true;
-        options.bins.claude = Some(PathBuf::from("node"));
-        options.bins.claude_args = vec![
-            super::repo_root()
-                .join("app")
-                .join("test")
-                .join("fake-claude.mjs")
-                .display()
-                .to_string(),
-        ];
-        options
+        fake_engine_options(&self.repo.0, &self.data.0)
     }
+}
+
+/// The fake engine, wired the way `proxi serve --claude-bin node --claude-bin-arg <fake>` is.
+pub fn fake_engine_options(repo: &Path, data: &Path) -> ServerOptions {
+    let mut options = ServerOptions::new(repo.to_path_buf());
+    options.data_root = Some(data.to_path_buf());
+    options.memory_secrets = true;
+    options.bins.claude = Some(PathBuf::from("node"));
+    options.bins.claude_args = vec![
+        super::repo_root()
+            .join("app")
+            .join("test")
+            .join("fake-claude.mjs")
+            .display()
+            .to_string(),
+    ];
+    options
 }
 
 /// A POST with the CSRF header the routes require.

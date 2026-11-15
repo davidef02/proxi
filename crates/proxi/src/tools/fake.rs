@@ -225,7 +225,7 @@ impl ToolHost for FakeHost {
         id
     }
 
-    fn log_progress(&self, record: Map<String, Value>) {
+    fn log_progress(&self, record: Map<String, Value>) -> Result<(), String> {
         self.progress
             .lock()
             .expect("fake lock")
@@ -243,8 +243,8 @@ impl ToolHost for FakeHost {
             .create(true)
             .append(true)
             .open(dir.join("progress.jsonl"))
-            .expect("open progress.jsonl");
-        file.write_all(line.as_bytes()).expect("append progress");
+            .map_err(|error| error.to_string())?;
+        file.write_all(line.as_bytes()).map_err(|error| error.to_string())
     }
 
     fn start_job(&self, kind: &str, input: Value, title: &str) -> Result<String, String> {
@@ -382,7 +382,8 @@ mod tests {
         host.log_progress(Map::from_iter([
             ("kind".to_string(), json!("probe")),
             ("question".to_string(), json!("Q?")),
-        ]));
+        ]))
+        .expect("append the progress line");
         let raw = fs::read_to_string(host.data_root().join("courses/demo/progress.jsonl"))
             .expect("the progress file");
         let record: Value = serde_json::from_str(raw.trim()).expect("one JSON line");

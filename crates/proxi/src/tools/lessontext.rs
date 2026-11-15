@@ -5,9 +5,10 @@ use serde_json::{Map, Value};
 use crate::graph::extract::html_to_text;
 use crate::js;
 use crate::lesson::artifact;
-use crate::sessions::issue;
+use crate::sessions::{invalid_type, issue};
 use crate::tools::util::fail;
 use crate::tools::{ToolDef, ToolFuture, ToolHost, ToolOutcome};
+use crate::vitest::truncate_utf16;
 
 /// Reading a whole artifact is the biggest token sink of a session; this is the cap on the fallback
 /// (prose) path.
@@ -137,22 +138,6 @@ fn last_ci(hay: &str, needle: &str) -> Option<usize> {
     last
 }
 
-/// `s.slice(0, max)` in UTF-16 units. A cut inside a surrogate pair drops that char (Node would keep
-/// a lone surrogate, which a Rust `char` cannot hold).
-fn slice_utf16(text: &str, max: usize) -> String {
-    let mut out = String::with_capacity(text.len().min(max));
-    let mut units = 0;
-    for c in text.chars() {
-        let width = c.len_utf16();
-        if units + width > max {
-            break;
-        }
-        units += width;
-        out.push(c);
-    }
-    out
-}
-
 /// `input.nodeIds` as a JS `Set`: deduped, first appearance first; `None` when absent or empty.
 fn wanted_ids(input: &Value) -> Option<Vec<String>> {
     let ids = input.get("nodeIds")?.as_array()?;
@@ -188,7 +173,7 @@ fn run(input: Value, host: &dyn ToolHost) -> ToolFuture<'_> {
             let Some(raw) = raw else {
                 return fail(format!("No lesson at {lesson_path}."));
             };
-            return ToolOutcome::ok(slice_utf16(&html_to_text(&body_inner(&raw)), MAX_PROSE));
+            return ToolOutcome::ok(truncate_utf16(&html_to_text(&body_inner(&raw)), MAX_PROSE));
         };
 
         let metadata = lesson.doc.get("metadata").unwrap_or(&Value::Null);
@@ -218,7 +203,7 @@ fn run(input: Value, host: &dyn ToolHost) -> ToolFuture<'_> {
             };
             return ToolOutcome::ok(format!(
                 "{head}\n\n{}",
-                slice_utf16(&html_to_text(&body_inner(&raw)), MAX_PROSE)
+                truncate_utf16(&html_to_text(&body_inner(&raw)), MAX_PROSE)
             ));
         }
 
@@ -265,10 +250,7 @@ fn validate(input: &Value) -> Result<Value, Vec<String>> {
     let Some(object) = input.as_object() else {
         return Err(vec![issue(
             "(input)",
-            &format!(
-                "Invalid input: expected object, received {}",
-                received(input)
-            ),
+            &invalid_type("object", Some(input)),
         )]);
     };
     let mut issues = Vec::new();
@@ -278,33 +260,18 @@ fn validate(input: &Value) -> Result<Value, Vec<String>> {
         Some(Value::String(path)) => {
             out.insert("lessonPath".to_string(), Value::String(path.clone()));
         }
-        other => issues.push(issue(
-            "lessonPath",
-            &format!(
-                "Invalid input: expected string, received {}",
-                received_or_undefined(other)
-            ),
-        )),
+        other => issues.push(issue("lessonPath", &invalid_type("string", other))),
     }
 
     if let Some(value) = object.get("nodeIds") {
         match value.as_array() {
-            None => issues.push(issue(
-                "nodeIds",
-                &format!(
-                    "Invalid input: expected array, received {}",
-                    received(value)
-                ),
-            )),
+            None => issues.push(issue("nodeIds", &invalid_type("array", Some(value)))),
             Some(items) => {
                 for (index, item) in items.iter().enumerate() {
                     if !item.is_string() {
                         issues.push(issue(
                             &format!("nodeIds.{index}"),
-                            &format!(
-                                "Invalid input: expected string, received {}",
-                                received(item)
-                            ),
+                            &invalid_type("string", Some(item)),
                         ));
                     }
                 }
@@ -317,22 +284,6 @@ fn validate(input: &Value) -> Result<Value, Vec<String>> {
         Ok(Value::Object(out))
     } else {
         Err(issues)
-    }
-}
-
-fn received_or_undefined(value: Option<&Value>) -> &'static str {
-    value.map_or("undefined", received)
-}
-
-/// zod's `received`: the JSON type of the value.
-fn received(value: &Value) -> &'static str {
-    match value {
-        Value::Null => "null",
-        Value::Bool(_) => "boolean",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Array(_) => "array",
-        Value::Object(_) => "object",
     }
 }
 
@@ -543,16 +494,6 @@ mod tests {
             node_text(&node),
             "## n3: T (derivation)\n\nVerifica: Q?"
         );
-    }
-
-    #[test]
-    fn slice_utf16_counts_utf16_units() {
-        assert_eq!(slice_utf16("abcdef", 3), "abc");
-        assert_eq!(slice_utf16("abc", 10), "abc");
-        // An emoji is two units; a cut through it drops the whole char.
-        assert_eq!(slice_utf16("😀x", 1), "");
-        assert_eq!(slice_utf16("😀x", 2), "😀");
-        assert_eq!(slice_utf16("😀x", 3), "😀x");
     }
 
     #[test]

@@ -193,7 +193,7 @@ mod tests {
         let Some(object) = input.as_object() else {
             return Err(vec![format!(
                 "(input): Invalid input: expected object, received {}",
-                js_type(input)
+                js::js_type(input)
             )]);
         };
         let mut issues = Vec::new();
@@ -204,7 +204,7 @@ mod tests {
             Some(Value::String(_)) => {}
             Some(other) => issues.push(format!(
                 "msg: Invalid input: expected string, received {}",
-                js_type(other)
+                js::js_type(other)
             )),
             None => issues.push("msg: Invalid input: expected string, received undefined".to_string()),
         }
@@ -212,7 +212,7 @@ mod tests {
             None | Some(Value::Number(_)) => {}
             Some(other) => issues.push(format!(
                 "n: Invalid input: expected number, received {}",
-                js_type(other)
+                js::js_type(other)
             )),
         }
         if !issues.is_empty() {
@@ -225,18 +225,6 @@ mod tests {
             data.insert("n".to_string(), n.clone());
         }
         Ok(Value::Object(data))
-    }
-
-    /// zod's `received <type>` word.
-    fn js_type(value: &Value) -> &'static str {
-        match value {
-            Value::Null => "null",
-            Value::Bool(_) => "boolean",
-            Value::Number(_) => "number",
-            Value::String(_) => "string",
-            Value::Array(_) => "array",
-            Value::Object(_) => "object",
-        }
     }
 
     fn echo_run(input: Value, _host: &dyn ToolHost) -> ToolFuture<'_> {

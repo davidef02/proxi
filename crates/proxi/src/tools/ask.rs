@@ -3,7 +3,7 @@
 use serde_json::{Map, Value, json};
 
 use crate::js;
-use crate::sessions::issue;
+use crate::sessions::{invalid_type, issue};
 use crate::tools::util;
 use crate::tools::{Cancelled, ToolDef, ToolFuture, ToolHost, ToolOutcome};
 
@@ -27,7 +27,7 @@ const MISSING_STRING: &str = "Invalid input: expected string, received undefined
 /// Node's `askSchema`, hand-rolled: the cleaned data or one `"<path>: <message>"` per issue.
 fn validate(input: &Value) -> Result<Value, Vec<String>> {
     let Some(object) = input.as_object() else {
-        return Err(vec![issue("(input)", &invalid_type("object", input))]);
+        return Err(vec![issue("(input)", &invalid_type("object", Some(input)))]);
     };
     let mut issues = Vec::new();
     let mut data = Map::new();
@@ -39,7 +39,7 @@ fn validate(input: &Value) -> Result<Value, Vec<String>> {
         Some(Value::String(question)) => {
             data.insert("question".to_string(), Value::String(question.clone()));
         }
-        Some(other) => issues.push(issue("question", &invalid_type("string", other))),
+        Some(other) => issues.push(issue("question", &invalid_type("string", Some(other)))),
         None => issues.push(issue("question", MISSING_STRING)),
     }
 
@@ -48,19 +48,19 @@ fn validate(input: &Value) -> Result<Value, Vec<String>> {
             Value::String(_) => {
                 data.insert("details".to_string(), details.clone());
             }
-            other => issues.push(issue("details", &invalid_type("string", other))),
+            other => issues.push(issue("details", &invalid_type("string", Some(other)))),
         }
     }
 
     if let Some(options) = object.get("options") {
         match options.as_array() {
-            None => issues.push(issue("options", &invalid_type("array", options))),
+            None => issues.push(issue("options", &invalid_type("array", Some(options)))),
             Some(items) => {
                 let mut clean = Vec::with_capacity(items.len());
                 for (index, item) in items.iter().enumerate() {
                     let path = format!("options.{index}");
                     match item.as_object() {
-                        None => issues.push(issue(&path, &invalid_type("object", item))),
+                        None => issues.push(issue(&path, &invalid_type("object", Some(item)))),
                         Some(option) => clean.push(read_option(option, &path, &mut issues)),
                     }
                 }
@@ -74,7 +74,7 @@ fn validate(input: &Value) -> Result<Value, Vec<String>> {
             Value::Bool(_) => {
                 data.insert("multiSelect".to_string(), multi_select.clone());
             }
-            other => issues.push(issue("multiSelect", &invalid_type("boolean", other))),
+            other => issues.push(issue("multiSelect", &invalid_type("boolean", Some(other)))),
         }
     }
 
@@ -96,7 +96,7 @@ fn read_option(option: &Map<String, Value>, path: &str, issues: &mut Vec<String>
         }
         Some(other) => issues.push(issue(
             &format!("{path}.label"),
-            &invalid_type("string", other),
+            &invalid_type("string", Some(other)),
         )),
         None => issues.push(issue(&format!("{path}.label"), MISSING_STRING)),
     }
@@ -108,7 +108,10 @@ fn read_option(option: &Map<String, Value>, path: &str, issues: &mut Vec<String>
         Some(Value::String(value)) => {
             clean.insert("value".to_string(), Value::String(value.clone()));
         }
-        Some(other) => issues.push(issue(&format!("{path}.value"), &invalid_type("string", other))),
+        Some(other) => issues.push(issue(
+            &format!("{path}.value"),
+            &invalid_type("string", Some(other)),
+        )),
     }
     if let Some(description) = option.get("description") {
         match description {
@@ -117,30 +120,11 @@ fn read_option(option: &Map<String, Value>, path: &str, issues: &mut Vec<String>
             }
             other => issues.push(issue(
                 &format!("{path}.description"),
-                &invalid_type("string", other),
+                &invalid_type("string", Some(other)),
             )),
         }
     }
     Value::Object(clean)
-}
-
-fn invalid_type(expected: &str, value: &Value) -> String {
-    format!(
-        "Invalid input: expected {expected}, received {}",
-        received(value)
-    )
-}
-
-/// The JS type name zod prints after `received`.
-fn received(value: &Value) -> &'static str {
-    match value {
-        Value::Null => "null",
-        Value::Bool(_) => "boolean",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Array(_) => "array",
-        Value::Object(_) => "object",
-    }
 }
 
 fn run(input: Value, host: &dyn ToolHost) -> ToolFuture<'_> {
@@ -153,8 +137,8 @@ async fn ask(input: Value, host: &dyn ToolHost) -> ToolOutcome {
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    let values: Vec<String> = options.iter().map(option_value).collect();
-    if unique_count(&values) != values.len() {
+    let values: Vec<String> = options.iter().map(util::option_value).collect();
+    if util::unique_count(&values) != values.len() {
         return util::fail("Invalid ask: option values must be unique.");
     }
 
@@ -172,7 +156,7 @@ async fn ask(input: Value, host: &dyn ToolHost) -> ToolOutcome {
         .map(|items| {
             items
                 .iter()
-                .map(|value| label_of(&options, value))
+                .map(|value| util::label_of(&options, value))
                 .collect::<Vec<Value>>()
         })
         .unwrap_or_default();
@@ -182,37 +166,6 @@ async fn ask(input: Value, host: &dyn ToolHost) -> ToolOutcome {
         out.insert("other".to_string(), answer["other"].clone());
     }
     util::json(&Value::Object(out))
-}
-
-/// `option.value ?? option.label`: the value a card answers with.
-fn option_value(option: &Value) -> String {
-    match option.get("value") {
-        Some(Value::String(value)) => value.clone(),
-        _ => js::js_string(option.get("label")),
-    }
-}
-
-/// The label of the matching option, or the value itself when no option has it.
-fn label_of(options: &[Value], value: &Value) -> Value {
-    let Some(selected) = value.as_str() else {
-        return value.clone();
-    };
-    options
-        .iter()
-        .find(|option| option_value(option) == selected)
-        .and_then(|option| option.get("label").cloned())
-        .unwrap_or_else(|| json!(selected))
-}
-
-/// A JS `Set` size.
-fn unique_count(values: &[String]) -> usize {
-    let mut seen: Vec<&String> = Vec::new();
-    for value in values {
-        if !seen.contains(&value) {
-            seen.push(value);
-        }
-    }
-    seen.len()
 }
 
 #[cfg(test)]

@@ -7,7 +7,7 @@ use std::net::{Shutdown, TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -22,7 +22,9 @@ pub mod fake_hf;
 pub mod sessions;
 
 pub fn repo_root() -> PathBuf {
-    let raw = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    let raw = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..");
     let mut out = PathBuf::new();
     for component in raw.components() {
         match component {
@@ -51,7 +53,10 @@ pub fn temp_dir(tag: &str) -> TempDir {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let path = std::env::temp_dir().join(format!("proxi-{tag}-{}-{nanos}-{n}", std::process::id()));
+    let path = std::env::temp_dir().join(format!(
+        "proxi-{tag}-{}-{nanos}-{n}",
+        std::process::id()
+    ));
     fs::create_dir_all(&path).expect("create temp dir");
     TempDir(path)
 }
@@ -275,7 +280,8 @@ where
                 let Some(body) = read_request_body(&mut stream) else {
                     return;
                 };
-                let request = serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
+                let request =
+                    serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
                 recorded
                     .lock()
                     .expect("lock Anki requests")
@@ -356,9 +362,10 @@ pub fn fake_anki_scripted(responses: &serde_json::Value) -> FakeAnki {
             .get("action")
             .and_then(serde_json::Value::as_str)
             .unwrap_or("");
-        let reply = responses.get(action).cloned().unwrap_or_else(
-            || serde_json::json!({ "result": null, "error": "unsupported action" }),
-        );
+        let reply = responses
+            .get(action)
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({ "result": null, "error": "unsupported action" }));
         FakeReply {
             status: 200,
             body: reply.to_string(),
@@ -442,10 +449,7 @@ pub fn start_node(repo: &Path) -> NodeServer {
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
-        assert!(
-            !remaining.is_zero(),
-            "Node server did not print PORT in 60 s"
-        );
+        assert!(!remaining.is_zero(), "Node server did not print PORT in 60 s");
         let line = rx
             .recv_timeout(remaining)
             .expect("Node server exited before printing PORT");

@@ -5,6 +5,7 @@
 
 use serde_json::{Map, Value};
 
+use crate::sessions::{invalid_type, issue};
 use crate::tools::util::{ack, fail, label};
 use crate::tools::{ToolDef, ToolFuture, ToolHost};
 
@@ -132,26 +133,11 @@ fn start<'a>(
     })
 }
 
-/// zod's name for a value in a type error. JSON has no `undefined`: that case is a missing key.
-fn js_type(value: &Value) -> &'static str {
-    match value {
-        Value::Null => "null",
-        Value::Bool(_) => "boolean",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Array(_) => "array",
-        Value::Object(_) => "object",
-    }
-}
-
 /// A zod object of plain string fields: issues in schema key order, the cleaned data rebuilt in the
 /// same order with unknown keys dropped (that is what Node stores and what the tool receives).
 fn string_object(input: &Value, fields: &[Field]) -> Result<Value, Vec<String>> {
     let Some(object) = input.as_object() else {
-        return Err(vec![format!(
-            "(input): Invalid input: expected object, received {}",
-            js_type(input)
-        )]);
+        return Err(vec![issue("(input)", &invalid_type("object", Some(input)))]);
     };
     let mut issues = Vec::new();
     let mut out = Map::new();
@@ -175,17 +161,10 @@ fn string_value(value: Option<&Value>, field: &Field) -> Result<Option<String>, 
     let text = match value {
         Some(Value::String(text)) => text,
         Some(other) => {
-            return Err(format!(
-                "{}: Invalid input: expected string, received {}",
-                field.key,
-                js_type(other)
-            ));
+            return Err(issue(field.key, &invalid_type("string", Some(other))));
         }
         None if field.required => {
-            return Err(format!(
-                "{}: Invalid input: expected string, received undefined",
-                field.key
-            ));
+            return Err(issue(field.key, &invalid_type("string", None)));
         }
         None => return Ok(None),
     };

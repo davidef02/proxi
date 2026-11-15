@@ -98,7 +98,9 @@ pub trait ToolHost: Send + Sync {
     fn request(&self, item: Value) -> Result<oneshot::Receiver<Result<Value, Cancelled>>, Cancelled>;
     /// Pushes or upserts a non-blocking item; returns its id.
     fn emit(&self, item: Value) -> String;
-    fn log_progress(&self, record: Map<String, Value>);
+    /// Appends one progress record to the course ledger; an append error fails the calling tool,
+    /// like Node's `logProgress` (`appendFileSync` inside the awaited call).
+    fn log_progress(&self, record: Map<String, Value>) -> Result<(), String>;
     /// Starts a background job (`demo`, `visual`, `research`); returns its id.
     fn start_job(&self, kind: &str, input: Value, title: &str) -> Result<String, String>;
     /// Starts the map job for a lesson (`<course>/<file stem>`).
