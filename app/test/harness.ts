@@ -92,6 +92,8 @@ export interface TestServer {
   mode: ServerMode;
   url: string;
   port: number;
+  /** Node mode only: the MCP secret. */
+  token?: string;
   /** Binary mode: resolves when the process exits; apply's relaunch exits it. */
   exited?: Promise<void>;
   close(): Promise<void>;
@@ -157,6 +159,7 @@ async function startNode(
       mode: "node",
       url: srv.url,
       port: srv.port,
+      token: srv.token,
       close: () => (closing ??= srv.close().finally(restoreAnki)),
     };
   } catch (error) {

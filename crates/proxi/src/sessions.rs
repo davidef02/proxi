@@ -138,12 +138,12 @@ fn spawn_delayed(delay: Duration, task: impl FnOnce() + Send + 'static) {
 }
 
 /// JS `s.length` of the zod limits: UTF-16 units, not chars.
-fn utf16_len(text: &str) -> usize {
+pub(crate) fn utf16_len(text: &str) -> usize {
     text.encode_utf16().count()
 }
 
 /// Node's `trunc`: slice to `n` UTF-16 units, then an ellipsis.
-fn trunc(text: &str, n: usize) -> String {
+pub(crate) fn trunc(text: &str, n: usize) -> String {
     if utf16_len(text) <= n {
         return text.to_string();
     }
@@ -162,7 +162,7 @@ fn trunc(text: &str, n: usize) -> String {
 }
 
 /// One zod issue as Node joins it: `<path>: <message>`.
-fn issue(path: &str, message: &str) -> String {
+pub(crate) fn issue(path: &str, message: &str) -> String {
     if path.is_empty() {
         message.to_string()
     } else {
