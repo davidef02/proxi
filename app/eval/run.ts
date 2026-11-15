@@ -1,9 +1,10 @@
 // `npm run eval -- [scenario...]`: the scenarios in app/eval/scenarios.ts, one after the other, against
-// the real configured engine. Outside CI: every scenario costs a real engine run.
+// the real configured engine through the built `proxi` binary. Outside CI: every scenario costs a real engine run.
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { parseArgs } from "node:util";
 import { PROVIDERS, type Provider } from "../shared/protocol.ts";
+import { proxiBinary } from "../test/binary.ts";
 import { runScenario } from "./harness.ts";
 import { SCENARIOS, type Scenario } from "./scenarios.ts";
 
@@ -40,11 +41,23 @@ async function main(): Promise<number> {
     return 2;
   }
 
+  // Resolved once, before any scenario, so a missing binary is one exit and not one error per scenario.
+  let bin: string;
+  try {
+    bin = proxiBinary();
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    return 2;
+  }
+
   const settingsFile = values.settings ? path.resolve(values.settings) : path.join(REPO, ".learner", "settings.json");
+  const fake = process.env.EVAL_FAKE_ENGINE;
+  const claude = fake ? { cmd: process.execPath, args: [path.resolve(fake)] } : undefined;
   console.log(
     `settings: ${settingsFile}${fs.existsSync(settingsFile) ? "" : " (missing: the engine defaults apply)"}`
   );
-  console.log(`engine: ${engine ?? "from settings"}`);
+  console.log(`binary: ${bin}`);
+  console.log(`engine: ${engine ?? "from settings"}${fake ? ` (fake: ${path.resolve(fake)})` : ""}`);
   console.log(`timeout: ${minutes} min per scenario`);
 
   let failed = false;
@@ -53,7 +66,7 @@ async function main(): Promise<number> {
     console.log(`== ${s.name}`);
     let result;
     try {
-      result = await runScenario(s, { engine, settingsFile, timeoutMs: minutes * 60_000, log: (l) => console.log(l) });
+      result = await runScenario(s, { bin, engine, settingsFile, timeoutMs: minutes * 60_000, claude, log: (l) => console.log(l) });
     } catch (err) {
       errored = true;
       console.log(`ERROR ${s.name}: ${err instanceof Error ? err.message : String(err)}`);
