@@ -441,12 +441,21 @@ const ALLOWED_ATTACHMENT_EXTS: [&str; 9] = [
     ".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".pdf", ".txt", ".md",
 ];
 
-/// Node's win32 `path.basename`: what follows the last separator, trailing separators ignored.
+/// Node's win32 `path.basename`: what follows the last separator, trailing separators ignored, and
+/// no leading drive designator (`C:foo.png` → `foo.png`).
 fn attachment_base(raw: &str) -> &str {
     let trimmed = raw.trim_end_matches(|c| c == '/' || c == '\\');
     match trimmed.rfind(|c| c == '/' || c == '\\') {
         Some(index) => &trimmed[index + 1..],
-        None => trimmed,
+        None => {
+            // With no separator left, win32 still drops a `C:` prefix, but only at position 0.
+            let bytes = trimmed.as_bytes();
+            if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+                &trimmed[2..]
+            } else {
+                trimmed
+            }
+        }
     }
 }
 
@@ -2116,6 +2125,7 @@ mod tests {
     fn attachment_name_helpers_follow_node() {
         assert_eq!(attachment_base("../../../etc/passwd.png"), "passwd.png");
         assert_eq!(attachment_base("notes.pdf/"), "notes.pdf");
+        assert_eq!(attachment_base("C:foo.png"), "foo.png");
         assert_eq!(attachment_base(""), "");
 
         // basename, then the safe name, then Node's extname.

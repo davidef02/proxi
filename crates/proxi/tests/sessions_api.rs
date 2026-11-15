@@ -695,6 +695,41 @@ async fn attachments_upload_in_node_order_and_reach_the_engine() {
         json!({"error": "Nessun file caricato"})
     );
 
+    // Node's WHATWG parser gives a part with no `Content-Type` `text/plain`, and an empty one `""`
+    // (which the manager maps to `application/octet-stream`).
+    let response = client
+        .post(&attachments)
+        .header("x-learner-client", "1")
+        .header(CONTENT_TYPE, "multipart/form-data; boundary=x")
+        .body(concat!(
+            "--x\r\n",
+            "Content-Disposition: form-data; name=\"files\"; filename=\"a.png\"\r\n",
+            "\r\nbytes\r\n--x--\r\n"
+        ))
+        .send()
+        .await
+        .expect("POST a part with no content type");
+    assert_eq!(response.status(), StatusCode::OK);
+    let metas = body_json(response).await;
+    assert_eq!(metas[0]["mimeType"], "text/plain", "{metas}");
+
+    let response = client
+        .post(&attachments)
+        .header("x-learner-client", "1")
+        .header(CONTENT_TYPE, "multipart/form-data; boundary=x")
+        .body(concat!(
+            "--x\r\n",
+            "Content-Disposition: form-data; name=\"files\"; filename=\"b.png\"\r\n",
+            "Content-Type: \r\n",
+            "\r\nbytes\r\n--x--\r\n"
+        ))
+        .send()
+        .await
+        .expect("POST a part with an empty content type");
+    assert_eq!(response.status(), StatusCode::OK);
+    let metas = body_json(response).await;
+    assert_eq!(metas[0]["mimeType"], "application/octet-stream", "{metas}");
+
     server.shutdown().await;
 }
 

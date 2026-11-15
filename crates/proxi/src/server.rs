@@ -1045,7 +1045,12 @@ async fn post_session_attachments(
             Some("file") => 1,
             _ => continue,
         };
-        let mime_type = field.content_type().map(str::to_string);
+        // Node's `File.type` follows the WHATWG parser: `text/plain` when the part has no
+        // `Content-Type`, `""` when the header is empty (the manager answers octet-stream).
+        let mime_type = Some(match field.headers().get(header::CONTENT_TYPE) {
+            None => "text/plain".to_string(),
+            Some(value) => value.to_str().unwrap_or_default().to_string(),
+        });
         match field.bytes().await {
             Ok(bytes) => {
                 let upload = AttachmentUpload {
