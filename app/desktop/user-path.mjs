@@ -23,10 +23,21 @@ export function withoutPathEntry(current, dir) {
 }
 
 export function readUserPath(ps) {
-  return ps("(Get-Item -LiteralPath 'HKCU:\\Environment').GetValue('Path', '', 'DoNotExpandEnvironmentNames')");
+  // Windows PowerShell 5.1 writes stdout in the OEM code page: without this prefix a path such as
+  // C:\Città\bin comes back with U+FFFD, and writing that value back would corrupt the user's PATH.
+  return ps(
+    "[Console]::OutputEncoding=[Text.Encoding]::UTF8;" +
+      "(Get-Item -LiteralPath 'HKCU:\\Environment').GetValue('Path', '', 'DoNotExpandEnvironmentNames')",
+  );
 }
 
 export function writeUserPath(ps, value) {
+  // A U+FFFD means the value was decoded with the wrong code page: refuse rather than silently
+  // replacing the user's unrelated PATH entries with broken ones.
+  if (value.includes("\uFFFD"))
+    throw new Error(
+      "user PATH contains U+FFFD (decoding failure): refusing to write it back; fix the PATH by hand in Settings > Environment Variables",
+    );
   // ExpandString keeps %VAR% entries expanding (the .NET Framework setter would write REG_SZ);
   // the SetEnvironmentVariable pair broadcasts WM_SETTINGCHANGE so new shells pick the PATH up.
   ps(

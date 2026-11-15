@@ -86,6 +86,17 @@ describe("user PATH", () => {
     assert.equal(readUserPath(ps), "C:\\a;%USERPROFILE%\\bin");
     assert.match(script, /DoNotExpandEnvironmentNames/);
     assert.match(script, /HKCU:\\Environment/);
+    assert.ok(script.includes("[Console]::OutputEncoding=[Text.Encoding]::UTF8"), script);
+  });
+
+  it("refuses to write back a PATH decoded with the wrong code page", () => {
+    let called = false;
+    const ps = (_s: string) => {
+      called = true;
+      return "";
+    };
+    assert.throws(() => writeUserPath(ps, "C:\\Citt\uFFFD\\bin"), /U\+FFFD/);
+    assert.equal(called, false, "must not touch the registry");
   });
 
   it("the shortcut installer builds proxi and edits the user PATH through user-path.mjs", () => {
