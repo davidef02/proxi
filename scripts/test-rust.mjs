@@ -27,6 +27,7 @@ export const RUST_PORTED = [
   "app/test/claude-version.test.ts",
   "app/test/api-engines.test.ts",
   "app/test/api-engine-models.test.ts",
+  "app/test/eval-binary.test.ts",
 ];
 
 export function rustTestEnv(base = process.env) {
