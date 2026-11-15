@@ -22,6 +22,7 @@ export const RUST_PORTED = [
   "app/test/graph-api.test.ts",
   "app/test/api-sync.test.ts",
   "app/test/api-exercises.test.ts",
+  "app/test/eval-binary.test.ts",
 ];
 
 export function rustTestEnv(base = process.env) {
