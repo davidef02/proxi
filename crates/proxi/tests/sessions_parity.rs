@@ -11,9 +11,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use reqwest::{Client, StatusCode};
-use serde_json::Value;
+use reqwest::header::CONTENT_TYPE;
+use reqwest::{Client, Response, StatusCode};
+use serde_json::{Value, json};
 
+use common::cli_golden;
 use common::sessions::{body_json, data_events, post, read_until, require_fake_engine, wait_for};
 use proxi::server::{ServerOptions, start};
 
@@ -437,4 +439,197 @@ async fn sessions_match_the_node_golden() {
         .map(String::as_str)
         .collect();
     assert_eq!(keys, ["state", "provider", "resume", "canRetry"], "{text}");
+}
+
+/// A response body as JSON, or the empty string a notification's 202 carries.
+async fn response_body(response: Response) -> Value {
+    let text = response.text().await.expect("read body");
+    if text.is_empty() {
+        Value::String(String::new())
+    } else {
+        serde_json::from_str(&text).unwrap_or_else(|error| panic!("not JSON ({error}): {text}"))
+    }
+}
+
+/// AC1/AC2/AC6: the `/mcp` surface replayed from the Node capture (app/test/capture-mcp-golden.ts).
+///
+/// Every case is the request the capture sent, against the same seeds: statuses, bodies and key order
+/// first, then the writing tools' data-folder files and session.
+#[tokio::test(flavor = "multi_thread")]
+async fn mcp_matches_the_node_golden() {
+    require_fake_engine();
+    let golden = cli_golden::golden("mcp");
+    assert_eq!(golden["route"].as_str(), Some("mcp"), "golden route");
+
+    let dir = common::temp_dir("mcp-parity");
+    let repo = dir.0.join("repo");
+    let data = dir.0.join("data");
+    fs::create_dir_all(&repo).expect("create repo");
+    fs::create_dir_all(&data).expect("create data");
+    write_seed(&repo, &golden["seed"]);
+    write_data_seed(&data, &golden["dataSeed"]);
+
+    let roots = Roots {
+        repo: root_variants(&repo),
+        data: root_variants(&data),
+    };
+
+    let mut options = ServerOptions::new(repo.clone());
+    options.data_root = Some(data.clone());
+    options.memory_secrets = true;
+    options.bins.claude = Some(PathBuf::from("node"));
+    options.bins.claude_args = vec![
+        common::repo_root()
+            .join("app")
+            .join("test")
+            .join("fake-claude.mjs")
+            .display()
+            .to_string(),
+    ];
+    let server = start(options).await.expect("start Rust server");
+    let client = Client::new();
+
+    let response = post(
+        &client,
+        &server,
+        "/api/sessions",
+        &golden["createBody"].to_string(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK, "POST /api/sessions");
+    let created = body_json(response).await;
+    let session_id = created["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no id in {created}"))
+        .to_string();
+    wait_for(&client, &server, &session_id, "idle").await;
+
+    let token = server.sessions.token();
+    let in_scope: Vec<String> = golden["inScope"]
+        .as_array()
+        .expect("golden inScope")
+        .iter()
+        .map(|name| name.as_str().expect("tool name").to_string())
+        .collect();
+
+    for case in golden["cases"].as_array().expect("cases array") {
+        let name = case["name"].as_str().expect("case name");
+        let request = &case["request"];
+        let path = request["path"]
+            .as_str()
+            .expect("case path")
+            .replace("<session>", &session_id);
+        let body = match request.get("rawBody").and_then(Value::as_str) {
+            Some(raw) => raw.to_string(),
+            None => request["body"].to_string(),
+        };
+        // The capture snapshots before the call and again a second later, after the board debounce.
+        let before = case.get("files").map(|_| cli_golden::snapshot(&data));
+
+        let mut builder = client
+            .post(format!("{}{path}", server.url))
+            .header(CONTENT_TYPE, "application/json")
+            .body(body);
+        if request["headers"].get("x-learner-token").is_some() {
+            builder = builder.header("x-learner-token", token.as_str());
+        }
+        let response = builder
+            .send()
+            .await
+            .unwrap_or_else(|error| panic!("{name}: POST {path}: {error}"));
+        assert_eq!(
+            u64::from(response.status().as_u16()),
+            case["response"]["status"].as_u64().expect("golden status"),
+            "{name}: status"
+        );
+        let reply = response_body(response).await;
+
+        if name == "unknown-tool" {
+            // Node names the out-of-scope tools too (D11): only `inScope`, in Node's order, may appear.
+            assert_eq!(
+                reply["result"]["isError"],
+                Value::Bool(true),
+                "{name}: isError"
+            );
+            let text = reply["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{name}: no text content in {reply}"));
+            let prefix = case["response"]["body"]["textStartsWith"]
+                .as_str()
+                .expect("golden prefix");
+            assert!(text.starts_with(prefix), "{name}: {text}");
+            assert_eq!(
+                text,
+                format!("{prefix} {}.", in_scope.join(", ")),
+                "{name}: available tools"
+            );
+        } else if name == "tools-list" {
+            let tools = &reply["result"]["tools"];
+            let expected = &case["response"]["body"]["result"]["tools"];
+            assert_eq!(tools, expected, "{name}: tools");
+            assert_eq!(
+                serde_json::to_string(tools).expect("serialise Rust tools"),
+                serde_json::to_string(expected).expect("serialise golden tools"),
+                "{name}: key order"
+            );
+            let names: Vec<&str> = tools
+                .as_array()
+                .expect("tools array")
+                .iter()
+                .map(|tool| tool["name"].as_str().expect("tool name"))
+                .collect();
+            let expected_names: Vec<&str> = in_scope.iter().map(String::as_str).collect();
+            assert_eq!(names, expected_names, "{name}: names");
+        } else {
+            assert_same(name, &reply, &case["response"]["body"], &roots, &session_id);
+        }
+
+        let Some(before) = before else { continue };
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let after = cli_golden::snapshot(&data);
+        let mut files = cli_golden::changes(&before, &after);
+        // The progress log is the quiz tests' business; the board's index.html is already excluded.
+        files
+            .as_object_mut()
+            .expect("changes object")
+            .remove("courses/demo/progress.jsonl");
+        let expected = &case["files"];
+        if let Some(detail) = cli_golden::describe_files(expected, &files) {
+            panic!("{name}: files differ: {detail}");
+        }
+        assert_eq!(&files, expected, "{name}: files");
+
+        let response = client
+            .get(format!("{}/api/sessions/{session_id}", server.url))
+            .send()
+            .await
+            .unwrap_or_else(|error| panic!("{name}: GET session: {error}"));
+        assert_eq!(response.status(), StatusCode::OK, "{name}: GET session");
+        let state = body_json(response).await;
+        let items: Vec<Value> = state["items"]
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .filter(|item| matches!(item["kind"].as_str(), Some("node" | "finish")))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+        let got = json!({
+            "lessonPath": state["lessonPath"].clone(),
+            "plan": state["plan"].clone(),
+            "pendingRequestId": state["pendingRequestId"].clone(),
+            "items": items,
+        });
+        assert_same(
+            &format!("{name} session"),
+            &got,
+            &case["session"],
+            &roots,
+            &session_id,
+        );
+    }
+
+    server.shutdown().await;
 }
