@@ -1,4 +1,6 @@
 // Engine contract: the same cases through both adapters, each driving its fake (fake-claude, fake-agy).
+// agy/opencode turn, MCP, resume, refused resume and stop are Rust tests (crates/proxi/tests/agy_engine.rs,
+// opencode_engine.rs); their relaunch-after-refusal is engine-agnostic (turns.rs tests). Only interrupt is left here until #20.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";
@@ -88,8 +90,12 @@ const alive = (pid: number) => {
 for (const provider of ["claude", "agy", "opencode"] as const) {
   describe(`engine contract: ${provider}`, () => {
     let token = "";
+    // claude still covers the whole contract here; for agy and opencode only the interrupt case has no Rust home yet.
+    const itClaude = (name: string, fn: () => Promise<void>): void => {
+      if (provider === "claude") it(name, fn);
+    };
 
-    it("a turn: init issues a resume token, text streams, one successful result", async () => {
+    itClaude("a turn: init issues a resume token, text streams, one successful result", async () => {
       const s = start(launch(provider));
       s.handle.send("ciao");
       await s.until(() => s.count("result") === 1);
@@ -100,7 +106,7 @@ for (const provider of ["claude", "agy", "opencode"] as const) {
       await s.handle.stop();
     });
 
-    it("an MCP tool call reaches the endpoint with the token and comes back as mcp__app__<tool> + its result", async () => {
+    itClaude("an MCP tool call reaches the endpoint with the token and comes back as mcp__app__<tool> + its result", async () => {
       const s = start(launch(provider));
       const before = tokens.length;
       s.handle.send("FAKE:tool:echo:" + b64({ a: 1 }));
@@ -130,7 +136,7 @@ for (const provider of ["claude", "agy", "opencode"] as const) {
       await s.handle.stop();
     });
 
-    it("a new handle given the token resumes that conversation", async () => {
+    itClaude("a new handle given the token resumes that conversation", async () => {
       const s = start(launch(provider, token));
       s.handle.send("ci sei?");
       await s.until(() => s.count("result") === 1);
@@ -138,7 +144,7 @@ for (const provider of ["claude", "agy", "opencode"] as const) {
       await s.handle.stop();
     });
 
-    it("a refused token: resume-failed, then onExit once", async () => {
+    itClaude("a refused token: resume-failed, then onExit once", async () => {
       process.env[RESUME_FAIL_ENV[provider]] = "1";
       try {
         const s = start(launch(provider, "sconosciuto"));
@@ -150,7 +156,7 @@ for (const provider of ["claude", "agy", "opencode"] as const) {
       }
     });
 
-    it("stop(): onExit exactly once and the process is gone, also after an interrupt", async () => {
+    itClaude("stop(): onExit exactly once and the process is gone, also after an interrupt", async () => {
       for (const interrupted of [false, true]) {
         const s = start(launch(provider));
         s.handle.send(interrupted ? "FAKE:slow" : "ciao");
@@ -165,7 +171,7 @@ for (const provider of ["claude", "agy", "opencode"] as const) {
       }
     });
 
-    it("the turn module relaunches fresh after a refused resume and the re-sent turn is answered", async () => {
+    itClaude("the turn module relaunches fresh after a refused resume and the re-sent turn is answered", async () => {
       process.env[RESUME_FAIL_ENV[provider]] = "1";
       const h = { status: "idle" as SessionStatus, notices: [] as string[] };
       const turns = new Turns(

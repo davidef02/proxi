@@ -1,0 +1,17 @@
+{
+  "type": "object",
+  "properties": {
+    "question": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The precise question to verify, in the learner's language."
+    },
+    "context": {
+      "description": "What the lesson is about and what version/constraints matter; the researcher sees nothing else.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "question"
+  ]
+}

@@ -1,0 +1,42 @@
+{
+  "type": "object",
+  "properties": {
+    "question": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Exactly one question."
+    },
+    "details": {
+      "type": "string"
+    },
+    "options": {
+      "description": "Omit for a free-text answer. An Altro free-text row is always added.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1
+          },
+          "value": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label"
+        ]
+      }
+    },
+    "multiSelect": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "question"
+  ]
+}

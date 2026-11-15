@@ -3,7 +3,7 @@
 //! `sessions_parity` and `session_manager` check the same shapes.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
@@ -12,7 +12,7 @@ use reqwest::multipart::{Form, Part};
 use reqwest::{Client, Response};
 use serde_json::{Value, json};
 
-use proxi::server::RunningServer;
+use proxi::server::{RunningServer, ServerOptions};
 
 /// The data seed of the session tests: one planned chapter, one course, no lesson taught yet.
 pub const CURRICULUM: &str = r#"{"chapters":[{"title":"Demo","slug":"demo","lessons":[{"title":"Prima lezione","slug":"prima-lezione","plannedNodes":2}]}]}"#;
@@ -31,12 +31,10 @@ pub fn require_fake_engine() {
     );
 }
 
-/// The fake engine command line: the node script, then `extra` (test hooks such as `--input-out`).
-pub fn fake_args(extra: &[&str]) -> Vec<String> {
-    let fake = super::repo_root()
-        .join("app")
-        .join("test")
-        .join("fake-claude.mjs");
+/// The fake engine command line: the node script `script` under `app/test`, then `extra` (test
+/// hooks such as `--input-out`).
+pub fn fake_script_args(script: &str, extra: &[&str]) -> Vec<String> {
+    let fake = super::repo_root().join("app").join("test").join(script);
     let mut args = vec![fake.display().to_string()];
     args.extend(extra.iter().map(|arg| arg.to_string()));
     args
@@ -87,6 +85,44 @@ pub fn seed_demo_course(data: &Path) {
     fs::create_dir_all(course.join("lessons")).expect("create lessons dir");
     fs::write(course.join("MISSION.md"), "# Mission\n").expect("write mission");
     fs::write(course.join("NOTES.md"), "# Notes\n").expect("write notes");
+}
+
+/// A temp repo (`.learner`) and a separate temp data folder holding the `demo` course.
+pub struct Fixture {
+    pub repo: super::TempDir,
+    pub data: super::TempDir,
+}
+
+impl Fixture {
+    pub fn new(tag: &str) -> Self {
+        let fixture = Self {
+            repo: super::temp_dir(tag),
+            data: super::temp_dir(&format!("{tag}-data")),
+        };
+        seed_demo_course(&fixture.data.0);
+        fixture
+    }
+
+    pub fn options(&self) -> ServerOptions {
+        fake_engine_options(&self.repo.0, &self.data.0)
+    }
+
+    /// The same with test-hook flags before the fake script (`--input-out`, `--env-out`).
+    pub fn options_with(&self, extra: &[&str]) -> ServerOptions {
+        let mut options = self.options();
+        options.bins.claude_args = fake_script_args("fake-claude.mjs", extra);
+        options
+    }
+}
+
+/// The fake engine, wired the way `proxi serve --claude-bin node --claude-bin-arg <fake>` is.
+pub fn fake_engine_options(repo: &Path, data: &Path) -> ServerOptions {
+    let mut options = ServerOptions::new(repo.to_path_buf());
+    options.data_root = Some(data.to_path_buf());
+    options.memory_secrets = true;
+    options.bins.claude = Some(PathBuf::from("node"));
+    options.bins.claude_args = fake_script_args("fake-claude.mjs", &[]);
+    options
 }
 
 /// A POST with the CSRF header the routes require.

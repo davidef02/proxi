@@ -182,6 +182,18 @@ pub fn truthy(v: Option<&Value>) -> bool {
     }
 }
 
+/// A JSON value's type as zod names it in a `received …` message.
+pub fn js_type(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
 /// JS `String(v)`; `None` is JS `undefined`.
 pub fn js_string(v: Option<&Value>) -> String {
     match v {

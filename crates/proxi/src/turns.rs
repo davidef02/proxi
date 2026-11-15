@@ -326,6 +326,9 @@ impl Turns {
                 // The next launch is fresh, so this cannot loop.
                 self.resume = None;
             }
+            EngineEvent::ActionDenied { action } => {
+                host.notice("info", &format!("Il motore ha bloccato un'azione ({action})."));
+            }
             EngineEvent::Init { session_id, .. } => {
                 if !session_id.is_empty() {
                     self.resume = Some(session_id.clone());
@@ -520,6 +523,7 @@ mod tests {
         notices: Vec<(String, String)>,
         learner: Vec<(String, Option<Value>)>,
         late: Vec<bool>,
+        events: usize,
         pending: usize,
         retryable: Vec<bool>,
     }
@@ -532,6 +536,7 @@ mod tests {
                 notices: Vec::new(),
                 learner: Vec::new(),
                 late: Vec::new(),
+                events: 0,
                 pending: 0,
                 retryable: Vec::new(),
             }
@@ -560,6 +565,7 @@ mod tests {
         }
 
         fn event(&mut self, event: &EngineEvent, late: bool) {
+            self.events += 1;
             if matches!(event, EngineEvent::Result { .. }) {
                 self.late.push(late);
             }
@@ -956,6 +962,35 @@ mod tests {
         turns.on_event(&mut host, generation, &result_event());
         assert_eq!(host.status, SessionStatus::Idle);
         assert_eq!(host.late, [true, false]);
+    }
+
+    #[test]
+    fn action_denied_is_an_info_notice_and_not_forwarded() {
+        let (mut turns, mut host, log) = harness(None);
+        let generation = send(&mut turns, &mut host, &log, "ciao");
+        host.events = 0;
+        let before = host.status;
+
+        assert!(matches!(
+            turns.on_event(
+                &mut host,
+                generation,
+                &EngineEvent::ActionDenied {
+                    action: "ReadUrlContent".to_string()
+                }
+            ),
+            TurnAction::None
+        ));
+
+        assert_eq!(
+            host.notices.last(),
+            Some(&(
+                "info".to_string(),
+                "Il motore ha bloccato un'azione (ReadUrlContent).".to_string()
+            ))
+        );
+        assert_eq!(host.events, 0, "the card is a notice, not an event");
+        assert_eq!(host.status, before);
     }
 
     #[test]

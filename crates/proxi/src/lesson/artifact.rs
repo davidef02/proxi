@@ -107,6 +107,16 @@ fn strip_leading_number(name: &str) -> &str {
     }
 }
 
+/// The marker line closing a record: `<!-- lesson: <slug> -->`, or `<!-- lesson: -->` for a record of
+/// no lesson (plan/practice sessions).
+pub fn lesson_marker(slug: &str) -> String {
+    if slug.is_empty() {
+        "<!-- lesson: -->".to_string()
+    } else {
+        format!("<!-- lesson: {slug} -->")
+    }
+}
+
 /// Last line of a record: `<!-- lesson: <slug> -->` (the slug may be empty).
 pub fn parse_marker(content: &str) -> Option<String> {
     let body = content.trim_end_matches(js::is_js_ws);
@@ -1108,6 +1118,15 @@ mod tests {
             parse_dag_ids("N1 [a]\nN1 --> N10 [b]"),
             vec!["N1".to_string(), "N10".to_string()]
         );
+    }
+
+    #[test]
+    fn lesson_marker_round_trips_through_parse_marker() {
+        assert_eq!(lesson_marker("x"), "<!-- lesson: x -->");
+        assert_eq!(lesson_marker(""), "<!-- lesson: -->");
+        for slug in ["x", ""] {
+            assert_eq!(parse_marker(&lesson_marker(slug)).as_deref(), Some(slug));
+        }
     }
 
     #[test]

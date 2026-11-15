@@ -97,6 +97,20 @@ pub struct SettingsResponse {
     pub data_root: String,
 }
 
+/// The Claude CLI probe's answer; `protocol.ts:566-572` order, absent fields dropped like undefined.
+#[derive(Serialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeStatusResponse {
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    pub min_version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bin_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 #[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum UpdateState {
@@ -275,6 +289,14 @@ pub enum ServerEvent {
     },
     Usage {
         usage: Usage,
+    },
+    Lesson {
+        lesson_path: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        node_id: Option<String>,
+    },
+    Plan {
+        plan: serde_json::Value,
     },
 }
 
@@ -499,6 +521,32 @@ mod tests {
         };
         let json = serde_json::to_string(&response).unwrap();
         assert!(json.ends_with(r#","repoRoot":"R","dataRoot":"D"}"#), "{json}");
+    }
+
+    #[test]
+    fn claude_status_serialises_in_node_order() {
+        assert_eq!(
+            serde_json::to_string(&ClaudeStatusResponse {
+                status: "meets-minimum".to_string(),
+                version: Some("2.1.300".to_string()),
+                min_version: "2.1.259".to_string(),
+                bin_path: Some("C:\\tools\\claude.exe".to_string()),
+                error: None,
+            })
+            .unwrap(),
+            r#"{"status":"meets-minimum","version":"2.1.300","minVersion":"2.1.259","binPath":"C:\\tools\\claude.exe"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&ClaudeStatusResponse {
+                status: "not-found".to_string(),
+                version: None,
+                min_version: "2.1.259".to_string(),
+                bin_path: Some("C:\\tools\\claude.exe".to_string()),
+                error: Some("spawn C:\\tools\\claude.exe ENOENT".to_string()),
+            })
+            .unwrap(),
+            r#"{"status":"not-found","minVersion":"2.1.259","binPath":"C:\\tools\\claude.exe","error":"spawn C:\\tools\\claude.exe ENOENT"}"#
+        );
     }
 
     #[test]
@@ -901,6 +949,33 @@ mod tests {
             })
             .unwrap(),
             r#"{"type":"item","item":{"id":"i"}}"#
+        );
+    }
+
+    #[test]
+    fn lesson_and_plan_events_match_node() {
+        assert_eq!(
+            serde_json::to_string(&ServerEvent::Lesson {
+                lesson_path: "courses/demo/lessons/x.html".to_string(),
+                node_id: None,
+            })
+            .unwrap(),
+            r#"{"type":"lesson","lessonPath":"courses/demo/lessons/x.html"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&ServerEvent::Lesson {
+                lesson_path: "p".to_string(),
+                node_id: Some("prima-cosa".to_string()),
+            })
+            .unwrap(),
+            r#"{"type":"lesson","lessonPath":"p","nodeId":"prima-cosa"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&ServerEvent::Plan {
+                plan: json!({"topic": "t"})
+            })
+            .unwrap(),
+            r#"{"type":"plan","plan":{"topic":"t"}}"#
         );
     }
 

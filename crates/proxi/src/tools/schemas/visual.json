@@ -1,0 +1,13 @@
+{
+  "type": "object",
+  "properties": {
+    "brief": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Self-contained description of the figure: what to show, the labels (Italian), the relations. The visual-maker sees nothing else of the lesson."
+    }
+  },
+  "required": [
+    "brief"
+  ]
+}

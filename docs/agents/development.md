@@ -102,4 +102,4 @@ that model on `<dataRoot>/bench/embed-bench-queries.json` and records the result
 The root `AGENTS.md` is loaded on every turn of every agent that studies in this repo. Put
 development rules here, never in the root. The app's own engines already skip the root:
 `claude` runs with `--setting-sources ""` and `agy` runs with its scratch dir as `cwd`; keep both
-when changing `app/server/claude.ts` or `app/server/agy.ts`.
+when changing `app/server/claude.ts`/`agy.ts` or their Rust ports `crates/proxi/src/claude.rs`/`agy.rs`.

@@ -43,8 +43,12 @@ describe("eval against the binary", { skip: serverMode() !== "binary" ? "binary 
     assert.match(r.stdout, /did not reach plan/);
   });
 
-  it("reports the binary's error for an engine it does not run yet (AC3)", () => {
-    const r = runEval(["lezione-singola-nuxt", "--engine", "agy", "--settings", missingSettings(), "--timeout", "2"]);
+  // #19 brought agy into the Rust backend: --engine now selects a real engine, so the run reaches the
+  // binary and reports the binary's error (LEARNER_AGY_BIN points the agy engine at a path that is not there).
+  it("reports the binary's error for an engine whose executable is missing (AC3)", () => {
+    const r = runEval(["lezione-singola-nuxt", "--engine", "agy", "--settings", missingSettings(), "--timeout", "2"], {
+      LEARNER_AGY_BIN: path.join(os.tmpdir(), "no-such-agy-bin.exe"),
+    });
     assert.equal(r.status, 2, `${r.stdout}\n${r.stderr}`);
     assert.match(r.stdout, /ERROR lezione-singola-nuxt: .*agy/);
   });

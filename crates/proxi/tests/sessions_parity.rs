@@ -1,9 +1,9 @@
-//! Replays the Node session golden against the Rust server (AC1/AC4).
+//! Replays the Node session goldens against the Rust server (AC1/AC2/AC4).
 //!
 //! Same flow as `captureSessions` of `app/test/capture-golden.ts` on the same two temp folders:
 //! create, poll idle, SSE, message, collect to the idle status, get, list, shutdown, state file.
 //! Every output goes through a port of `normaliseSession`, then value and compact serialisation
-//! (key order) are compared.
+//! (key order) are compared. One golden per engine: claude, agy, opencode.
 
 mod common;
 
@@ -11,20 +11,25 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use reqwest::{Client, StatusCode};
-use serde_json::Value;
+use reqwest::header::CONTENT_TYPE;
+use reqwest::{Client, Response, StatusCode};
+use serde_json::{Value, json};
 
-use common::sessions::{body_json, data_events, post, read_until, require_fake_engine, wait_for};
+use common::cli_golden;
+use common::sessions::{
+    body_json, data_events, fake_engine_options, fake_script_args, post, read_until,
+    require_fake_engine, wait_for,
+};
 use proxi::server::{ServerOptions, start};
 
-fn golden_file() -> PathBuf {
+fn golden_file(name: &str) -> PathBuf {
     common::repo_root()
         .join("crates")
         .join("proxi")
         .join("tests")
         .join("fixtures")
         .join("golden")
-        .join("sessions.json")
+        .join(name)
 }
 
 fn case<'a>(golden: &'a Value, name: &str) -> &'a Value {
@@ -117,13 +122,16 @@ fn normalise_session(value: Value, roots: &Roots, session_id: &str) -> Value {
     }
 }
 
-/// In this order: the session id, every other UUID, the fake engine's pids, then the whole-string
-/// root and ISO rules of `normalise`.
+/// In this order: the session id, every other UUID, the fake engine's pids, agy's and opencode's
+/// invented ids, then the whole-string root and ISO rules of `normalise`.
 fn normalise_text(text: &str, roots: &Roots, session_id: &str) -> String {
     let replaced = text.replace(session_id, "<session>");
     let replaced = replace_uuids(&replaced);
     let replaced = replace_pid_counter(&replaced, "msg_");
     let replaced = replace_pid_counter(&replaced, "toolu_fake_");
+    let replaced = replace_engine_id(&replaced, "conv-");
+    let replaced = replace_engine_id(&replaced, "ses-");
+    let replaced = replace_step_ids(&replaced);
     if roots.repo.iter().any(|root| root == &replaced) {
         "<repoRoot>".to_string()
     } else if roots.data.iter().any(|root| root == &replaced) {
@@ -178,6 +186,53 @@ fn replace_pid_counter(text: &str, prefix: &str) -> String {
         } else {
             out.push_str(prefix);
             rest = after;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// `/conv-\d+/g` and `/ses-\d+/g`: the engine's conversation/session ids keep the prefix only.
+fn replace_engine_id(text: &str, prefix: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find(prefix) {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + prefix.len()..];
+        let digits = after.bytes().take_while(u8::is_ascii_digit).count();
+        if digits > 0 {
+            out.push_str(prefix);
+            out.push_str("<pid>");
+            rest = &after[digits..];
+        } else {
+            // No digits: no match here, the regex retries one char later.
+            out.push_str(&rest[start..start + 1]);
+            rest = &rest[start + 1..];
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// `/:a\d+_\d+_/g`: agy's `a<pid>_<run>_<step>` ids keep the step, losing the pid and the run.
+fn replace_step_ids(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find(":a") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        let pid = after.bytes().take_while(u8::is_ascii_digit).count();
+        let run = after[pid..]
+            .strip_prefix('_')
+            .map(|tail| tail.bytes().take_while(u8::is_ascii_digit).count())
+            .unwrap_or(0);
+        if pid > 0 && run > 0 && after.as_bytes().get(pid + 1 + run) == Some(&b'_') {
+            out.push_str(":a<pid>_<run>_");
+            rest = &after[pid + 1 + run + 1..];
+        } else {
+            // No full id: no match here, the regex retries one char later.
+            out.push_str(&rest[start..start + 1]);
+            rest = &rest[start + 1..];
         }
     }
     out.push_str(rest);
@@ -245,11 +300,53 @@ fn pid_normaliser_matches_the_js_regex() {
     );
 }
 
+#[test]
+fn engine_id_normalisers_match_the_js_regex() {
+    assert_eq!(replace_engine_id("conv-123", "conv-"), "conv-<pid>");
+    assert_eq!(replace_engine_id("conv-x", "conv-"), "conv-x");
+    assert_eq!(replace_engine_id("a:conv-7:b", "conv-"), "a:conv-<pid>:b");
+    assert_eq!(replace_step_ids("t:a12_3_1:0"), "t:a<pid>_<run>_1:0");
+    assert_eq!(replace_step_ids("t:a12_x"), "t:a12_x");
+    assert_eq!(replace_engine_id("ses-9.", "ses-"), "ses-<pid>.");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn sessions_match_the_node_golden() {
+    replay("sessions.json", |options| {
+        options.bins.claude = Some(PathBuf::from("node"));
+        options.bins.claude_args = fake_script_args("fake-claude.mjs", &[]);
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn agy_sessions_match_the_node_golden() {
+    replay("sessions-agy.json", |options| {
+        options.bins.claude = Some(PathBuf::from("node"));
+        options.bins.claude_args = fake_script_args("fake-claude.mjs", &[]);
+        options.bins.agy = Some(PathBuf::from("node"));
+        options.bins.agy_args = fake_script_args("fake-agy.mjs", &[]);
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn opencode_sessions_match_the_node_golden() {
+    replay("sessions-opencode.json", |options| {
+        options.bins.claude = Some(PathBuf::from("node"));
+        options.bins.claude_args = fake_script_args("fake-claude.mjs", &[]);
+        options.bins.opencode = Some(PathBuf::from("node"));
+        options.bins.opencode_args = fake_script_args("fake-opencode.mjs", &[]);
+    })
+    .await;
+}
+
+/// The whole `captureSessions` flow for one golden; `configure` picks the engine bins.
+async fn replay(golden: &str, configure: impl FnOnce(&mut ServerOptions)) {
     require_fake_engine();
-    let raw = fs::read_to_string(golden_file())
-        .unwrap_or_else(|error| panic!("read {}: {error}", golden_file().display()));
+    let file = golden_file(golden);
+    let raw = fs::read_to_string(&file)
+        .unwrap_or_else(|error| panic!("read {}: {error}", file.display()));
     let golden: Value = serde_json::from_str(&raw).expect("parse sessions golden");
 
     let dir = common::temp_dir("sessions-parity");
@@ -265,20 +362,10 @@ async fn sessions_match_the_node_golden() {
         data: root_variants(&data),
     };
 
-    let mut options = ServerOptions::new(repo.clone());
-    options.data_root = Some(data.clone());
-    options.memory_secrets = true;
+    let mut options = fake_engine_options(&repo, &data);
     // Long enough that only the turn's events can appear in the stream, like the Node capture.
     options.keep_alive = Duration::from_secs(120);
-    options.bins.claude = Some(PathBuf::from("node"));
-    options.bins.claude_args = vec![
-        common::repo_root()
-            .join("app")
-            .join("test")
-            .join("fake-claude.mjs")
-            .display()
-            .to_string(),
-    ];
+    configure(&mut options);
     let server = start(options).await.expect("start Rust server");
     let client = Client::new();
 
@@ -437,4 +524,186 @@ async fn sessions_match_the_node_golden() {
         .map(String::as_str)
         .collect();
     assert_eq!(keys, ["state", "provider", "resume", "canRetry"], "{text}");
+}
+
+/// A response body as JSON, or the empty string a notification's 202 carries.
+async fn response_body(response: Response) -> Value {
+    let text = response.text().await.expect("read body");
+    if text.is_empty() {
+        Value::String(String::new())
+    } else {
+        serde_json::from_str(&text).unwrap_or_else(|error| panic!("not JSON ({error}): {text}"))
+    }
+}
+
+/// AC1/AC2/AC6: the `/mcp` surface replayed from the Node capture (app/test/capture-mcp-golden.ts).
+///
+/// Every case is the request the capture sent, against the same seeds: statuses, bodies and key order
+/// first, then the writing tools' data-folder files and session.
+#[tokio::test(flavor = "multi_thread")]
+async fn mcp_matches_the_node_golden() {
+    require_fake_engine();
+    let golden = cli_golden::golden("mcp");
+    assert_eq!(golden["route"].as_str(), Some("mcp"), "golden route");
+
+    let dir = common::temp_dir("mcp-parity");
+    let repo = dir.0.join("repo");
+    let data = dir.0.join("data");
+    fs::create_dir_all(&repo).expect("create repo");
+    fs::create_dir_all(&data).expect("create data");
+    write_seed(&repo, &golden["seed"]);
+    write_data_seed(&data, &golden["dataSeed"]);
+
+    let roots = Roots {
+        repo: root_variants(&repo),
+        data: root_variants(&data),
+    };
+
+    let options = fake_engine_options(&repo, &data);
+    let server = start(options).await.expect("start Rust server");
+    let client = Client::new();
+
+    let response = post(
+        &client,
+        &server,
+        "/api/sessions",
+        &golden["createBody"].to_string(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK, "POST /api/sessions");
+    let created = body_json(response).await;
+    let session_id = created["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no id in {created}"))
+        .to_string();
+    wait_for(&client, &server, &session_id, "idle").await;
+
+    let token = server.sessions.token();
+    let in_scope: Vec<String> = golden["inScope"]
+        .as_array()
+        .expect("golden inScope")
+        .iter()
+        .map(|name| name.as_str().expect("tool name").to_string())
+        .collect();
+
+    for case in golden["cases"].as_array().expect("cases array") {
+        let name = case["name"].as_str().expect("case name");
+        let request = &case["request"];
+        let path = request["path"]
+            .as_str()
+            .expect("case path")
+            .replace("<session>", &session_id);
+        let body = match request.get("rawBody").and_then(Value::as_str) {
+            Some(raw) => raw.to_string(),
+            None => request["body"].to_string(),
+        };
+        // The capture snapshots before the call and again a second later, after the board debounce.
+        let before = case.get("files").map(|_| cli_golden::snapshot(&data));
+
+        let mut builder = client
+            .post(format!("{}{path}", server.url))
+            .header(CONTENT_TYPE, "application/json")
+            .body(body);
+        if request["headers"].get("x-learner-token").is_some() {
+            builder = builder.header("x-learner-token", token.as_str());
+        }
+        let response = builder
+            .send()
+            .await
+            .unwrap_or_else(|error| panic!("{name}: POST {path}: {error}"));
+        assert_eq!(
+            u64::from(response.status().as_u16()),
+            case["response"]["status"].as_u64().expect("golden status"),
+            "{name}: status"
+        );
+        let reply = response_body(response).await;
+
+        if name == "unknown-tool" {
+            // Node names the out-of-scope tools too (D11): only `inScope`, in Node's order, may appear.
+            assert_eq!(
+                reply["result"]["isError"],
+                Value::Bool(true),
+                "{name}: isError"
+            );
+            let text = reply["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{name}: no text content in {reply}"));
+            let prefix = case["response"]["body"]["textStartsWith"]
+                .as_str()
+                .expect("golden prefix");
+            assert!(text.starts_with(prefix), "{name}: {text}");
+            assert_eq!(
+                text,
+                format!("{prefix} {}.", in_scope.join(", ")),
+                "{name}: available tools"
+            );
+        } else if name == "tools-list" {
+            let tools = &reply["result"]["tools"];
+            let expected = &case["response"]["body"]["result"]["tools"];
+            assert_eq!(tools, expected, "{name}: tools");
+            assert_eq!(
+                serde_json::to_string(tools).expect("serialise Rust tools"),
+                serde_json::to_string(expected).expect("serialise golden tools"),
+                "{name}: key order"
+            );
+            let names: Vec<&str> = tools
+                .as_array()
+                .expect("tools array")
+                .iter()
+                .map(|tool| tool["name"].as_str().expect("tool name"))
+                .collect();
+            let expected_names: Vec<&str> = in_scope.iter().map(String::as_str).collect();
+            assert_eq!(names, expected_names, "{name}: names");
+        } else {
+            assert_same(name, &reply, &case["response"]["body"], &roots, &session_id);
+        }
+
+        let Some(before) = before else { continue };
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let after = cli_golden::snapshot(&data);
+        let mut files = cli_golden::changes(&before, &after);
+        // The progress log is the quiz tests' business; the board's index.html is already excluded.
+        files
+            .as_object_mut()
+            .expect("changes object")
+            .remove("courses/demo/progress.jsonl");
+        let expected = &case["files"];
+        if let Some(detail) = cli_golden::describe_files(expected, &files) {
+            panic!("{name}: files differ: {detail}");
+        }
+        assert_eq!(&files, expected, "{name}: files");
+
+        let response = client
+            .get(format!("{}/api/sessions/{session_id}", server.url))
+            .send()
+            .await
+            .unwrap_or_else(|error| panic!("{name}: GET session: {error}"));
+        assert_eq!(response.status(), StatusCode::OK, "{name}: GET session");
+        let state = body_json(response).await;
+        let items: Vec<Value> = state["items"]
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .filter(|item| matches!(item["kind"].as_str(), Some("node" | "finish")))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+        let got = json!({
+            "lessonPath": state["lessonPath"].clone(),
+            "plan": state["plan"].clone(),
+            "pendingRequestId": state["pendingRequestId"].clone(),
+            "items": items,
+        });
+        assert_same(
+            &format!("{name} session"),
+            &got,
+            &case["session"],
+            &roots,
+            &session_id,
+        );
+    }
+
+    server.shutdown().await;
 }

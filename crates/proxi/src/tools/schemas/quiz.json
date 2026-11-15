@@ -1,0 +1,95 @@
+{
+  "type": "object",
+  "properties": {
+    "kind": {
+      "type": "string",
+      "enum": [
+        "probe",
+        "predict",
+        "check"
+      ],
+      "description": "probe = level mapping; predict = before teaching a node; check = after teaching it"
+    },
+    "nodeId": {
+      "description": "Plan node id such as \"N3\". Required for predict and check.",
+      "type": "string",
+      "pattern": "^N\\d+$"
+    },
+    "question": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Exactly one question; markdown and LaTeX allowed."
+    },
+    "options": {
+      "minItems": 2,
+      "maxItems": 6,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1
+          },
+          "value": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "label"
+        ]
+      },
+      "description": "2 to 6 bare claims. Never add an I-dont-know option: the app adds it."
+    },
+    "multiSelect": {
+      "description": "Set when more than one option is correct.",
+      "type": "boolean"
+    },
+    "explanation": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Shown after answering, whether right or wrong."
+    },
+    "correctAnswer": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      ],
+      "description": "Option value(s) (the label when no value was given), not positions."
+    },
+    "misconceptions": {
+      "description": "Per wrong option: the misconception it probes.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string"
+          },
+          "misconception": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "misconception"
+        ]
+      }
+    }
+  },
+  "required": [
+    "kind",
+    "question",
+    "options",
+    "explanation",
+    "correctAnswer"
+  ]
+}

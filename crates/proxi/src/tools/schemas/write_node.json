@@ -1,0 +1,303 @@
+{
+  "type": "object",
+  "properties": {
+    "planNode": {
+      "type": "string",
+      "pattern": "^N\\d+$",
+      "description": "The plan node this realises."
+    },
+    "node": {
+      "type": "object",
+      "properties": {
+        "nodeId": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "description": "Unique in the lesson; writing the same nodeId again replaces the node."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tier": {
+          "type": "string",
+          "enum": [
+            "unconditional-truth",
+            "axiom",
+            "derivation"
+          ]
+        },
+        "summary": {
+          "description": "Concise 1-2 sentence distilled claim for the Sintesi reference sheet.",
+          "type": "string"
+        },
+        "motivation": {
+          "description": "Authored HTML or prose.",
+          "type": "string"
+        },
+        "content": {
+          "description": "Authored HTML or prose: the Establish step.",
+          "type": "string"
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "stepId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "title": {
+                "type": "string"
+              },
+              "content": {
+                "type": "string"
+              },
+              "math": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "codeBlocks": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "language": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "caption": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code"
+                  ]
+                }
+              },
+              "visuals": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "svg-inline",
+                        "image",
+                        "mermaid"
+                      ]
+                    },
+                    "content": {
+                      "type": "string"
+                    },
+                    "caption": {
+                      "type": "string"
+                    },
+                    "alt": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "content"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "stepId",
+              "content"
+            ]
+          }
+        },
+        "math": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "codeBlocks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "language": {
+                "type": "string"
+              },
+              "code": {
+                "type": "string"
+              },
+              "caption": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "code"
+            ]
+          }
+        },
+        "visuals": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "svg-inline",
+                      "image",
+                      "mermaid"
+                    ]
+                  },
+                  "content": {
+                    "type": "string"
+                  },
+                  "caption": {
+                    "type": "string"
+                  },
+                  "alt": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "content"
+                ]
+              },
+              {
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "anchors": {
+          "description": "Known concepts this idea builds on: id and name from search_concepts/open_concept/browse_concepts. Name them in the prose too.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^n_\\S+$"
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ]
+          }
+        },
+        "connection": {
+          "type": "string"
+        },
+        "quiz": {
+          "type": "object",
+          "properties": {
+            "question": {
+              "type": "string",
+              "minLength": 1
+            },
+            "options": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "correctAnswer": {
+              "description": "The text of the correct option; must equal options[correctIndex - 1].",
+              "type": "string"
+            },
+            "correctIndex": {
+              "description": "1-based index into options.",
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "explanation": {
+              "type": "string",
+              "minLength": 1
+            },
+            "misconceptions": {
+              "description": "optionIndex is 1-based.",
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "optionIndex": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  "misconception": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "optionIndex",
+                  "misconception"
+                ]
+              }
+            }
+          },
+          "required": [
+            "question",
+            "explanation"
+          ]
+        },
+        "ankiParams": {
+          "description": "Only when the learner opted in AND passed the check for this node: write the node first without it, then rewrite the same nodeId with ankiParams after the pass.",
+          "type": "object",
+          "properties": {
+            "targetQuestion": {
+              "type": "string"
+            },
+            "targetFact": {
+              "type": "string"
+            },
+            "suggestedCloze": {
+              "type": "string"
+            },
+            "clozeExtra": {
+              "type": "string"
+            },
+            "deck": {
+              "type": "string"
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "required": [
+        "nodeId",
+        "title",
+        "tier"
+      ]
+    }
+  },
+  "required": [
+    "planNode",
+    "node"
+  ]
+}

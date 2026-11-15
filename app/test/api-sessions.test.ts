@@ -37,6 +37,19 @@ async function waitFor<T>(fn: () => T | undefined | false | Promise<T | undefine
   }
 }
 
+/** Windows: a killed binary leaves its engine child holding the folder for a moment; retry instead of failing the teardown. */
+async function removeTree(dir: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 1 });
+      return;
+    } catch (error) {
+      if (attempt === 40) throw error;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+  }
+}
+
 /** Minimal SSE client: parses `data:` lines from a fetch stream into ServerEvents. */
 function sse(url: string) {
   const events: ServerEvent[] = [];
@@ -82,8 +95,8 @@ describe("api sessions over HTTP", () => {
   });
   after(async () => {
     await server.close();
-    fs.rmSync(root, { recursive: true, force: true, maxRetries: 3 });
-    fs.rmSync(data, { recursive: true, force: true, maxRetries: 3 });
+    await removeTree(root);
+    await removeTree(data);
   });
 
   it("guards and validation", async () => {
@@ -236,10 +249,13 @@ describe("api sessions over HTTP", () => {
   it("persists state.json and loads it on the next server", async () => {
     const dir = path.join(root, ".learner", "sessions", teachId);
     const file = path.join(dir, "state.json");
+    const before = await get(teachId);
+    // The save is debounced (300 ms): wait for the file to reach the live session, since a killed
+    // binary cannot flush on close like the Node server does.
     const saved = await waitFor(() => {
       try {
         const raw = JSON.parse(fs.readFileSync(file, "utf-8"));
-        return raw.state?.status === "idle" ? raw : undefined;
+        return raw.state?.status === "idle" && JSON.stringify(raw.state.items) === JSON.stringify(before.items) ? raw : undefined;
       } catch {
         return undefined; // not written yet
       }
@@ -250,7 +266,6 @@ describe("api sessions over HTTP", () => {
     assert.ok(fs.existsSync(path.join(dir, "mcp.json")));
     assert.ok(fs.existsSync(path.join(dir, "system.md")));
 
-    const before = await get(teachId);
     await server.close();
     server = await start();
     const loaded = await get(teachId);
@@ -300,8 +315,8 @@ describe("api sessions over HTTP", () => {
       await srv.close();
       if (prev === undefined) delete process.env.ANTHROPIC_API_KEY;
       else process.env.ANTHROPIC_API_KEY = prev;
-      fs.rmSync(repo, { recursive: true, force: true, maxRetries: 3 });
-      fs.rmSync(envData, { recursive: true, force: true, maxRetries: 3 });
+      await removeTree(repo);
+      await removeTree(envData);
     }
   });
 });
