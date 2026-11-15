@@ -14,8 +14,23 @@ enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// Lessons: init, append, list, rebuild, compile-ref (reference)
+    Lesson {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Anki cards: ping, extract, export, sync
+    Anki {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
     /// Run the local server
     Serve(proxi::server::ServeArgs),
+    /// Homepage and chapter plan: generate, plan, chapters, help
+    Home {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
     /// Embedding benchmark: recall@3 and median query time
     EmbedBench(proxi::embed_bench::EmbedBenchArgs),
 }
@@ -25,14 +40,21 @@ fn main() -> std::process::ExitCode {
         .map(|a| a.to_string_lossy().into_owned())
         .collect();
 
-    let code = if args.get(1).map(String::as_str) == Some("data") {
-        proxi::data_root::run_cli(&args[2..])
-    } else {
-        let cli = Cli::parse_from(&args);
-        match cli.command {
-            Command::Data { args } => proxi::data_root::run_cli(&args),
-            Command::Serve(args) => proxi::server::serve_cli(args),
-            Command::EmbedBench(args) => proxi::embed_bench::run_cli(args),
+    let code = match args.get(1).map(String::as_str) {
+        Some("data") => proxi::data_root::run_cli(&args[2..]),
+        Some("lesson") => proxi::lesson::cli::run_cli(&args[2..]),
+        Some("anki") => proxi::anki::cli::run_cli(&args[2..]),
+        Some("home") => proxi::home::run_cli(&args[2..]),
+        _ => {
+            let cli = Cli::parse_from(&args);
+            match cli.command {
+                Command::Data { args } => proxi::data_root::run_cli(&args),
+                Command::Lesson { args } => proxi::lesson::cli::run_cli(&args),
+                Command::Anki { args } => proxi::anki::cli::run_cli(&args),
+                Command::Serve(args) => proxi::server::serve_cli(args),
+                Command::Home { args } => proxi::home::run_cli(&args),
+                Command::EmbedBench(args) => proxi::embed_bench::run_cli(args),
+            }
         }
     };
 

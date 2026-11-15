@@ -63,6 +63,10 @@ describe("RUST_PORTED", () => {
   it("includes the graph API test ported to Rust", () => {
     assert.ok(RUST_PORTED.includes("app/test/graph-api.test.ts"));
   });
+
+  it("runs the exercises routes against the spawned binary", () => {
+    assert.ok(RUST_PORTED.includes("app/test/api-exercises.test.ts"));
+  });
 });
 
 describe("missingFiles", () => {

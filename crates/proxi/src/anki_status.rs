@@ -6,6 +6,7 @@ use serde_json::{Map, Value};
 
 use crate::anki_client::AnkiClient;
 use crate::course_data::{course_deck_name_for, course_slugs, DECK_ROOT};
+use crate::js::first_value;
 use crate::protocol::{AnkiCourseStats, AnkiStatusResponse, JsNumber};
 
 /// `String(v)`: strings stay bare, everything else is its JSON text.
@@ -30,33 +31,6 @@ fn count(entry: Option<&Value>, key: &str) -> f64 {
         .and_then(Value::as_f64)
         .filter(|value| value.is_finite() && *value != 0.0)
         .unwrap_or(0.0)
-}
-
-/// JS `Object.values(map)[0]`: array-index keys enumerate first, smallest index first.
-fn first_value(map: &Map<String, Value>) -> Option<&Value> {
-    let mut first: Option<(u64, &Value)> = None;
-    for (key, value) in map {
-        if let Some(index) = array_index(key) {
-            if first.is_none_or(|(smallest, _)| index < smallest) {
-                first = Some((index, value));
-            }
-        }
-    }
-    first
-        .map(|(_, value)| value)
-        .or_else(|| map.values().next())
-}
-
-/// A key JS enumerates as an array index: digits, no leading zero, below 2^32 - 1.
-fn array_index(key: &str) -> Option<u64> {
-    if key.is_empty()
-        || !key.bytes().all(|byte| byte.is_ascii_digit())
-        || (key.len() > 1 && key.starts_with('0'))
-    {
-        return None;
-    }
-    let index: u64 = key.parse().ok()?;
-    (index < 4_294_967_295).then_some(index)
 }
 
 #[derive(Clone, Debug, PartialEq)]

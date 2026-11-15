@@ -5,10 +5,13 @@ import os from "node:os";
 import path from "node:path";
 import { after, describe, it } from "node:test";
 import { GOOGLE_CLIENT_ID } from "../server/sync/gdrive.ts";
+import { ANKI_ERROR, ANKI_GOLDEN, captureAnkiGolden } from "./capture-anki-golden.ts";
 import { captureGolden, GOLDEN_DIR, ISO_RE, normalise, normaliseSession, rootVariants } from "./capture-golden.ts";
+import { captureLessonGolden, LESSON_GOLDEN } from "./capture-lesson-golden.ts";
 import { REPO_ROOT } from "./harness.ts";
 
-const ROUTES = ["settings", "limits", "events", "courses", "lesson", "graph", "sync", "sync-gdrive", "sessions"];
+const ROUTES = ["settings", "limits", "events", "courses", "lesson", "graph", "exercises", "sync", "sync-gdrive", "home", "sessions"];
+const ALL_GOLDENS = [...ROUTES, LESSON_GOLDEN, ANKI_GOLDEN];
 
 const dirs: string[] = [];
 function tempDir(prefix: string): string {
@@ -113,7 +116,9 @@ describe("rootVariants", () => {
 it("committed golden fixtures match a fresh Node capture", async () => {
   const out = tempDir("golden-fresh-");
   await captureGolden(out);
-  for (const route of ROUTES) {
+  await captureLessonGolden(out);
+  await captureAnkiGolden(out);
+  for (const route of ALL_GOLDENS) {
     const committed = path.join(GOLDEN_DIR, `${route}.json`);
     assert.ok(fs.existsSync(committed), `missing ${committed}: run npm run golden:capture`);
     // Parsed, not bytes: with core.autocrlf the checkout is CRLF while a fresh capture is LF.
@@ -166,6 +171,36 @@ it("graph golden holds the graph event and JS-shaped positions", () => {
   const body = byName("get-graph").response.body;
   for (const node of body.nodes) assert.ok(node.id in body.positions, `no position for ${node.id}`);
   assert.match(goldenText("graph"), /"dataSeed"/);
+});
+
+it("exercises golden holds the workspace order, the stale conflict and the courses event", () => {
+  interface FileEntry {
+    path: string;
+    readOnly: boolean;
+  }
+  const file = JSON.parse(goldenText("exercises")) as {
+    cases: Array<{ name: string; firstEvent?: unknown; response: { status: number; body: unknown } }>;
+  };
+  const byName = (name: string) => {
+    const found = file.cases.find((c) => c.name === name);
+    assert.ok(found, `missing exercises case ${name}`);
+    return found;
+  };
+  const detail = byName("detail").response.body as { files: FileEntry[] };
+  assert.deepStrictEqual(
+    detail.files.map((f) => [f.path, f.readOnly]),
+    [
+      ["app.js", false],
+      ["Esercizio.js", false],
+      ["Esercizio.test.js", true],
+      ["sub/a/b/ok.js", false],
+    ],
+  );
+  const stale = byName("save-stale").response;
+  assert.equal(stale.status, 409);
+  assert.deepStrictEqual(stale.body, { error: "Il file è cambiato fuori dall'editor", code: "stale" });
+  assert.deepStrictEqual(byName("save").firstEvent, { type: "courses" });
+  assert.deepStrictEqual(byName("hint").firstEvent, { type: "courses" });
 });
 
 it("sync golden records one commit with the normalised host", () => {
@@ -278,11 +313,75 @@ it("golden fixtures hold no raw timestamps", () => {
   assert.match(goldenText("events"), /"<iso>"/);
 });
 
+it("home golden normalises the stamp and covers every AC case", () => {
+  const file = JSON.parse(goldenText("home")) as {
+    cases: Array<{
+      name: string;
+      result: { exitCode: number; stdout: string; stderr: string };
+      ankiRequests?: unknown[];
+      files: Record<string, string>;
+    }>;
+  };
+  const byName = (name: string) => {
+    const found = file.cases.find((entry) => entry.name === name);
+    assert.ok(found, `missing home case ${name}`);
+    return found;
+  };
+
+  const anki = byName("generate-anki");
+  const ankiHtml = anki.files["index.html"] ?? "";
+  assert.match(ankiHtml, /Dati Anki al <it-IT>/);
+  assert.match(ankiHtml, /rigenera con <code>npm run home<\/code>/);
+  assert.equal(anki.ankiRequests?.length, 2);
+  assert.deepEqual(anki.ankiRequests?.[0], { action: "deckNamesAndIds", version: 6 });
+
+  const noAnki = byName("generate-no-anki");
+  assert.equal(
+    noAnki.result.stdout,
+    "<dataRoot>/index.html — 2 chapters, 6 lessons taught, 3 outside the plan, without Anki\n"
+  );
+  const html = noAnki.files["index.html"] ?? "";
+  assert.ok(html.includes('href="courses/docker/lessons/0002-con%20spazio.html"'));
+  const fuori = html.indexOf("Fuori dal piano");
+  assert.ok(fuori >= 0, "the orphan section is rendered");
+  const hrefs = [
+    'href="courses/docker/lessons/0002-con%20spazio.html"',
+    'href="courses/docker/lessons/0004-image-e-container-bis.html"',
+    'href="courses/probabilita/lessons/0002-dadi.html"',
+  ].map((href) => html.indexOf(href, fuori));
+  assert.ok(hrefs[0] >= 0, "first orphan");
+  assert.ok(hrefs[1] > hrefs[0], "docker 0004 after docker 0002");
+  assert.ok(hrefs[2] > hrefs[1], "probabilita 0002 after docker 0004");
+
+  const options = byName("generate-options");
+  assert.equal(
+    options.result.stdout,
+    "<dataRoot>/board.html — 3 chapters, 2 lessons taught, 1 outside the plan, without Anki\n"
+  );
+  assert.deepEqual(Object.keys(options.files), ["board.html"]);
+  assert.ok(options.files["board.html"]?.includes('href="courses/rust/"'));
+  assert.ok(options.files["board.html"]?.includes("0001-ownership.html"));
+
+  assert.deepEqual(Object.keys(byName("plan-curriculum").files), ["plan.json"]);
+
+  const optionsListing = byName("chapters-options").result.stdout;
+  assert.match(optionsListing, /Ownership/);
+  assert.match(optionsListing, /Borrow/);
+  assert.notEqual(optionsListing, byName("chapters").result.stdout);
+
+  const unreachable = byName("generate-anki-unreachable");
+  assert.equal(unreachable.result.exitCode, 1);
+  assert.deepEqual(unreachable.files, {});
+  assert.match(unreachable.result.stderr, /AnkiConnect non raggiungibile \(fetch failed\)/);
+
+  assert.deepEqual(byName("chapters").files, {});
+});
+
 it("golden fixtures hold no key-like or personal data", () => {
   const keyLike = new RegExp("(?<![A-Za-z0-9_-])" + "sk" + "-");
   const personal = [os.tmpdir(), fs.realpathSync.native(os.tmpdir()), REPO_ROOT];
   const host = `(${os.hostname()})`;
-  for (const route of ROUTES) {
+  for (const route of ALL_GOLDENS) {
     const text = goldenText(route);
     assert.doesNotMatch(text, keyLike, route);
     // Walk the parsed values: JSON's escaping of Windows backslashes would hide a path in the raw text.
@@ -292,4 +391,162 @@ it("golden fixtures hold no key-like or personal data", () => {
     });
   }
   assert.match(goldenText("settings"), /"<repoRoot>"/);
+});
+
+it("lesson golden holds no raw timestamps or dates", () => {
+  // Only the captured cases: the seed is the replay's input and holds no timestamps.
+  const file = JSON.parse(goldenText(LESSON_GOLDEN)) as { cases: unknown };
+  const text = JSON.stringify(file.cases);
+  assert.doesNotMatch(text, /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
+  assert.doesNotMatch(text, /Generated: \d{4}/);
+  assert.match(text, /<iso>/);
+  assert.match(text, /Generated: <date>/);
+});
+
+it("lesson golden pins the slug and the D11 stderr", () => {
+  const file = JSON.parse(goldenText(LESSON_GOLDEN)) as {
+    cases: Array<{ name: string; stdout: string; stderr: string; files: Record<string, string | null> }>;
+  };
+  const init = file.cases.find((c) => c.name === "init-default");
+  assert.ok(init, "missing init-default");
+  assert.match(init.stdout, /"slug": "probabilita-e-davvero-50-ca-va"/);
+  for (const c of file.cases) {
+    assert.doesNotMatch(c.stderr, /\[home\]/, c.name);
+    assert.equal(Object.keys(c.files).includes("index.html"), false, c.name);
+  }
+});
+
+it("anki golden pins ping, LaTeX and the data/stdin parity", () => {
+  const file = JSON.parse(goldenText(ANKI_GOLDEN)) as {
+    cases: Array<{ name: string; stdout: string; exitCode: number; files: Record<string, string | null> }>;
+  };
+  const byName = (name: string) => {
+    const found = file.cases.find((c) => c.name === name);
+    assert.ok(found, `missing anki case ${name}`);
+    return found;
+  };
+  assert.equal(byName("ping-online").stdout, "✅ AnkiConnect is ONLINE (<ankiUrl>) — Version 6 (<ms>ms)\n");
+  // The error after the prefix is platform-dependent: `fetch failed` on a fast refusal, a timeout on a slow one.
+  const offline = byName("ping-offline");
+  assert.ok(offline.stdout.startsWith("⚠️ AnkiConnect is OFFLINE (<deadUrl>): "));
+  assert.equal(offline.exitCode, 0);
+  assert.match(byName("ping-timeout").stdout, /Connection timed out/);
+  assert.ok(byName("ping-error").stdout.includes(ANKI_ERROR));
+  assert.equal(
+    byName("export-data-nodes").files["decks/from-data.tsv"],
+    byName("export-stdin-nodes").files["decks/from-stdin.tsv"],
+  );
+  // The JSON-escaped `\(\frac`: the LaTeX pass ran, and the extract dump keeps V8's number printing.
+  // normaliseStream turns every backslash into `/`, so the pinned escape reads `/(/frac` in the golden.
+  const latex = JSON.stringify("\\(\\frac").slice(1, -1).split("\\\\").join("/").split("\\").join("/");
+  const extract = byName("extract-course").stdout;
+  assert.ok(extract.includes('"vue-js-vetrine"'));
+  assert.ok(extract.includes('"tier::undefined"'));
+  assert.ok(extract.includes(latex));
+  assert.ok(extract.includes('"lessonNumber": 1,'));
+});
+
+it("anki golden pins sync", () => {
+  interface SyncNote {
+    deckName: string;
+    modelName: string;
+    fields: Record<string, string | null>;
+    options: { allowDuplicate: boolean; duplicateScope: string };
+  }
+  interface SyncRequest {
+    action: string;
+    params?: { deck?: string; notes?: SyncNote[]; modelName?: string };
+  }
+  interface SyncCase {
+    name: string;
+    stdout: string;
+    exitCode: number;
+    requests: SyncRequest[];
+    files: Record<string, string | null>;
+  }
+  const file = JSON.parse(goldenText(ANKI_GOLDEN)) as { cases: SyncCase[] };
+  const byName = (name: string) => {
+    const found = file.cases.find((c) => c.name === name);
+    assert.ok(found, `missing anki case ${name}`);
+    return found;
+  };
+  const actions = (c: SyncCase) => c.requests.map((r) => r.action);
+  const addedCount = (c: SyncCase) => Number(/^✅ Synced (\d+) cards/.exec(c.stdout)?.[1] ?? NaN);
+  const duplicateCount = (c: SyncCase) => Number(/\((\d+) duplicates skipped\)/.exec(c.stdout)?.[1] ?? NaN);
+  const addNotes = (c: SyncCase) => {
+    const request = c.requests.find((r) => r.action === "addNotes");
+    assert.ok(request, `${c.name} has no addNotes request`);
+    return request.params?.notes ?? [];
+  };
+
+  for (const c of file.cases) assert.ok(Array.isArray(c.requests), `${c.name} has no requests array`);
+
+  const lesson = byName("sync-lesson");
+  assert.deepEqual(actions(lesson), ["version", "createDeck", "modelNames", "addNotes"]);
+  assert.match(lesson.stdout, /^✅ Synced ([1-9]\d*) cards to deck 'Proxi::Vue\.js & Vetrine' \(0 duplicates skipped\)\n📁 Backup TSV saved to /);
+  assert.deepEqual(lesson.requests.find((r) => r.action === "createDeck")?.params, { deck: "Proxi::Vue.js & Vetrine" });
+  for (const note of addNotes(lesson)) {
+    assert.equal(note.deckName, "Proxi::Vue.js & Vetrine");
+    assert.deepEqual(note.options, { allowDuplicate: false, duplicateScope: "deck" });
+  }
+  const firstAdded = addedCount(lesson);
+
+  const again = byName("sync-lesson-again");
+  assert.ok(again.stdout.startsWith("✅ Synced 0 cards"), again.stdout);
+  assert.equal(duplicateCount(again), firstAdded);
+
+  const duplicates = byName("sync-allow-duplicates");
+  assert.equal(addedCount(duplicates), firstAdded);
+  for (const note of addNotes(duplicates)) assert.equal(note.options.allowDuplicate, true);
+
+  const deck = byName("sync-deck");
+  assert.deepEqual(deck.requests.find((r) => r.action === "createDeck")?.params, { deck: "Proxi::Personale" });
+  assert.ok(deck.files["decks/entropia.tsv"]?.includes("#deck:Proxi::Personale"), "sync-deck TSV header");
+
+  const italian = byName("sync-italian");
+  assert.deepEqual(actions(italian), ["version", "createDeck", "modelNames", "modelFieldNames", "modelFieldNames", "addNotes"]);
+  const italianNotes = addNotes(italian);
+  assert.equal(italianNotes.length, 1);
+  assert.equal(italianNotes[0]?.modelName, "Basilare");
+  assert.deepEqual(Object.keys(italianNotes[0]?.fields ?? {}), ["Fronte", "Retro"]);
+
+  const error = byName("sync-anki-error");
+  assert.deepEqual(actions(error), ["version"]);
+  assert.equal(error.exitCode, 0);
+  assert.ok(error.stdout.includes(`AnkiConnect offline (<errorUrl> - ${ANKI_ERROR})`), error.stdout);
+
+  const offline = byName("sync-offline");
+  assert.deepEqual(offline.requests, []);
+  assert.ok(offline.stdout.includes("Connection timed out"), offline.stdout);
+  assert.ok(offline.stdout.includes("📁 Deck TSV exported to "), offline.stdout);
+
+  const nodes = byName("sync-nodes-only");
+  assert.deepEqual(nodes.requests.find((r) => r.action === "addNotes")?.params, { notes: [] });
+});
+
+it("lesson golden covers rebuild and compile-ref", () => {
+  const file = JSON.parse(goldenText(LESSON_GOLDEN)) as {
+    cases: Array<{ name: string; stderr: string; files: Record<string, string | null> }>;
+  };
+  const byName = (name: string) => {
+    const found = file.cases.find((c) => c.name === name);
+    assert.ok(found, `missing ${name}`);
+    return found;
+  };
+
+  const reference = byName("compile-ref-default").files["reference/il-modello-osi.html"];
+  assert.ok(reference, "compile-ref-default wrote no reference/il-modello-osi.html");
+  assert.match(reference, /id="reference-data"/);
+  assert.match(reference, /confonde rete e trasporto/); // the sibling learning-record scan, not the board
+
+  const alias = Object.values(byName("reference-alias-record").files);
+  assert.equal(alias.length, 1);
+  assert.match(alias[0] as string, /confonde la legge con il caso/); // --record wins over the scan
+
+  assert.equal(byName("rebuild-slug-miss").stderr, "Error: Lesson not found: nope\n");
+  assert.equal(byName("compile-ref-slug-miss").stderr, "Error: Cannot compile reference: lesson file not found (undefined)\n");
+
+  for (const c of file.cases) {
+    for (const name of Object.keys(c.files)) assert.doesNotMatch(name, /learning-records\//, `${c.name} lists a learning record`);
+  }
 });

@@ -1,9 +1,10 @@
 //! JavaScript semantics the Node port depends on: JSON parsing, number shapes, string and regex helpers.
 
+use std::cmp::Ordering;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde_json::{Number, Value};
+use serde_json::{Map, Number, Value};
 
 /// 2^53, the largest integer a JS number holds exactly.
 const MAX_SAFE: f64 = 9007199254740992.0;
@@ -116,6 +117,58 @@ pub fn find_ci(hay: &str, needle: &str, from: usize) -> Option<usize> {
             .zip(needle)
             .all(|(a, b)| a.eq_ignore_ascii_case(b))
     })
+}
+
+/// `String.prototype.localeCompare` with the default locale: an ASCII approximation of ICU root
+/// collation. Punctuation sorts before digits, digits before letters; case breaks ties, lowercase
+/// first. Non-ASCII characters sort after `z` by their lowercase code point; full ICU is out of scope.
+pub fn locale_compare(a: &str, b: &str) -> Ordering {
+    let mut left = a.chars();
+    let mut right = b.chars();
+    loop {
+        match (left.next(), right.next()) {
+            (None, None) => break,
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (Some(x), Some(y)) => match primary_key(x).cmp(&primary_key(y)) {
+                Ordering::Equal => {}
+                other => return other,
+            },
+        }
+    }
+    for (x, y) in a.chars().zip(b.chars()) {
+        match case_rank(x).cmp(&case_rank(y)) {
+            Ordering::Equal => {}
+            other => return other,
+        }
+    }
+    a.chars().cmp(b.chars())
+}
+
+/// ICU order for ASCII punctuation/symbols (`localeCompare` puts `_` first, `$` last).
+const PUNCTUATION_ORDER: &str = "_-,;:!?.'\"()[]{}@*/\\&#%`^+<=>|~$";
+
+fn primary_key(c: char) -> (i8, u32) {
+    if c.is_whitespace() {
+        return (-1, 0);
+    }
+    if c.is_ascii_punctuation() {
+        let index = PUNCTUATION_ORDER.find(c).expect("every ASCII punctuation is listed");
+        return (0, index as u32);
+    }
+    if c.is_ascii_digit() {
+        return (1, c as u32 - '0' as u32);
+    }
+    let lower = c.to_lowercase().next().unwrap_or(c);
+    (2, lower as u32)
+}
+
+fn case_rank(c: char) -> u8 {
+    if c.is_uppercase() {
+        1
+    } else {
+        0
+    }
 }
 
 /// JS truthiness: only null, false, 0, NaN and "" are falsy (empty arrays and objects are true).
@@ -256,6 +309,33 @@ pub fn parse_json(text: &str) -> Result<Value, String> {
     serde_json::from_str(text)
         .map(normalise_numbers)
         .map_err(|e| e.to_string())
+}
+
+/// A key JS `Object` enumerates as an array index: digits, no leading zero, below 2^32 - 1.
+pub fn array_index(key: &str) -> Option<u64> {
+    if key.is_empty()
+        || !key.bytes().all(|byte| byte.is_ascii_digit())
+        || (key.len() > 1 && key.starts_with('0'))
+    {
+        return None;
+    }
+    let index: u64 = key.parse().ok()?;
+    (index < 4_294_967_295).then_some(index)
+}
+
+/// JS `Object.values(map)[0]`: array-index keys enumerate first, smallest index first.
+pub fn first_value(map: &Map<String, Value>) -> Option<&Value> {
+    let mut first: Option<(u64, &Value)> = None;
+    for (key, value) in map {
+        if let Some(index) = array_index(key) {
+            if first.is_none_or(|(smallest, _)| index < smallest) {
+                first = Some((index, value));
+            }
+        }
+    }
+    first
+        .map(|(_, value)| value)
+        .or_else(|| map.values().next())
 }
 
 fn hex_val(b: u8) -> Option<u8> {
@@ -487,6 +567,24 @@ mod tests {
     }
 
     #[test]
+    fn locale_compare_approximates_icu_root_order() {
+        let mut names = ["Esercizio.vue", "app.js"];
+        names.sort_by(|a, b| locale_compare(a, b));
+        assert_eq!(names, ["app.js", "Esercizio.vue"]);
+
+        assert_eq!(locale_compare("a", "B"), std::cmp::Ordering::Less);
+        assert_eq!(locale_compare("a", "A"), std::cmp::Ordering::Less);
+        assert_eq!(locale_compare("_x", "1"), std::cmp::Ordering::Less);
+        assert_eq!(locale_compare("1", "a"), std::cmp::Ordering::Less);
+
+        let mut names = ["zz-v", "02-a", "01-b", "01-a"];
+        names.sort_by(|a, b| locale_compare(a, b));
+        assert_eq!(names, ["01-a", "01-b", "02-a", "zz-v"]);
+
+        assert_eq!(locale_compare("a-b", "a.b"), std::cmp::Ordering::Less);
+    }
+
+    #[test]
     fn parse_reads_integral_floats_as_integers() {
         let parsed =
             parse("{\"a\":1.0,\"b\":2.5,\"c\":[3.0],\"d\":-0.0,\"e\":1e300,\"f\":7}").unwrap();
@@ -576,6 +674,22 @@ mod tests {
             "{\"b\":1,\"a\":[200,0,0.5]}"
         );
         assert!(parse_json("{nope").is_err());
+    }
+
+    #[test]
+    fn object_keys_enumerate_array_indices_first() {
+        assert_eq!(array_index("0"), Some(0));
+        assert_eq!(array_index("01"), None);
+        assert_eq!(array_index("4294967294"), Some(4_294_967_294));
+        assert_eq!(array_index("4294967295"), None);
+        assert_eq!(array_index(""), None);
+        assert_eq!(array_index("1.5"), None);
+        assert_eq!(array_index("-1"), None);
+
+        let map = parse_json(r#"{"2":"b","1":"a","x":"c"}"#).expect("json");
+        assert_eq!(first_value(map.as_object().unwrap()), Some(&json!("a")));
+        let map = parse_json(r#"{"x":"c","y":"d"}"#).expect("json");
+        assert_eq!(first_value(map.as_object().unwrap()), Some(&json!("c")));
     }
 
     #[test]

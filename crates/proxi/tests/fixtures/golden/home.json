@@ -1,0 +1,565 @@
+{
+  "route": "home",
+  "seeds": {
+    "board": {
+      "curriculum.json": "{\n  \"chapters\": [\n    {\n      \"title\": \"Docker\",\n      \"slug\": \"docker\",\n      \"note\": \"tenuto\",\n      \"lessons\": [\n        {\n          \"title\": \"Image e container\",\n          \"slug\": \"image-e-container\"\n        },\n        {\n          \"title\": \"Healthcheck\",\n          \"slug\": \"healthcheck\",\n          \"plannedNodes\": 4\n        },\n        {\n          \"title\": \"Rete & volumi\",\n          \"slug\": \"rete-and-volumi\"\n        }\n      ]\n    },\n    {\n      \"title\": \"Probabilità\",\n      \"slug\": \"probabilita\",\n      \"lessons\": [\n        {\n          \"title\": \"Eventi\",\n          \"slug\": \"eventi\",\n          \"plannedNodes\": 1\n        },\n        {\n          \"title\": \"Varianza\",\n          \"slug\": \"varianza\"\n        }\n      ]\n    }\n  ]\n}\n",
+      "plan.json": "{\n  \"chapters\": [\n    {\n      \"title\": \"Docker\",\n      \"slug\": \"docker\",\n      \"note\": \"tenuto\",\n      \"lessons\": [\n        {\n          \"title\": \"Image e container\",\n          \"slug\": \"image-e-container\"\n        },\n        {\n          \"title\": \"Healthcheck\",\n          \"slug\": \"healthcheck\",\n          \"plannedNodes\": 4\n        },\n        {\n          \"title\": \"Rete & volumi\",\n          \"slug\": \"rete-and-volumi\"\n        }\n      ]\n    },\n    {\n      \"title\": \"Probabilità\",\n      \"slug\": \"probabilita\",\n      \"lessons\": [\n        {\n          \"title\": \"Eventi\",\n          \"slug\": \"eventi\",\n          \"plannedNodes\": 1\n        },\n        {\n          \"title\": \"Varianza\",\n          \"slug\": \"varianza\"\n        }\n      ]\n    },\n    {\n      \"title\": \"Rust\",\n      \"slug\": \"rust\",\n      \"lessons\": [\n        {\n          \"title\": \"Ownership\",\n          \"slug\": \"ownership\"\n        },\n        {\n          \"title\": \"Lifetimes\",\n          \"slug\": \"lifetimes\",\n          \"plannedNodes\": 2\n        }\n      ]\n    }\n  ]\n}\n",
+      "courses/docker/lessons/0001-image-e-container.html": "<html><body><h1>Image e container</h1>\n<script type=\"application/json\" id=\"lesson-data\">\n{\n  \"metadata\": {\n    \"lessonNumber\": 1,\n    \"topic\": \"Image e container\",\n    \"title\": \"Image e container\",\n    \"slug\": \"image-e-container\",\n    \"dateCreated\": \"2026-09-01T00:00:00.000Z\",\n    \"dateModified\": \"2026-09-01T00:00:00.000Z\",\n    \"version\": \"1.0.0\"\n  },\n  \"nodes\": [\n    {\n      \"nodeId\": \"n0\",\n      \"title\": \"Nodo 0\",\n      \"tier\": \"unconditional-truth\",\n      \"content\": \"...\"\n    },\n    {\n      \"nodeId\": \"n1\",\n      \"title\": \"Nodo 1\",\n      \"tier\": \"axiom\",\n      \"content\": \"...\"\n    },\n    {\n      \"nodeId\": \"n2\",\n      \"title\": \"Nodo 2\",\n      \"tier\": \"derivation\",\n      \"content\": \"...\"\n    },\n    {\n      \"nodeId\": \"n3\",\n      \"title\": \"Nodo 3\",\n      \"tier\": \"bogus-tier\",\n      \"content\": \"...\"\n    }\n  ]\n}\n</script>\n</body></html>",
+      "courses/docker/lessons/0003-rete-and-volumi.html": "<html><body><h1>Rete & volumi</h1>\n<script type=\"application/json\" id=\"lesson-data\">\n{\n  \"metadata\": {\n    \"lessonNumber\": 3,\n    \"topic\": \"Rete & volumi\",\n    \"title\": \"Rete & volumi\",\n    \"slug\": \"rete-and-volumi\",\n    \"dateCreated\": \"2026-09-01T00:00:00.000Z\",\n    \"dateModified\": \"2026-09-01T00:00:00.000Z\",\n    \"version\": \"1.0.0\"\n  },\n  \"nodes\": []\n}\n</script>\n</body></html>",
+      "courses/docker/lessons/0002-con spazio.html": "<html><body><h1><b>A & \"B\"</b> 'c'</h1>\n<script type=\"application/json\" id=\"lesson-data\">\n{\n  \"metadata\": {\n    \"lessonNumber\": 2,\n    \"topic\": \"<b>A & \\\"B\\\"</b> 'c'\",\n    \"title\": \"<b>A & \\\"B\\\"</b> 'c'\",\n    \"slug\": \"con-spazio\",\n    \"dateCreated\": \"2026-09-01T00:00:00.000Z\",\n    \"dateModified\": \"2026-09-01T00:00:00.000Z\",\n    \"version\": \"1.0.0\"\n  },\n  \"nodes\": [\n    {\n      \"nodeId\": \"n0\",\n      \"title\": \"Nodo 0\",\n      \"tier\": \"axiom\",\n      \"content\": \"...\"\n    }\n  ]\n}\n</script>\n</body></html>",
+      "courses/docker/lessons/0004-image-e-container-bis.html": "<html><body><h1>Image e container bis</h1>\n<script type=\"application/json\" id=\"lesson-data\">\n{\n  \"metadata\": {\n    \"lessonNumber\": 4,\n    \"topic\": \"Image e container bis\",\n    \"title\": \"Image e container bis\",\n    \"slug\": \"image-e-container\",\n    \"dateCreated\": \"2026-09-01T00:00:00.000Z\",\n    \"dateModified\": \"2026-09-01T00:00:00.000Z\",\n    \"version\": \"1.0.0\"\n  },\n  \"nodes\": [\n    {\n      \"nodeId\": \"n0\",\n      \"title\": \"Nodo 0\",\n      \"tier\": \"derivation\",\n      \"content\": \"...\"\n    }\n  ]\n}\n</script>\n</body></html>",
+      "courses/docker/lessons/0005-rotta.html": "<html><body><h1>Rotta</h1>\n<script type=\"application/json\" id=\"lesson-data\">\n{ not json\n</script>\n</body></html>",
+      "courses/docker/lessons/notes.html": "<html><body><h1>Note</h1></body></html>",
+      "courses/docker/lessons/readme.txt": "Non e una lezione.\n",
+      "courses/probabilita/lessons/0001-eventi.html": "<html><body><h1></h1>\n<script type=\"application/json\" id=\"lesson-data\">\n{\n  \"metadata\": {\n    \"lessonNumber\": 1,\n    \"topic\": \"Eventi\",\n    \"title\": \"\",\n    \"slug\": \"eventi\",\n    \"dateCreated\": \"2026-09-01T00:00:00.000Z\",\n    \"dateModified\": \"2026-09-01T00:00:00.000Z\",\n    \"version\": \"1.0.0\"\n  },\n  \"nodes\": [\n    {\n      \"nodeId\": \"n0\",\n      \"title\": \"Nodo 0\",\n      \"tier\": \"axiom\",\n      \"content\": \"...\"\n    }\n  ]\n}\n</script>\n</body></html>",
+      "courses/probabilita/lessons/0002-dadi.html": "<html><body><h1>Dadi</h1>\n<script type=\"application/json\" id=\"lesson-data\">\n{\n  \"metadata\": {\n    \"lessonNumber\": 2,\n    \"topic\": \"Dadi\",\n    \"title\": \"Dadi\",\n    \"slug\": \"dadi\",\n    \"dateCreated\": \"2026-09-01T00:00:00.000Z\",\n    \"dateModified\": \"2026-09-01T00:00:00.000Z\",\n    \"version\": \"1.0.0\"\n  },\n  \"nodes\": [\n    {\n      \"nodeId\": \"n0\",\n      \"title\": \"Nodo 0\",\n      \"tier\": \"axiom\",\n      \"content\": \"...\"\n    }\n  ]\n}\n</script>\n</body></html>",
+      "courses/probabilita/reference/eventi.html": "<html></html>",
+      "courses/vuoto/MISSION.md": "# Vuoto\n",
+      "corsi/rust/lessons/0001-ownership.html": "<html><body><h1>Ownership</h1>\n<script type=\"application/json\" id=\"lesson-data\">\n{\n  \"metadata\": {\n    \"lessonNumber\": 1,\n    \"topic\": \"Ownership\",\n    \"title\": \"Ownership\",\n    \"slug\": \"ownership\",\n    \"dateCreated\": \"2026-09-01T00:00:00.000Z\",\n    \"dateModified\": \"2026-09-01T00:00:00.000Z\",\n    \"version\": \"1.0.0\"\n  },\n  \"nodes\": [\n    {\n      \"nodeId\": \"n0\",\n      \"title\": \"Nodo 0\",\n      \"tier\": \"axiom\",\n      \"content\": \"...\"\n    },\n    {\n      \"nodeId\": \"n1\",\n      \"title\": \"Nodo 1\",\n      \"tier\": \"derivation\",\n      \"content\": \"...\"\n    }\n  ]\n}\n</script>\n</body></html>",
+      "corsi/rust/lessons/0002-borrow.html": "<html><body><h1>Borrow</h1>\n<script type=\"application/json\" id=\"lesson-data\">\n{\n  \"metadata\": {\n    \"lessonNumber\": 2,\n    \"topic\": \"Borrow\",\n    \"title\": \"Borrow\",\n    \"slug\": \"borrow\",\n    \"dateCreated\": \"2026-09-01T00:00:00.000Z\",\n    \"dateModified\": \"2026-09-01T00:00:00.000Z\",\n    \"version\": \"1.0.0\"\n  },\n  \"nodes\": []\n}\n</script>\n</body></html>"
+    },
+    "empty": {},
+    "malformed": {
+      "curriculum.json": "{\"chapters\":{\"docker\":{}}}\n"
+    }
+  },
+  "cases": [
+    {
+      "name": "generate-no-anki",
+      "seed": "board",
+      "args": [
+        "generate",
+        "--no-anki"
+      ],
+      "result": {
+        "exitCode": 0,
+        "stdout": "<dataRoot>/index.html — 2 chapters, 6 lessons taught, 3 outside the plan, without Anki\n",
+        "stderr": "Ignorata docker/0005-rotta.html: Malformed #lesson-data island: <json-error>\n"
+      },
+      "files": {
+        "index.html": "<!DOCTYPE html>\n<html lang=\"it\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>Proxi</title>\n<style>\n:root{--font-body:Charter,\"Bitstream Charter\",\"Sitka Text\",Cambria,Georgia,serif;--font-ui:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Roboto,Inter,Helvetica,Arial,sans-serif;--font-mono:ui-monospace,\"SF Mono\",Monaco,\"Cascadia Code\",Consolas,monospace;--bg:#fcfbfa;--surface:#fff;--subtle:#f4f3ef;--fg:#1c1917;--fg2:#44403c;--muted:#78716c;--border:#e7e5e0;--link:#0369a1;--ok:#0f766e;--due:#b91c1c;--truth:#b45309;--axiom:#0f766e;--deriv:#4338ca}\n@media(prefers-color-scheme:dark){:root{--bg:#0f172a;--surface:#1e293b;--subtle:#192434;--fg:#f8fafc;--fg2:#cbd5e1;--muted:#94a3b8;--border:#334155;--link:#7dd3fc;--ok:#2dd4bf;--due:#fca5a5;--truth:#fbbf24;--axiom:#2dd4bf;--deriv:#a5b4fc}}\n*{box-sizing:border-box}\nbody{margin:0;background:var(--bg);color:var(--fg);font-family:var(--font-ui);font-size:15px;line-height:1.5;padding:2rem 1.25rem 4rem}\n.wrap{max-width:960px;margin:0 auto}\nh1{font-family:var(--font-body);font-size:1.6rem;margin:0 0 .15rem}\n.sub{color:var(--muted);font-size:.85rem;margin-bottom:1.75rem}\na{color:var(--link);text-decoration:none}a:hover{text-decoration:underline}\n.num{font-family:var(--font-mono);font-size:.8rem;color:var(--muted)}\n.card{background:var(--surface);border:1px solid var(--border);border-radius:8px}\n.empty{padding:1.25rem;color:var(--muted);font-size:.9rem}\ncode{font-family:var(--font-mono);font-size:.85em;background:var(--subtle);padding:.1em .3em;border-radius:4px}\n.bar{height:4px;background:var(--subtle);border-radius:2px;overflow:hidden;margin-bottom:.6rem}\n.bar>i{display:block;height:100%;background:var(--ok)}\n.dots{display:inline-flex;gap:2px;align-items:center;vertical-align:middle}\n.dots i{width:6px;height:6px;border-radius:50%;display:block}\n.dots i.truth{background:var(--truth)}.dots i.axiom{background:var(--axiom)}\n.dots i.deriv{background:var(--deriv)}.dots i.pending{background:var(--border)}\n.legend{font-size:.72rem;color:var(--muted);display:flex;gap:1rem;margin-top:2rem;padding-top:.8rem;border-top:1px solid var(--border);flex-wrap:wrap}\n.legend span{display:flex;gap:.3rem;align-items:center}\n.stamp{font-size:.72rem;color:var(--muted);margin-top:.8rem}\n.anki-strip{display:flex;align-items:center;gap:1.5rem;padding:.8rem 1rem;margin-bottom:1.75rem;flex-wrap:wrap}\n.anki-strip .stat{display:flex;flex-direction:column}\n.anki-strip .stat b{font-family:var(--font-mono);font-size:1.3rem;font-weight:600}\n.anki-strip .stat.hot b{color:var(--due)}\n.anki-strip .stat span{font-size:.7rem;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}\n.anki-strip .spacer{flex:1}\n.chapter-h{font-family:var(--font-body);font-size:1.05rem;margin:1.75rem 0 .4rem;display:flex;align-items:baseline;gap:.6rem}\n.chapter-h .num{margin-left:auto}\ntable.reg{width:100%;border-collapse:collapse}\ntable.reg td{padding:.45rem .5rem;border-bottom:1px solid var(--border);vertical-align:middle}\ntable.reg tr:last-child td{border-bottom:none}\ntable.reg td.mark{width:1.6rem;text-align:center;color:var(--ok)}\ntable.reg td.r{text-align:right;white-space:nowrap}\ntable.reg tr.is-todo td.title{color:var(--muted)}\na.ref{font-family:var(--font-mono);font-size:.7rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);text-decoration:none;border:1px solid var(--muted);border-radius:.25rem;padding:0 .25rem;margin-left:.4rem;opacity:.7}\na.ref:hover{opacity:1}\n</style>\n</head>\n<body>\n<div class=\"wrap\">\n<h1>Proxi</h1><div class=\"sub\">2 capitoli &middot; 6/6 lezioni fatte &middot; 8 nodi catturati</div><div class=\"chapter-h\"><a href=\"courses/docker/\">Docker</a><span class=\"num\">2/3</span></div><div class=\"bar\"><i style=\"width:66.7%\"></i></div><div class=\"card\"><table class=\"reg\"><tr class=\"\"><td class=\"mark\">&check;</td><td class=\"num\">0001</td><td class=\"title\"><a href=\"courses/docker/lessons/0001-image-e-container.html\">Image e container</a></td><td class=\"r\"><span class=\"dots\"><i class=\"truth\"></i><i class=\"axiom\"></i><i class=\"deriv\"></i><i class=\"deriv\"></i></span></td><td class=\"r num\">4 nodi</td></tr><tr class=\"is-todo\"><td class=\"mark\">&middot;</td><td class=\"num\">&mdash;</td><td class=\"title\">Healthcheck</td><td class=\"r\"><span class=\"dots\"><i class=\"pending\"></i><i class=\"pending\"></i><i class=\"pending\"></i><i class=\"pending\"></i></span></td><td class=\"r num\">4 nodi previsti</td></tr><tr class=\"\"><td class=\"mark\">&check;</td><td class=\"num\">0003</td><td class=\"title\"><a href=\"courses/docker/lessons/0003-rete-and-volumi.html\">Rete &amp; volumi</a></td><td class=\"r\"></td><td class=\"r num\">prosa</td></tr></table></div><div class=\"chapter-h\"><a href=\"courses/probabilita/\">Probabilità</a><span class=\"num\">1/2</span></div><div class=\"bar\"><i style=\"width:50.0%\"></i></div><div class=\"card\"><table class=\"reg\"><tr class=\"\"><td class=\"mark\">&check;</td><td class=\"num\">0001</td><td class=\"title\"><a href=\"courses/probabilita/lessons/0001-eventi.html\">Eventi</a> <a class=\"ref\" href=\"courses/probabilita/reference/eventi.html\">ref</a></td><td class=\"r\"><span class=\"dots\"><i class=\"axiom\"></i></span></td><td class=\"r num\">1 nodo</td></tr><tr class=\"is-todo\"><td class=\"mark\">&middot;</td><td class=\"num\">&mdash;</td><td class=\"title\">Varianza</td><td class=\"r\"></td><td class=\"r num\">da fare</td></tr></table></div><div class=\"chapter-h\">Fuori dal piano<span class=\"num\">3/3</span></div><div class=\"bar\"><i style=\"width:100.0%\"></i></div><div class=\"card\"><table class=\"reg\"><tr class=\"\"><td class=\"mark\">&check;</td><td class=\"num\">0002</td><td class=\"title\"><a href=\"courses/docker/lessons/0002-con%20spazio.html\">&lt;b&gt;A &amp; &quot;B&quot;&lt;/b&gt; &#39;c&#39;</a></td><td class=\"r\"><span class=\"dots\"><i class=\"axiom\"></i></span></td><td class=\"r num\">1 nodo</td></tr><tr class=\"\"><td class=\"mark\">&check;</td><td class=\"num\">0004</td><td class=\"title\"><a href=\"courses/docker/lessons/0004-image-e-container-bis.html\">Image e container bis</a></td><td class=\"r\"><span class=\"dots\"><i class=\"deriv\"></i></span></td><td class=\"r num\">1 nodo</td></tr><tr class=\"\"><td class=\"mark\">&check;</td><td class=\"num\">0002</td><td class=\"title\"><a href=\"courses/probabilita/lessons/0002-dadi.html\">Dadi</a></td><td class=\"r\"><span class=\"dots\"><i class=\"axiom\"></i></span></td><td class=\"r num\">1 nodo</td></tr></table></div><div class=\"legend\"><span><span class=\"dots\"><i class=\"truth\"></i></span> verità incondizionata</span><span><span class=\"dots\"><i class=\"axiom\"></i></span> assioma</span><span><span class=\"dots\"><i class=\"deriv\"></i></span> derivazione</span><span><span class=\"dots\"><i class=\"pending\"></i></span> nodo previsto</span></div><div class=\"stamp\">Generata senza Anki (<code>--no-anki</code>) &mdash; rigenera con <code>npm run home</code></div>\n</div>\n</body>\n</html>\n"
+      }
+    },
+    {
+      "name": "generate-default-command",
+      "seed": "board",
+      "args": [
+        "--no-anki"
+      ],
+      "result": {
+        "exitCode": 0,
+        "stdout": "<dataRoot>/index.html — 2 chapters, 6 lessons taught, 3 outside the plan, without Anki\n",
+        "stderr": "Ignorata docker/0005-rotta.html: Malformed #lesson-data island: <json-error>\n"
+      },
+      "files": {
+        "index.html": "<!DOCTYPE html>\n<html lang=\"it\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>Proxi</title>\n<style>\n:root{--font-body:Charter,\"Bitstream Charter\",\"Sitka Text\",Cambria,Georgia,serif;--font-ui:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Roboto,Inter,Helvetica,Arial,sans-serif;--font-mono:ui-monospace,\"SF Mono\",Monaco,\"Cascadia Code\",Consolas,monospace;--bg:#fcfbfa;--surface:#fff;--subtle:#f4f3ef;--fg:#1c1917;--fg2:#44403c;--muted:#78716c;--border:#e7e5e0;--link:#0369a1;--ok:#0f766e;--due:#b91c1c;--truth:#b45309;--axiom:#0f766e;--deriv:#4338ca}\n@media(prefers-color-scheme:dark){:root{--bg:#0f172a;--surface:#1e293b;--subtle:#192434;--fg:#f8fafc;--fg2:#cbd5e1;--muted:#94a3b8;--border:#334155;--link:#7dd3fc;--ok:#2dd4bf;--due:#fca5a5;--truth:#fbbf24;--axiom:#2dd4bf;--deriv:#a5b4fc}}\n*{box-sizing:border-box}\nbody{margin:0;background:var(--bg);color:var(--fg);font-family:var(--font-ui);font-size:15px;line-height:1.5;padding:2rem 1.25rem 4rem}\n.wrap{max-width:960px;margin:0 auto}\nh1{font-family:var(--font-body);font-size:1.6rem;margin:0 0 .15rem}\n.sub{color:var(--muted);font-size:.85rem;margin-bottom:1.75rem}\na{color:var(--link);text-decoration:none}a:hover{text-decoration:underline}\n.num{font-family:var(--font-mono);font-size:.8rem;color:var(--muted)}\n.card{background:var(--surface);border:1px solid var(--border);border-radius:8px}\n.empty{padding:1.25rem;color:var(--muted);font-size:.9rem}\ncode{font-family:var(--font-mono);font-size:.85em;background:var(--subtle);padding:.1em .3em;border-radius:4px}\n.bar{height:4px;background:var(--subtle);border-radius:2px;overflow:hidden;margin-bottom:.6rem}\n.bar>i{display:block;height:100%;background:var(--ok)}\n.dots{display:inline-flex;gap:2px;align-items:center;vertical-align:middle}\n.dots i{width:6px;height:6px;border-radius:50%;display:block}\n.dots i.truth{background:var(--truth)}.dots i.axiom{background:var(--axiom)}\n.dots i.deriv{background:var(--deriv)}.dots i.pending{background:var(--border)}\n.legend{font-size:.72rem;color:var(--muted);display:flex;gap:1rem;margin-top:2rem;padding-top:.8rem;border-top:1px solid var(--border);flex-wrap:wrap}\n.legend span{display:flex;gap:.3rem;align-items:center}\n.stamp{font-size:.72rem;color:var(--muted);margin-top:.8rem}\n.anki-strip{display:flex;align-items:center;gap:1.5rem;padding:.8rem 1rem;margin-bottom:1.75rem;flex-wrap:wrap}\n.anki-strip .stat{display:flex;flex-direction:column}\n.anki-strip .stat b{font-family:var(--font-mono);font-size:1.3rem;font-weight:600}\n.anki-strip .stat.hot b{color:var(--due)}\n.anki-strip .stat span{font-size:.7rem;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}\n.anki-strip .spacer{flex:1}\n.chapter-h{font-family:var(--font-body);font-size:1.05rem;margin:1.75rem 0 .4rem;display:flex;align-items:baseline;gap:.6rem}\n.chapter-h .num{margin-left:auto}\ntable.reg{width:100%;border-collapse:collapse}\ntable.reg td{padding:.45rem .5rem;border-bottom:1px solid var(--border);vertical-align:middle}\ntable.reg tr:last-child td{border-bottom:none}\ntable.reg td.mark{width:1.6rem;text-align:center;color:var(--ok)}\ntable.reg td.r{text-align:right;white-space:nowrap}\ntable.reg tr.is-todo td.title{color:var(--muted)}\na.ref{font-family:var(--font-mono);font-size:.7rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);text-decoration:none;border:1px solid var(--muted);border-radius:.25rem;padding:0 .25rem;margin-left:.4rem;opacity:.7}\na.ref:hover{opacity:1}\n</style>\n</head>\n<body>\n<div class=\"wrap\">\n<h1>Proxi</h1><div class=\"sub\">2 capitoli &middot; 6/6 lezioni fatte &middot; 8 nodi catturati</div><div class=\"chapter-h\"><a href=\"courses/docker/\">Docker</a><span class=\"num\">2/3</span></div><div class=\"bar\"><i style=\"width:66.7%\"></i></div><div class=\"card\"><table class=\"reg\"><tr class=\"\"><td class=\"mark\">&check;</td><td class=\"num\">0001</td><td class=\"title\"><a href=\"courses/docker/lessons/0001-image-e-container.html\">Image e container</a></td><td class=\"r\"><span class=\"dots\"><i class=\"truth\"></i><i class=\"axiom\"></i><i class=\"deriv\"></i><i class=\"deriv\"></i></span></td><td class=\"r num\">4 nodi</td></tr><tr class=\"is-todo\"><td class=\"mark\">&middot;</td><td class=\"num\">&mdash;</td><td class=\"title\">Healthcheck</td><td class=\"r\"><span class=\"dots\"><i class=\"pending\"></i><i class=\"pending\"></i><i class=\"pending\"></i><i class=\"pending\"></i></span></td><td class=\"r num\">4 nodi previsti</td></tr><tr class=\"\"><td class=\"mark\">&check;</td><td class=\"num\">0003</td><td class=\"title\"><a href=\"courses/docker/lessons/0003-rete-and-volumi.html\">Rete &amp; volumi</a></td><td class=\"r\"></td><td class=\"r num\">prosa</td></tr></table></div><div class=\"chapter-h\"><a href=\"courses/probabilita/\">Probabilità</a><span class=\"num\">1/2</span></div><div class=\"bar\"><i style=\"width:50.0%\"></i></div><div class=\"card\"><table class=\"reg\"><tr class=\"\"><td class=\"mark\">&check;</td><td class=\"num\">0001</td><td class=\"title\"><a href=\"courses/probabilita/lessons/0001-eventi.html\">Eventi</a> <a class=\"ref\" href=\"courses/probabilita/reference/eventi.html\">ref</a></td><td class=\"r\"><span class=\"dots\"><i class=\"axiom\"></i></span></td><td class=\"r num\">1 nodo</td></tr><tr class=\"is-todo\"><td class=\"mark\">&middot;</td><td class=\"num\">&mdash;</td><td class=\"title\">Varianza</td><td class=\"r\"></td><td class=\"r num\">da fare</td></tr></table></div><div class=\"chapter-h\">Fuori dal piano<span class=\"num\">3/3</span></div><div class=\"bar\"><i style=\"width:100.0%\"></i></div><div class=\"card\"><table class=\"reg\"><tr class=\"\"><td class=\"mark\">&check;</td><td class=\"num\">0002</td><td class=\"title\"><a href=\"courses/docker/lessons/0002-con%20spazio.html\">&lt;b&gt;A &amp; &quot;B&quot;&lt;/b&gt; &#39;c&#39;</a></td><td class=\"r\"><span class=\"dots\"><i class=\"axiom\"></i></span></td><td class=\"r num\">1 nodo</td></tr><tr class=\"\"><td class=\"mark\">&check;</td><td class=\"num\">0004</td><td class=\"title\"><a href=\"courses/docker/lessons/0004-image-e-container-bis.html\">Image e container bis</a></td><td class=\"r\"><span class=\"dots\"><i class=\"deriv\"></i></span></td><td class=\"r num\">1 nodo</td></tr><tr class=\"\"><td class=\"mark\">&check;</td><td class=\"num\">0002</td><td class=\"title\"><a href=\"courses/probabilita/lessons/0002-dadi.html\">Dadi</a></td><td class=\"r\"><span class=\"dots\"><i class=\"axiom\"></i></span></td><td class=\"r num\">1 nodo</td></tr></table></div><div class=\"legend\"><span><span class=\"dots\"><i class=\"truth\"></i></span> verità incondizionata</span><span><span class=\"dots\"><i class=\"axiom\"></i></span> assioma</span><span><span class=\"dots\"><i class=\"deriv\"></i></span> derivazione</span><span><span class=\"dots\"><i class=\"pending\"></i></span> nodo previsto</span></div><div class=\"stamp\">Generata senza Anki (<code>--no-anki</code>) &mdash; rigenera con <code>npm run home</code></div>\n</div>\n</body>\n</html>\n"
+      }
+    },
+    {
+      "name": "generate-options",
+      "seed": "board",
+      "args": [
+        "--no-anki",
+        "--dir",
+        "<dataRoot>/corsi",
+        "--curriculum",
+        "plan.json",
+        "--out",
+        "board.html"
+      ],
+      "result": {
+        "exitCode": 0,
+        "stdout": "<dataRoot>/board.html — 3 chapters, 2 lessons taught, 1 outside the plan, without Anki\n",
+        "stderr": ""
+      },
+      "files": {
+        "board.html": "<!DOCTYPE html>\n<html lang=\"it\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>Proxi</title>\n<style>\n:root{--font-body:Charter,\"Bitstream Charter\",\"Sitka Text\",Cambria,Georgia,serif;--font-ui:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Roboto,Inter,Helvetica,Arial,sans-serif;--font-mono:ui-monospace,\"SF Mono\",Monaco,\"Cascadia Code\",Consolas,monospace;--bg:#fcfbfa;--surface:#fff;--subtle:#f4f3ef;--fg:#1c1917;--fg2:#44403c;--muted:#78716c;--border:#e7e5e0;--link:#0369a1;--ok:#0f766e;--due:#b91c1c;--truth:#b45309;--axiom:#0f766e;--deriv:#4338ca}\n@media(prefers-color-scheme:dark){:root{--bg:#0f172a;--surface:#1e293b;--subtle:#192434;--fg:#f8fafc;--fg2:#cbd5e1;--muted:#94a3b8;--border:#334155;--link:#7dd3fc;--ok:#2dd4bf;--due:#fca5a5;--truth:#fbbf24;--axiom:#2dd4bf;--deriv:#a5b4fc}}\n*{box-sizing:border-box}\nbody{margin:0;background:var(--bg);color:var(--fg);font-family:var(--font-ui);font-size:15px;line-height:1.5;padding:2rem 1.25rem 4rem}\n.wrap{max-width:960px;margin:0 auto}\nh1{font-family:var(--font-body);font-size:1.6rem;margin:0 0 .15rem}\n.sub{color:var(--muted);font-size:.85rem;margin-bottom:1.75rem}\na{color:var(--link);text-decoration:none}a:hover{text-decoration:underline}\n.num{font-family:var(--font-mono);font-size:.8rem;color:var(--muted)}\n.card{background:var(--surface);border:1px solid var(--border);border-radius:8px}\n.empty{padding:1.25rem;color:var(--muted);font-size:.9rem}\ncode{font-family:var(--font-mono);font-size:.85em;background:var(--subtle);padding:.1em .3em;border-radius:4px}\n.bar{height:4px;background:var(--subtle);border-radius:2px;overflow:hidden;margin-bottom:.6rem}\n.bar>i{display:block;height:100%;background:var(--ok)}\n.dots{display:inline-flex;gap:2px;align-items:center;vertical-align:middle}\n.dots i{width:6px;height:6px;border-radius:50%;display:block}\n.dots i.truth{background:var(--truth)}.dots i.axiom{background:var(--axiom)}\n.dots i.deriv{background:var(--deriv)}.dots i.pending{background:var(--border)}\n.legend{font-size:.72rem;color:var(--muted);display:flex;gap:1rem;margin-top:2rem;padding-top:.8rem;border-top:1px solid var(--border);flex-wrap:wrap}\n.legend span{display:flex;gap:.3rem;align-items:center}\n.stamp{font-size:.72rem;color:var(--muted);margin-top:.8rem}\n.anki-strip{display:flex;align-items:center;gap:1.5rem;padding:.8rem 1rem;margin-bottom:1.75rem;flex-wrap:wrap}\n.anki-strip .stat{display:flex;flex-direction:column}\n.anki-strip .stat b{font-family:var(--font-mono);font-size:1.3rem;font-weight:600}\n.anki-strip .stat.hot b{color:var(--due)}\n.anki-strip .stat span{font-size:.7rem;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}\n.anki-strip .spacer{flex:1}\n.chapter-h{font-family:var(--font-body);font-size:1.05rem;margin:1.75rem 0 .4rem;display:flex;align-items:baseline;gap:.6rem}\n.chapter-h .num{margin-left:auto}\ntable.reg{width:100%;border-collapse:collapse}\ntable.reg td{padding:.45rem .5rem;border-bottom:1px solid var(--border);vertical-align:middle}\ntable.reg tr:last-child td{border-bottom:none}\ntable.reg td.mark{width:1.6rem;text-align:center;color:var(--ok)}\ntable.reg td.r{text-align:right;white-space:nowrap}\ntable.reg tr.is-todo td.title{color:var(--muted)}\na.ref{font-family:var(--font-mono);font-size:.7rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);text-decoration:none;border:1px solid var(--muted);border-radius:.25rem;padding:0 .25rem;margin-left:.4rem;opacity:.7}\na.ref:hover{opacity:1}\n</style>\n</head>\n<body>\n<div class=\"wrap\">\n<h1>Proxi</h1><div class=\"sub\">3 capitoli &middot; 2/7 lezioni fatte &middot; 2 nodi catturati</div><div class=\"chapter-h\"><a href=\"courses/docker/\">Docker</a><span class=\"num\">0/3</span></div><div class=\"bar\"><i style=\"width:0.0%\"></i></div><div class=\"card\"><table class=\"reg\"><tr class=\"is-todo\"><td class=\"mark\">&middot;</td><td class=\"num\">&mdash;</td><td class=\"title\">Image e container</td><td class=\"r\"></td><td class=\"r num\">da fare</td></tr><tr class=\"is-todo\"><td class=\"mark\">&middot;</td><td class=\"num\">&mdash;</td><td class=\"title\">Healthcheck</td><td class=\"r\"><span class=\"dots\"><i class=\"pending\"></i><i class=\"pending\"></i><i class=\"pending\"></i><i class=\"pending\"></i></span></td><td class=\"r num\">4 nodi previsti</td></tr><tr class=\"is-todo\"><td class=\"mark\">&middot;</td><td class=\"num\">&mdash;</td><td class=\"title\">Rete &amp; volumi</td><td class=\"r\"></td><td class=\"r num\">da fare</td></tr></table></div><div class=\"chapter-h\"><a href=\"courses/probabilita/\">Probabilità</a><span class=\"num\">0/2</span></div><div class=\"bar\"><i style=\"width:0.0%\"></i></div><div class=\"card\"><table class=\"reg\"><tr class=\"is-todo\"><td class=\"mark\">&middot;</td><td class=\"num\">&mdash;</td><td class=\"title\">Eventi</td><td class=\"r\"><span class=\"dots\"><i class=\"pending\"></i></span></td><td class=\"r num\">1 nodi previsti</td></tr><tr class=\"is-todo\"><td class=\"mark\">&middot;</td><td class=\"num\">&mdash;</td><td class=\"title\">Varianza</td><td class=\"r\"></td><td class=\"r num\">da fare</td></tr></table></div><div class=\"chapter-h\"><a href=\"courses/rust/\">Rust</a><span class=\"num\">1/2</span></div><div class=\"bar\"><i style=\"width:50.0%\"></i></div><div class=\"card\"><table class=\"reg\"><tr class=\"\"><td class=\"mark\">&check;</td><td class=\"num\">0001</td><td class=\"title\"><a href=\"courses/rust/lessons/0001-ownership.html\">Ownership</a></td><td class=\"r\"><span class=\"dots\"><i class=\"axiom\"></i><i class=\"deriv\"></i></span></td><td class=\"r num\">2 nodi</td></tr><tr class=\"is-todo\"><td class=\"mark\">&middot;</td><td class=\"num\">&mdash;</td><td class=\"title\">Lifetimes</td><td class=\"r\"><span class=\"dots\"><i class=\"pending\"></i><i class=\"pending\"></i></span></td><td class=\"r num\">2 nodi previsti</td></tr></table></div><div class=\"chapter-h\">Fuori dal piano<span class=\"num\">1/1</span></div><div class=\"bar\"><i style=\"width:100.0%\"></i></div><div class=\"card\"><table class=\"reg\"><tr class=\"\"><td class=\"mark\">&check;</td><td class=\"num\">0002</td><td class=\"title\"><a href=\"courses/rust/lessons/0002-borrow.html\">Borrow</a></td><td class=\"r\"></td><td class=\"r num\">prosa</td></tr></table></div><div class=\"legend\"><span><span class=\"dots\"><i class=\"truth\"></i></span> verità incondizionata</span><span><span class=\"dots\"><i class=\"axiom\"></i></span> assioma</span><span><span class=\"dots\"><i class=\"deriv\"></i></span> derivazione</span><span><span class=\"dots\"><i class=\"pending\"></i></span> nodo previsto</span></div><div class=\"stamp\">Generata senza Anki (<code>--no-anki</code>) &mdash; rigenera con <code>npm run home</code></div>\n</div>\n</body>\n</html>\n"
+      }
+    },
+    {
+      "name": "generate-empty",
+      "seed": "empty",
+      "args": [
+        "--no-anki"
+      ],
+      "result": {
+        "exitCode": 0,
+        "stdout": "<dataRoot>/index.html — 0 chapters, 0 lessons taught, without Anki\n",
+        "stderr": ""
+      },
+      "files": {
+        "index.html": "<!DOCTYPE html>\n<html lang=\"it\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>Proxi</title>\n<style>\n:root{--font-body:Charter,\"Bitstream Charter\",\"Sitka Text\",Cambria,Georgia,serif;--font-ui:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Roboto,Inter,Helvetica,Arial,sans-serif;--font-mono:ui-monospace,\"SF Mono\",Monaco,\"Cascadia Code\",Consolas,monospace;--bg:#fcfbfa;--surface:#fff;--subtle:#f4f3ef;--fg:#1c1917;--fg2:#44403c;--muted:#78716c;--border:#e7e5e0;--link:#0369a1;--ok:#0f766e;--due:#b91c1c;--truth:#b45309;--axiom:#0f766e;--deriv:#4338ca}\n@media(prefers-color-scheme:dark){:root{--bg:#0f172a;--surface:#1e293b;--subtle:#192434;--fg:#f8fafc;--fg2:#cbd5e1;--muted:#94a3b8;--border:#334155;--link:#7dd3fc;--ok:#2dd4bf;--due:#fca5a5;--truth:#fbbf24;--axiom:#2dd4bf;--deriv:#a5b4fc}}\n*{box-sizing:border-box}\nbody{margin:0;background:var(--bg);color:var(--fg);font-family:var(--font-ui);font-size:15px;line-height:1.5;padding:2rem 1.25rem 4rem}\n.wrap{max-width:960px;margin:0 auto}\nh1{font-family:var(--font-body);font-size:1.6rem;margin:0 0 .15rem}\n.sub{color:var(--muted);font-size:.85rem;margin-bottom:1.75rem}\na{color:var(--link);text-decoration:none}a:hover{text-decoration:underline}\n.num{font-family:var(--font-mono);font-size:.8rem;color:var(--muted)}\n.card{background:var(--surface);border:1px solid var(--border);border-radius:8px}\n.empty{padding:1.25rem;color:var(--muted);font-size:.9rem}\ncode{font-family:var(--font-mono);font-size:.85em;background:var(--subtle);padding:.1em .3em;border-radius:4px}\n.bar{height:4px;background:var(--subtle);border-radius:2px;overflow:hidden;margin-bottom:.6rem}\n.bar>i{display:block;height:100%;background:var(--ok)}\n.dots{display:inline-flex;gap:2px;align-items:center;vertical-align:middle}\n.dots i{width:6px;height:6px;border-radius:50%;display:block}\n.dots i.truth{background:var(--truth)}.dots i.axiom{background:var(--axiom)}\n.dots i.deriv{background:var(--deriv)}.dots i.pending{background:var(--border)}\n.legend{font-size:.72rem;color:var(--muted);display:flex;gap:1rem;margin-top:2rem;padding-top:.8rem;border-top:1px solid var(--border);flex-wrap:wrap}\n.legend span{display:flex;gap:.3rem;align-items:center}\n.stamp{font-size:.72rem;color:var(--muted);margin-top:.8rem}\n.anki-strip{display:flex;align-items:center;gap:1.5rem;padding:.8rem 1rem;margin-bottom:1.75rem;flex-wrap:wrap}\n.anki-strip .stat{display:flex;flex-direction:column}\n.anki-strip .stat b{font-family:var(--font-mono);font-size:1.3rem;font-weight:600}\n.anki-strip .stat.hot b{color:var(--due)}\n.anki-strip .stat span{font-size:.7rem;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}\n.anki-strip .spacer{flex:1}\n.chapter-h{font-family:var(--font-body);font-size:1.05rem;margin:1.75rem 0 .4rem;display:flex;align-items:baseline;gap:.6rem}\n.chapter-h .num{margin-left:auto}\ntable.reg{width:100%;border-collapse:collapse}\ntable.reg td{padding:.45rem .5rem;border-bottom:1px solid var(--border);vertical-align:middle}\ntable.reg tr:last-child td{border-bottom:none}\ntable.reg td.mark{width:1.6rem;text-align:center;color:var(--ok)}\ntable.reg td.r{text-align:right;white-space:nowrap}\ntable.reg tr.is-todo td.title{color:var(--muted)}\na.ref{font-family:var(--font-mono);font-size:.7rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);text-decoration:none;border:1px solid var(--muted);border-radius:.25rem;padding:0 .25rem;margin-left:.4rem;opacity:.7}\na.ref:hover{opacity:1}\n</style>\n</head>\n<body>\n<div class=\"wrap\">\n<h1>Proxi</h1><div class=\"sub\">0 capitoli &middot; 0/0 lezioni fatte &middot; 0 nodi catturati</div><div class=\"card empty\">Nessun capitolo pianificato. Comincia con <code>/plan &lt;argomento&gt;</code>.</div><div class=\"legend\"><span><span class=\"dots\"><i class=\"truth\"></i></span> verità incondizionata</span><span><span class=\"dots\"><i class=\"axiom\"></i></span> assioma</span><span><span class=\"dots\"><i class=\"deriv\"></i></span> derivazione</span><span><span class=\"dots\"><i class=\"pending\"></i></span> nodo previsto</span></div><div class=\"stamp\">Generata senza Anki (<code>--no-anki</code>) &mdash; rigenera con <code>npm run home</code></div>\n</div>\n</body>\n</html>\n"
+      }
+    },
+    {
+      "name": "generate-anki",
+      "seed": "board",
+      "args": [
+        "--anki-url",
+        "<anki>"
+      ],
+      "result": {
+        "exitCode": 0,
+        "stdout": "<dataRoot>/index.html — 2 chapters, 6 lessons taught, 3 outside the plan\n",
+        "stderr": "Ignorata docker/0005-rotta.html: Malformed #lesson-data island: <json-error>\nIgnorata docker/0005-rotta.html: Malformed #lesson-data island: <json-error>\n"
+      },
+      "files": {
+        "index.html": "<!DOCTYPE html>\n<html lang=\"it\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>Proxi</title>\n<style>\n:root{--font-body:Charter,\"Bitstream Charter\",\"Sitka Text\",Cambria,Georgia,serif;--font-ui:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Roboto,Inter,Helvetica,Arial,sans-serif;--font-mono:ui-monospace,\"SF Mono\",Monaco,\"Cascadia Code\",Consolas,monospace;--bg:#fcfbfa;--surface:#fff;--subtle:#f4f3ef;--fg:#1c1917;--fg2:#44403c;--muted:#78716c;--border:#e7e5e0;--link:#0369a1;--ok:#0f766e;--due:#b91c1c;--truth:#b45309;--axiom:#0f766e;--deriv:#4338ca}\n@media(prefers-color-scheme:dark){:root{--bg:#0f172a;--surface:#1e293b;--subtle:#192434;--fg:#f8fafc;--fg2:#cbd5e1;--muted:#94a3b8;--border:#334155;--link:#7dd3fc;--ok:#2dd4bf;--due:#fca5a5;--truth:#fbbf24;--axiom:#2dd4bf;--deriv:#a5b4fc}}\n*{box-sizing:border-box}\nbody{margin:0;background:var(--bg);color:var(--fg);font-family:var(--font-ui);font-size:15px;line-height:1.5;padding:2rem 1.25rem 4rem}\n.wrap{max-width:960px;margin:0 auto}\nh1{font-family:var(--font-body);font-size:1.6rem;margin:0 0 .15rem}\n.sub{color:var(--muted);font-size:.85rem;margin-bottom:1.75rem}\na{color:var(--link);text-decoration:none}a:hover{text-decoration:underline}\n.num{font-family:var(--font-mono);font-size:.8rem;color:var(--muted)}\n.card{background:var(--surface);border:1px solid var(--border);border-radius:8px}\n.empty{padding:1.25rem;color:var(--muted);font-size:.9rem}\ncode{font-family:var(--font-mono);font-size:.85em;background:var(--subtle);padding:.1em .3em;border-radius:4px}\n.bar{height:4px;background:var(--subtle);border-radius:2px;overflow:hidden;margin-bottom:.6rem}\n.bar>i{display:block;height:100%;background:var(--ok)}\n.dots{display:inline-flex;gap:2px;align-items:center;vertical-align:middle}\n.dots i{width:6px;height:6px;border-radius:50%;display:block}\n.dots i.truth{background:var(--truth)}.dots i.axiom{background:var(--axiom)}\n.dots i.deriv{background:var(--deriv)}.dots i.pending{background:var(--border)}\n.legend{font-size:.72rem;color:var(--muted);display:flex;gap:1rem;margin-top:2rem;padding-top:.8rem;border-top:1px solid var(--border);flex-wrap:wrap}\n.legend span{display:flex;gap:.3rem;align-items:center}\n.stamp{font-size:.72rem;color:var(--muted);margin-top:.8rem}\n.anki-strip{display:flex;align-items:center;gap:1.5rem;padding:.8rem 1rem;margin-bottom:1.75rem;flex-wrap:wrap}\n.anki-strip .stat{display:flex;flex-direction:column}\n.anki-strip .stat b{font-family:var(--font-mono);font-size:1.3rem;font-weight:600}\n.anki-strip .stat.hot b{color:var(--due)}\n.anki-strip .stat span{font-size:.7rem;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}\n.anki-strip .spacer{flex:1}\n.chapter-h{font-family:var(--font-body);font-size:1.05rem;margin:1.75rem 0 .4rem;display:flex;align-items:baseline;gap:.6rem}\n.chapter-h .num{margin-left:auto}\ntable.reg{width:100%;border-collapse:collapse}\ntable.reg td{padding:.45rem .5rem;border-bottom:1px solid var(--border);vertical-align:middle}\ntable.reg tr:last-child td{border-bottom:none}\ntable.reg td.mark{width:1.6rem;text-align:center;color:var(--ok)}\ntable.reg td.r{text-align:right;white-space:nowrap}\ntable.reg tr.is-todo td.title{color:var(--muted)}\na.ref{font-family:var(--font-mono);font-size:.7rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);text-decoration:none;border:1px solid var(--muted);border-radius:.25rem;padding:0 .25rem;margin-left:.4rem;opacity:.7}\na.ref:hover{opacity:1}\n</style>\n</head>\n<body>\n<div class=\"wrap\">\n<h1>Proxi</h1><div class=\"sub\">2 capitoli &middot; 6/6 lezioni fatte &middot; 8 nodi catturati</div><div class=\"card anki-strip\"><div class=\"stat hot\"><b>7</b><span>da ripassare</span></div><div class=\"stat\"><b>5</b><span>nuove</span></div><div class=\"stat\"><b>2</b><span>in apprendimento</span></div><div class=\"spacer\"></div><div class=\"stat\" style=\"text-align:right\"><b>23</b><span>card in 3 deck</span></div></div><div class=\"chapter-h\"><a href=\"courses/docker/\">Docker</a><span class=\"num\">2/3</span></div><div class=\"bar\"><i style=\"width:66.7%\"></i></div><div class=\"card\"><table class=\"reg\"><tr class=\"\"><td class=\"mark\">&check;</td><td class=\"num\">0001</td><td class=\"title\"><a href=\"courses/docker/lessons/0001-image-e-container.html\">Image e container</a></td><td class=\"r\"><span class=\"dots\"><i class=\"truth\"></i><i class=\"axiom\"></i><i class=\"deriv\"></i><i class=\"deriv\"></i></span></td><td class=\"r num\">4 nodi</td></tr><tr class=\"is-todo\"><td class=\"mark\">&middot;</td><td class=\"num\">&mdash;</td><td class=\"title\">Healthcheck</td><td class=\"r\"><span class=\"dots\"><i class=\"pending\"></i><i class=\"pending\"></i><i class=\"pending\"></i><i class=\"pending\"></i></span></td><td class=\"r num\">4 nodi previsti</td></tr><tr class=\"\"><td class=\"mark\">&check;</td><td class=\"num\">0003</td><td class=\"title\"><a href=\"courses/docker/lessons/0003-rete-and-volumi.html\">Rete &amp; volumi</a></td><td class=\"r\"></td><td class=\"r num\">prosa</td></tr></table></div><div class=\"chapter-h\"><a href=\"courses/probabilita/\">Probabilità</a><span class=\"num\">1/2</span></div><div class=\"bar\"><i style=\"width:50.0%\"></i></div><div class=\"card\"><table class=\"reg\"><tr class=\"\"><td class=\"mark\">&check;</td><td class=\"num\">0001</td><td class=\"title\"><a href=\"courses/probabilita/lessons/0001-eventi.html\">Eventi</a> <a class=\"ref\" href=\"courses/probabilita/reference/eventi.html\">ref</a></td><td class=\"r\"><span class=\"dots\"><i class=\"axiom\"></i></span></td><td class=\"r num\">1 nodo</td></tr><tr class=\"is-todo\"><td class=\"mark\">&middot;</td><td class=\"num\">&mdash;</td><td class=\"title\">Varianza</td><td class=\"r\"></td><td class=\"r num\">da fare</td></tr></table></div><div class=\"chapter-h\">Fuori dal piano<span class=\"num\">3/3</span></div><div class=\"bar\"><i style=\"width:100.0%\"></i></div><div class=\"card\"><table class=\"reg\"><tr class=\"\"><td class=\"mark\">&check;</td><td class=\"num\">0002</td><td class=\"title\"><a href=\"courses/docker/lessons/0002-con%20spazio.html\">&lt;b&gt;A &amp; &quot;B&quot;&lt;/b&gt; &#39;c&#39;</a></td><td class=\"r\"><span class=\"dots\"><i class=\"axiom\"></i></span></td><td class=\"r num\">1 nodo</td></tr><tr class=\"\"><td class=\"mark\">&check;</td><td class=\"num\">0004</td><td class=\"title\"><a href=\"courses/docker/lessons/0004-image-e-container-bis.html\">Image e container bis</a></td><td class=\"r\"><span class=\"dots\"><i class=\"deriv\"></i></span></td><td class=\"r num\">1 nodo</td></tr><tr class=\"\"><td class=\"mark\">&check;</td><td class=\"num\">0002</td><td class=\"title\"><a href=\"courses/probabilita/lessons/0002-dadi.html\">Dadi</a></td><td class=\"r\"><span class=\"dots\"><i class=\"axiom\"></i></span></td><td class=\"r num\">1 nodo</td></tr></table></div><div class=\"legend\"><span><span class=\"dots\"><i class=\"truth\"></i></span> verità incondizionata</span><span><span class=\"dots\"><i class=\"axiom\"></i></span> assioma</span><span><span class=\"dots\"><i class=\"deriv\"></i></span> derivazione</span><span><span class=\"dots\"><i class=\"pending\"></i></span> nodo previsto</span></div><div class=\"stamp\">Dati Anki al <it-IT> &mdash; rigenera con <code>npm run home</code></div>\n</div>\n</body>\n</html>\n"
+      },
+      "anki": {
+        "deckNamesAndIds": {
+          "result": {
+            "Default": 1,
+            "Proxi": 10,
+            "Proxi::Docker": 11,
+            "Proxi::Probabilità": 12,
+            "Altro::Proxi": 13
+          },
+          "error": null
+        },
+        "getDeckStats": {
+          "result": {
+            "10": {
+              "deck_id": 10,
+              "name": "Proxi",
+              "new_count": 5,
+              "learn_count": 2,
+              "review_count": 7,
+              "total_in_deck": 0
+            },
+            "11": {
+              "deck_id": 11,
+              "name": "Docker",
+              "new_count": 3,
+              "learn_count": 1,
+              "review_count": 4,
+              "total_in_deck": 20
+            },
+            "12": {
+              "deck_id": 12,
+              "name": "Probabilità",
+              "new_count": 2,
+              "learn_count": 1,
+              "review_count": 3,
+              "total_in_deck": 3
+            }
+          },
+          "error": null
+        }
+      },
+      "ankiRequests": [
+        {
+          "action": "deckNamesAndIds",
+          "version": 6
+        },
+        {
+          "action": "getDeckStats",
+          "version": 6,
+          "params": {
+            "decks": [
+              "Proxi",
+              "Proxi::Docker",
+              "Proxi::Probabilità"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "generate-anki-unreachable",
+      "seed": "board",
+      "args": [
+        "--anki-url",
+        "<closedAnki>"
+      ],
+      "result": {
+        "exitCode": 1,
+        "stdout": "",
+        "stderr": "Error: AnkiConnect non raggiungibile (fetch failed). Apri Anki, oppure genera senza i dati delle card con --no-anki.\n"
+      },
+      "files": {}
+    },
+    {
+      "name": "generate-anki-error",
+      "seed": "board",
+      "args": [
+        "--anki-url",
+        "<anki>"
+      ],
+      "result": {
+        "exitCode": 1,
+        "stdout": "",
+        "stderr": "Error: AnkiConnect non raggiungibile (collection is not available). Apri Anki, oppure genera senza i dati delle card con --no-anki.\n"
+      },
+      "files": {},
+      "anki": {
+        "deckNamesAndIds": {
+          "result": null,
+          "error": "collection is not available"
+        }
+      },
+      "ankiRequests": [
+        {
+          "action": "deckNamesAndIds",
+          "version": 6
+        }
+      ]
+    },
+    {
+      "name": "plan-new",
+      "seed": "board",
+      "args": [
+        "plan",
+        "--chapter",
+        "  Rust & WebAssembly ",
+        "--lessons-json",
+        "[{\"title\":\"Ownership\",\"plannedNodes\":3},{\"title\":\"Città e borrow\",\"slug\":\"Borrow Checker\"}]"
+      ],
+      "result": {
+        "exitCode": 0,
+        "stdout": "Planned Rust & WebAssembly (courses/rust-and-webassembly): 2 lessons (ownership, borrow-checker)\n",
+        "stderr": ""
+      },
+      "files": {
+        "curriculum.json": "{\n  \"chapters\": [\n    {\n      \"title\": \"Docker\",\n      \"slug\": \"docker\",\n      \"note\": \"tenuto\",\n      \"lessons\": [\n        {\n          \"title\": \"Image e container\",\n          \"slug\": \"image-e-container\"\n        },\n        {\n          \"title\": \"Healthcheck\",\n          \"slug\": \"healthcheck\",\n          \"plannedNodes\": 4\n        },\n        {\n          \"title\": \"Rete & volumi\",\n          \"slug\": \"rete-and-volumi\"\n        }\n      ]\n    },\n    {\n      \"title\": \"Probabilità\",\n      \"slug\": \"probabilita\",\n      \"lessons\": [\n        {\n          \"title\": \"Eventi\",\n          \"slug\": \"eventi\",\n          \"plannedNodes\": 1\n        },\n        {\n          \"title\": \"Varianza\",\n          \"slug\": \"varianza\"\n        }\n      ]\n    },\n    {\n      \"title\": \"Rust & WebAssembly\",\n      \"slug\": \"rust-and-webassembly\",\n      \"lessons\": [\n        {\n          \"title\": \"Ownership\",\n          \"slug\": \"ownership\",\n          \"plannedNodes\": 3\n        },\n        {\n          \"title\": \"Città e borrow\",\n          \"slug\": \"borrow-checker\"\n        }\n      ]\n    }\n  ]\n}\n"
+      }
+    },
+    {
+      "name": "plan-replace",
+      "seed": "board",
+      "args": [
+        "plan",
+        "--chapter",
+        "Docker Avanzato",
+        "--slug",
+        "docker",
+        "--lessons-json",
+        "[{\"title\":\"Compose\"}]"
+      ],
+      "result": {
+        "exitCode": 0,
+        "stdout": "Planned Docker Avanzato (courses/docker): 1 lessons (compose)\n",
+        "stderr": ""
+      },
+      "files": {
+        "curriculum.json": "{\n  \"chapters\": [\n    {\n      \"title\": \"Docker Avanzato\",\n      \"slug\": \"docker\",\n      \"lessons\": [\n        {\n          \"title\": \"Compose\",\n          \"slug\": \"compose\"\n        }\n      ]\n    },\n    {\n      \"title\": \"Probabilità\",\n      \"slug\": \"probabilita\",\n      \"lessons\": [\n        {\n          \"title\": \"Eventi\",\n          \"slug\": \"eventi\",\n          \"plannedNodes\": 1\n        },\n        {\n          \"title\": \"Varianza\",\n          \"slug\": \"varianza\"\n        }\n      ]\n    }\n  ]\n}\n"
+      }
+    },
+    {
+      "name": "plan-curriculum",
+      "seed": "board",
+      "args": [
+        "plan",
+        "--curriculum",
+        "plan.json",
+        "--chapter",
+        "Rust",
+        "--lessons-json",
+        "[{\"title\":\"Traits\"}]"
+      ],
+      "result": {
+        "exitCode": 0,
+        "stdout": "Planned Rust (courses/rust): 1 lessons (traits)\n",
+        "stderr": ""
+      },
+      "files": {
+        "plan.json": "{\n  \"chapters\": [\n    {\n      \"title\": \"Docker\",\n      \"slug\": \"docker\",\n      \"note\": \"tenuto\",\n      \"lessons\": [\n        {\n          \"title\": \"Image e container\",\n          \"slug\": \"image-e-container\"\n        },\n        {\n          \"title\": \"Healthcheck\",\n          \"slug\": \"healthcheck\",\n          \"plannedNodes\": 4\n        },\n        {\n          \"title\": \"Rete & volumi\",\n          \"slug\": \"rete-and-volumi\"\n        }\n      ]\n    },\n    {\n      \"title\": \"Probabilità\",\n      \"slug\": \"probabilita\",\n      \"lessons\": [\n        {\n          \"title\": \"Eventi\",\n          \"slug\": \"eventi\",\n          \"plannedNodes\": 1\n        },\n        {\n          \"title\": \"Varianza\",\n          \"slug\": \"varianza\"\n        }\n      ]\n    },\n    {\n      \"title\": \"Rust\",\n      \"slug\": \"rust\",\n      \"lessons\": [\n        {\n          \"title\": \"Traits\",\n          \"slug\": \"traits\"\n        }\n      ]\n    }\n  ]\n}\n"
+      }
+    },
+    {
+      "name": "plan-empty-file",
+      "seed": "empty",
+      "args": [
+        "plan",
+        "--chapter",
+        "Vue",
+        "--lessons-json",
+        "[]"
+      ],
+      "result": {
+        "exitCode": 0,
+        "stdout": "Planned Vue (courses/vue): 0 lessons ()\n",
+        "stderr": ""
+      },
+      "files": {
+        "curriculum.json": "{\n  \"chapters\": [\n    {\n      \"title\": \"Vue\",\n      \"slug\": \"vue\",\n      \"lessons\": []\n    }\n  ]\n}\n"
+      }
+    },
+    {
+      "name": "plan-duplicate-slug",
+      "seed": "board",
+      "args": [
+        "plan",
+        "--chapter",
+        "X",
+        "--lessons-json",
+        "[{\"title\":\"Image e container\"},{\"title\":\"Image, e container!\"}]"
+      ],
+      "result": {
+        "exitCode": 1,
+        "stdout": "",
+        "stderr": "Error: Two planned lessons share the slug \"image-e-container\": \"Image e container\" and \"Image, e container!\". Give them distinct titles, or pass an explicit slug.\n"
+      },
+      "files": {}
+    },
+    {
+      "name": "plan-missing-chapter",
+      "seed": "board",
+      "args": [
+        "plan",
+        "--lessons-json",
+        "[]"
+      ],
+      "result": {
+        "exitCode": 1,
+        "stdout": "",
+        "stderr": "Error: plan requires --chapter <title>\n"
+      },
+      "files": {}
+    },
+    {
+      "name": "plan-missing-lessons",
+      "seed": "board",
+      "args": [
+        "plan",
+        "--chapter",
+        "X"
+      ],
+      "result": {
+        "exitCode": 1,
+        "stdout": "",
+        "stderr": "Error: plan requires --lessons-json '[{\"title\":\"...\"}]'\n"
+      },
+      "files": {}
+    },
+    {
+      "name": "plan-not-array",
+      "seed": "board",
+      "args": [
+        "plan",
+        "--chapter",
+        "X",
+        "--lessons-json",
+        "{\"a\":1}"
+      ],
+      "result": {
+        "exitCode": 1,
+        "stdout": "",
+        "stderr": "Error: --lessons-json must be a JSON array\n"
+      },
+      "files": {}
+    },
+    {
+      "name": "plan-blank-title",
+      "seed": "board",
+      "args": [
+        "plan",
+        "--chapter",
+        "X",
+        "--lessons-json",
+        "[{\"title\":\"  \"}]"
+      ],
+      "result": {
+        "exitCode": 1,
+        "stdout": "",
+        "stderr": "Error: Every planned lesson needs a title\n"
+      },
+      "files": {}
+    },
+    {
+      "name": "plan-malformed",
+      "seed": "malformed",
+      "args": [
+        "plan",
+        "--chapter",
+        "X",
+        "--lessons-json",
+        "[]"
+      ],
+      "result": {
+        "exitCode": 1,
+        "stdout": "",
+        "stderr": "Error: Malformed <dataRoot>/curriculum.json: \"chapters\" must be an array\n"
+      },
+      "files": {}
+    },
+    {
+      "name": "chapters",
+      "seed": "board",
+      "args": [
+        "chapters"
+      ],
+      "result": {
+        "exitCode": 0,
+        "stdout": "Docker (courses/docker) — 2/3\n  [x] 0001  Image e container (4 nodi)\n  [ ] ----  Healthcheck (4 nodi previsti)\n  [x] 0003  Rete & volumi (prosa)\n\nProbabilità (courses/probabilita) — 1/2\n  [x] 0001  Eventi (1 nodo)\n  [ ] ----  Varianza\n\nFuori dal piano\n  [x] 0002  <b>A & \"B\"</b> 'c' (1 nodo)  [courses/docker]\n  [x] 0004  Image e container bis (1 nodo)  [courses/docker]\n  [x] 0002  Dadi (1 nodo)  [courses/probabilita]\n",
+        "stderr": "Ignorata docker/0005-rotta.html: Malformed #lesson-data island: <json-error>\n"
+      },
+      "files": {}
+    },
+    {
+      "name": "chapters-options",
+      "seed": "board",
+      "args": [
+        "chapters",
+        "--dir",
+        "corsi",
+        "--curriculum",
+        "plan.json"
+      ],
+      "result": {
+        "exitCode": 0,
+        "stdout": "Docker (courses/docker) — 0/3\n  [ ] ----  Image e container\n  [ ] ----  Healthcheck (4 nodi previsti)\n  [ ] ----  Rete & volumi\n\nProbabilità (courses/probabilita) — 0/2\n  [ ] ----  Eventi (1 nodi previsti)\n  [ ] ----  Varianza\n\nRust (courses/rust) — 1/2\n  [x] 0001  Ownership (2 nodi)\n  [ ] ----  Lifetimes (2 nodi previsti)\n\nFuori dal piano\n  [x] 0002  Borrow (prosa)  [courses/rust]\n",
+        "stderr": ""
+      },
+      "files": {}
+    },
+    {
+      "name": "chapters-empty",
+      "seed": "empty",
+      "args": [
+        "chapters"
+      ],
+      "result": {
+        "exitCode": 0,
+        "stdout": "Nessun capitolo pianificato.\n",
+        "stderr": ""
+      },
+      "files": {}
+    },
+    {
+      "name": "chapters-malformed",
+      "seed": "malformed",
+      "args": [
+        "chapters"
+      ],
+      "result": {
+        "exitCode": 1,
+        "stdout": "",
+        "stderr": "Error: Malformed <dataRoot>/curriculum.json: \"chapters\" must be an array\n"
+      },
+      "files": {}
+    },
+    {
+      "name": "help",
+      "seed": "empty",
+      "args": [
+        "help"
+      ],
+      "result": {
+        "exitCode": 0,
+        "stdout": "Proxi homepage\n\n  npm run home                      generate index.html (requires AnkiConnect)\n  npm run home -- --no-anki         generate without card counts\n  npm run home -- plan --chapter <title> [--slug <course-dir>] --lessons-json <json>\n  npm run home -- chapters          print the plan as text (writes nothing)\n\n  --lessons-json  [{\"title\":\"...\",\"plannedNodes\":4}, ...]\n  --slug          course directory, when it differs from the chapter title\n  --dir           courses directory (default ./courses)\n  --anki-url      AnkiConnect endpoint (default http://127.0.0.1:8765)\n",
+        "stderr": ""
+      },
+      "files": {}
+    },
+    {
+      "name": "help-flag",
+      "seed": "board",
+      "args": [
+        "plan",
+        "-h"
+      ],
+      "result": {
+        "exitCode": 0,
+        "stdout": "Proxi homepage\n\n  npm run home                      generate index.html (requires AnkiConnect)\n  npm run home -- --no-anki         generate without card counts\n  npm run home -- plan --chapter <title> [--slug <course-dir>] --lessons-json <json>\n  npm run home -- chapters          print the plan as text (writes nothing)\n\n  --lessons-json  [{\"title\":\"...\",\"plannedNodes\":4}, ...]\n  --slug          course directory, when it differs from the chapter title\n  --dir           courses directory (default ./courses)\n  --anki-url      AnkiConnect endpoint (default http://127.0.0.1:8765)\n",
+        "stderr": ""
+      },
+      "files": {}
+    },
+    {
+      "name": "unknown-command",
+      "seed": "empty",
+      "args": [
+        "frobnicate"
+      ],
+      "result": {
+        "exitCode": 1,
+        "stdout": "",
+        "stderr": "Error: Unknown command: frobnicate\n"
+      },
+      "files": {}
+    },
+    {
+      "name": "unknown-option",
+      "seed": "empty",
+      "args": [
+        "--bogus=3"
+      ],
+      "result": {
+        "exitCode": 1,
+        "stdout": "",
+        "stderr": "Error: Unknown option '--bogus'. To specify a positional argument starting with a '-', place it at the end of the command after '--', as in '-- \"--bogus\"\n"
+      },
+      "files": {}
+    },
+    {
+      "name": "unknown-short",
+      "seed": "empty",
+      "args": [
+        "-hx"
+      ],
+      "result": {
+        "exitCode": 1,
+        "stdout": "",
+        "stderr": "Error: Unknown option '-x'. To specify a positional argument starting with a '-', place it at the end of the command after '--', as in '-- \"-x\"\n"
+      },
+      "files": {}
+    },
+    {
+      "name": "missing-value",
+      "seed": "empty",
+      "args": [
+        "plan",
+        "--chapter"
+      ],
+      "result": {
+        "exitCode": 1,
+        "stdout": "",
+        "stderr": "Error: Option '--chapter <value>' argument missing\n"
+      },
+      "files": {}
+    },
+    {
+      "name": "ambiguous-value",
+      "seed": "empty",
+      "args": [
+        "plan",
+        "--chapter",
+        "--slug",
+        "x"
+      ],
+      "result": {
+        "exitCode": 1,
+        "stdout": "",
+        "stderr": "Error: Option '--chapter' argument is ambiguous.\nDid you forget to specify the option argument for '--chapter'?\nTo specify an option argument starting with a dash use '--chapter=-XYZ'.\n"
+      },
+      "files": {}
+    },
+    {
+      "name": "boolean-with-value",
+      "seed": "empty",
+      "args": [
+        "--no-anki=1"
+      ],
+      "result": {
+        "exitCode": 1,
+        "stdout": "",
+        "stderr": "Error: Option '--no-anki' does not take an argument\n"
+      },
+      "files": {}
+    },
+    {
+      "name": "help-with-value",
+      "seed": "empty",
+      "args": [
+        "--help=1"
+      ],
+      "result": {
+        "exitCode": 1,
+        "stdout": "",
+        "stderr": "Error: Option '-h, --help' does not take an argument\n"
+      },
+      "files": {}
+    }
+  ]
+}

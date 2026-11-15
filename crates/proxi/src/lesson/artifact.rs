@@ -1,5 +1,9 @@
 //! Lesson artifacts on disk: listing, reading, document bodies and the lesson-data island
 //! (app/server/lesson.ts, homepage.ts, planstate.ts).
+//!
+//! The read side of the engine (knowledge map, graph lesson labels), distinct from the `proxi
+//! lesson` CLI in [`super::doc`]: both read the same island, but this one parses numbers into
+//! their JS shape so summaries print like the Node server.
 
 use std::cmp::Ordering;
 use std::fs;

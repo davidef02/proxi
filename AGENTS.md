@@ -54,3 +54,7 @@ Use the vocabulary in [`CONTEXT.md`](CONTEXT.md) (chapter = course directory →
 | Diagrams | [`docs/agents/visuals.md`](docs/agents/visuals.md) |
 | Committing, branching, opening a PR | [`docs/agents/git-workflow.md`](docs/agents/git-workflow.md) |
 | Subagents, Antigravity / OpenCode / Pi | [`docs/agents/multi-agent.md`](docs/agents/multi-agent.md) |
+
+## Docs
+
+- When planning or reviewing code, read `docs/agents/rules.md`.

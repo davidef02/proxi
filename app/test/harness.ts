@@ -81,6 +81,8 @@ export interface StartOptions {
   fakes?: FakeUrls;
   /** The engine to run instead of the real Claude (tests: `fakeClaude()`). */
   claude?: { cmd: string; args?: string[] };
+  /** Fake executables. Node mode honours `git` only; it has no build step. */
+  bins?: { git?: string; cargo?: string };
   /** Default: serverMode(). */
   mode?: ServerMode;
 }
@@ -90,6 +92,8 @@ export interface TestServer {
   mode: ServerMode;
   url: string;
   port: number;
+  /** Binary mode: resolves when the process exits; apply's relaunch exits it. */
+  exited?: Promise<void>;
   close(): Promise<void>;
 }
 
@@ -98,8 +102,25 @@ export async function startServer(opts: StartOptions): Promise<TestServer> {
   const repoRoot = path.resolve(opts.repoRoot);
   const dataRoot = path.resolve(opts.dataRoot ?? opts.repoRoot);
   return mode === "binary"
-    ? startBinary(repoRoot, dataRoot, opts.fakes, opts.claude)
-    : startNode(repoRoot, dataRoot, opts.fakes, opts.claude);
+    ? startBinary(repoRoot, dataRoot, opts.fakes, opts.bins, opts.claude)
+    : startNode(repoRoot, dataRoot, opts.fakes, opts.claude, opts.bins);
+}
+
+/** The `serve` arguments both-mode HTTP tests use: no startup update check, secrets in memory, fakes and bins. */
+export function binaryArgs(
+  repoRoot: string,
+  dataRoot: string,
+  fakes?: FakeUrls,
+  bins?: StartOptions["bins"],
+): string[] {
+  const args = ["serve", "--port", "0", "--repo-root", repoRoot, "--data-root", dataRoot, "--memory-secrets", "--no-update-check"];
+  for (const service of SERVICES) {
+    const url = fakes?.[service.key];
+    if (url) args.push(service.flag, url);
+  }
+  if (bins?.git) args.push("--git-bin", bins.git);
+  if (bins?.cargo) args.push("--cargo-bin", bins.cargo);
+  return args;
 }
 
 async function startNode(
@@ -107,6 +128,7 @@ async function startNode(
   dataRoot: string,
   fakes?: FakeUrls,
   claude?: { cmd: string; args?: string[] },
+  bins?: StartOptions["bins"],
 ): Promise<TestServer> {
   // The Anki URL is the Node seam the fake server can reach without a new URL option.
   const prevAnki = process.env.LEARNER_ANKI_URL;
@@ -126,6 +148,9 @@ async function startNode(
       checkUpdateOnStart: false,
       fetchModelOnStart: false,
       fetchFn: fakes ? fakeFetch(fakes) : undefined,
+      gitBin: bins?.git,
+      // Node's applyUpdate exits the process after 500 ms without it: keep the test server alive.
+      relaunch: () => {},
     });
     let closing: Promise<void> | undefined;
     return {
@@ -144,13 +169,10 @@ async function startBinary(
   repoRoot: string,
   dataRoot: string,
   fakes?: FakeUrls,
+  bins?: StartOptions["bins"],
   claude?: { cmd: string; args?: string[] },
 ): Promise<TestServer> {
-  const args = ["serve", "--port", "0", "--repo-root", repoRoot, "--data-root", dataRoot, "--memory-secrets"];
-  for (const service of SERVICES) {
-    const url = fakes?.[service.key];
-    if (url) args.push(service.flag, url);
-  }
+  const args = binaryArgs(repoRoot, dataRoot, fakes, bins);
   if (claude) {
     args.push("--claude-bin", claude.cmd);
     for (const arg of claude.args ?? []) args.push("--claude-bin-arg", arg);
@@ -220,6 +242,7 @@ async function startBinary(
     mode: "binary",
     url: endpoint.url,
     port: endpoint.port,
+    exited: exitedOnce,
     close: () =>
       (closing ??= (async () => {
         process.removeListener("exit", kill);
