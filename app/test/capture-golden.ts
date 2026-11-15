@@ -612,7 +612,7 @@ const SESSIONS_CREATE = {
 } as const;
 
 /** One course with one planned lesson, and nothing else: the prompt and the turn stay small and stable. */
-const SESSIONS_DATA_SEED: Record<string, string> = {
+export const SESSIONS_DATA_SEED: Record<string, string> = {
   "curriculum.json": JSON.stringify({
     chapters: [{ title: "Demo", slug: "demo", lessons: [{ title: "Prima lezione", slug: "prima-lezione", plannedNodes: 2 }] }],
   }),
@@ -731,7 +731,7 @@ const isIdleStatus = (event: unknown): boolean => {
 };
 
 /** Polls `GET /api/sessions/:id` until it reaches `status` (the opening turn runs after the create response). */
-async function waitForStatus(base: string, id: string, status: string, ms = 15_000): Promise<void> {
+export async function waitForStatus(base: string, id: string, status: string, ms = 15_000): Promise<void> {
   const end = Date.now() + ms;
   for (;;) {
     const res = await fetch(`${base}/api/sessions/${id}`);

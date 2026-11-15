@@ -1,0 +1,19 @@
+{
+  "type": "object",
+  "properties": {
+    "lessonPath": {
+      "type": "string",
+      "description": "courses/<course>/lessons/<NNNN-slug>.html"
+    },
+    "nodeIds": {
+      "description": "Only these nodes (nodeId); omit for the whole lesson.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "lessonPath"
+  ]
+}

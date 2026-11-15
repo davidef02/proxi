@@ -98,6 +98,7 @@ fn options_for(
         limits: Arc::new(LimitsCache::new()),
         anki: AnkiClient::new("http://127.0.0.1:1").expect("anki client"),
         imports: ImportRegistry::new(),
+        jobs: Arc::new(proxi::tools::NoJobs),
     }
 }
 

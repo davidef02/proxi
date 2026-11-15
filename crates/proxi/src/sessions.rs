@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
@@ -12,6 +12,7 @@ use indexmap::IndexMap;
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use tokio::sync::oneshot;
 
 use crate::agy;
 use crate::anki_client::AnkiClient;
@@ -34,6 +35,7 @@ use crate::protocol::{
 };
 use crate::settings;
 use crate::slug;
+use crate::tools::{self, Cancelled, JobStarter};
 use crate::turns::{LastTurn, TurnAction, TurnHost, Turns};
 
 /// A request error the routes turn into `{"error": …}` with this status.
@@ -74,6 +76,7 @@ pub struct ManagerOptions {
     pub limits: Arc<LimitsCache>,
     pub anki: AnkiClient,
     pub imports: ImportRegistry,
+    pub jobs: Arc<dyn JobStarter>,
 }
 
 /// Interactive tools: their card is the representation, no chip.
@@ -84,12 +87,16 @@ const NO_CHIP: [&str; 4] = [
     "mcp__app__propose_curriculum",
 ];
 
-#[derive(Clone)]
+/// How a pending card settles: a tool call waiting on this answer, or the Anki opt-in question.
+enum Resolver {
+    Tool(oneshot::Sender<Result<Value, Cancelled>>),
+    AnkiOptIn,
+}
+
 struct PendingReq {
     item_id: String,
-    #[allow(dead_code)]
     kind: String,
-    anki_opt_in: bool,
+    resolver: Resolver,
 }
 
 struct Session {
@@ -144,12 +151,12 @@ fn spawn_delayed(delay: Duration, task: impl FnOnce() + Send + 'static) {
 }
 
 /// JS `s.length` of the zod limits: UTF-16 units, not chars.
-fn utf16_len(text: &str) -> usize {
+pub(crate) fn utf16_len(text: &str) -> usize {
     text.encode_utf16().count()
 }
 
 /// Node's `trunc`: slice to `n` UTF-16 units, then an ellipsis.
-fn trunc(text: &str, n: usize) -> String {
+pub(crate) fn trunc(text: &str, n: usize) -> String {
     if utf16_len(text) <= n {
         return text.to_string();
     }
@@ -168,12 +175,18 @@ fn trunc(text: &str, n: usize) -> String {
 }
 
 /// One zod issue as Node joins it: `<path>: <message>`.
-fn issue(path: &str, message: &str) -> String {
+pub(crate) fn issue(path: &str, message: &str) -> String {
     if path.is_empty() {
         message.to_string()
     } else {
         format!("{path}: {message}")
     }
+}
+
+/// zod's type error, `undefined` included: `None` is a missing key.
+pub(crate) fn invalid_type(expected: &str, value: Option<&Value>) -> String {
+    let received = value.map_or("undefined", js::js_type);
+    format!("Invalid input: expected {expected}, received {received}")
 }
 
 /// Node's `sessionConfigSchema`: known keys only, in schema order.
@@ -490,6 +503,177 @@ fn attachment_ext(safe: &str) -> String {
     }
 }
 
+/// Node's `answerBody` (`main.ts:104-114`): the discriminated union, rebuilt in schema key order
+/// with unknown keys dropped — that is the object Node hands `manager.answer`.
+pub fn validate_answer(body: &Value) -> Result<Value, HttpError> {
+    let Some(object) = body.as_object() else {
+        return Err(HttpError::new(
+            400,
+            issue("", &invalid_type("object", Some(body))),
+        ));
+    };
+    let kind = match object.get("kind").and_then(Value::as_str) {
+        Some(kind @ ("quiz" | "ask" | "plan" | "curriculum")) => kind,
+        _ => {
+            return Err(HttpError::new(
+                400,
+                // zod checks the discriminator before any field.
+                "kind: Invalid discriminator value. Expected 'quiz' | 'ask' | 'plan' | 'curriculum'",
+            ));
+        }
+    };
+
+    let mut issues: Vec<String> = Vec::new();
+    let mut request_id = None;
+    match object.get("requestId") {
+        Some(Value::String(text)) => request_id = Some(text.clone()),
+        Some(other) => issues.push(string_issue("requestId", Some(other))),
+        None => issues.push(string_issue("requestId", None)),
+    }
+    let answer = match object.get("answer") {
+        Some(Value::Object(answer)) => Some(answer_payload(kind, answer, &mut issues)),
+        Some(other) => {
+            issues.push(issue("answer", &invalid_type("object", Some(other))));
+            None
+        }
+        None => {
+            issues.push(issue("answer", &invalid_type("object", None)));
+            None
+        }
+    };
+    if !issues.is_empty() {
+        return Err(HttpError::new(400, issues.join("; ")));
+    }
+
+    let mut out = Map::new();
+    out.insert(
+        "requestId".to_string(),
+        json!(request_id.unwrap_or_default()),
+    );
+    out.insert("kind".to_string(), json!(kind));
+    out.insert("answer".to_string(), answer.unwrap_or(Value::Null));
+    Ok(Value::Object(out))
+}
+
+/// zod's `received` wording for a string: what the value is, as Node prints it.
+fn string_issue(path: &str, value: Option<&Value>) -> String {
+    issue(path, &invalid_type("string", value))
+}
+
+/// One union branch's `answer`, in that branch's schema key order.
+fn answer_payload(kind: &str, answer: &Map<String, Value>, issues: &mut Vec<String>) -> Value {
+    let mut out = Map::new();
+    if kind == "plan" || kind == "curriculum" {
+        match answer.get("approved") {
+            Some(Value::Bool(approved)) => {
+                out.insert("approved".to_string(), json!(approved));
+            }
+            Some(other) => issues.push(issue(
+                "answer.approved",
+                &invalid_type("boolean", Some(other)),
+            )),
+            None => issues.push(issue("answer.approved", &invalid_type("boolean", None))),
+        }
+        if let Some(feedback) = optional_string(answer, "feedback", "answer.feedback", issues) {
+            out.insert("feedback".to_string(), json!(feedback));
+        }
+        return Value::Object(out);
+    }
+
+    match answer.get("selected") {
+        Some(Value::Array(selected)) => {
+            let mut labels = Vec::new();
+            for (index, label) in selected.iter().enumerate() {
+                match label {
+                    Value::String(text) => labels.push(text.clone()),
+                    other => issues.push(string_issue(
+                        &format!("answer.selected.{index}"),
+                        Some(other),
+                    )),
+                }
+            }
+            out.insert("selected".to_string(), json!(labels));
+        }
+        Some(other) => issues.push(issue(
+            "answer.selected",
+            &invalid_type("array", Some(other)),
+        )),
+        None => issues.push(issue("answer.selected", &invalid_type("array", None))),
+    }
+
+    if kind == "quiz" {
+        match answer.get("dontKnow") {
+            Some(Value::Bool(dont_know)) => {
+                out.insert("dontKnow".to_string(), json!(dont_know));
+            }
+            Some(other) => issues.push(issue(
+                "answer.dontKnow",
+                &invalid_type("boolean", Some(other)),
+            )),
+            None => issues.push(issue("answer.dontKnow", &invalid_type("boolean", None))),
+        }
+        match answer.get("confidence") {
+            Some(Value::Number(number)) => {
+                let value = number.as_f64().unwrap_or(f64::NAN);
+                if value < 0.0 {
+                    issues.push(issue(
+                        "answer.confidence",
+                        "Too small: expected number to be >=0",
+                    ));
+                } else if value > 100.0 {
+                    issues.push(issue(
+                        "answer.confidence",
+                        "Too big: expected number to be <=100",
+                    ));
+                } else {
+                    out.insert("confidence".to_string(), json!(number));
+                }
+            }
+            Some(other) => issues.push(issue(
+                "answer.confidence",
+                &invalid_type("number", Some(other)),
+            )),
+            None => {}
+        }
+        if let Some(note) = optional_string(answer, "note", "answer.note", issues) {
+            out.insert("note".to_string(), json!(note));
+        }
+        return Value::Object(out);
+    }
+
+    if let Some(other) = optional_string(answer, "other", "answer.other", issues) {
+        out.insert("other".to_string(), json!(other));
+    }
+    Value::Object(out)
+}
+
+/// `z.string().max(5000).optional()`: absent stays away, a too-long string is an issue.
+fn optional_string(
+    answer: &Map<String, Value>,
+    key: &str,
+    path: &str,
+    issues: &mut Vec<String>,
+) -> Option<String> {
+    match answer.get(key) {
+        Some(Value::String(text)) => {
+            if utf16_len(text) > 5000 {
+                issues.push(issue(
+                    path,
+                    "Too big: expected string to have <=5000 characters",
+                ));
+                None
+            } else {
+                Some(text.clone())
+            }
+        }
+        Some(other) => {
+            issues.push(string_issue(path, Some(other)));
+            None
+        }
+        None => None,
+    }
+}
+
 /// The persisted wrapper, in Node's key order; absent optionals are omitted like `undefined`.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -594,14 +778,19 @@ impl SessionData {
         });
     }
 
-    fn cancel_pending(&mut self) {
-        let entries: Vec<(String, PendingReq)> = self
+    /// Cancels every pending card, or only the given request ids (a dropped HTTP call).
+    fn cancel_pending_only(&mut self, only: Option<&[String]>) {
+        let keys: Vec<String> = self
             .pending
-            .iter()
-            .map(|(key, pending)| (key.clone(), pending.clone()))
+            .keys()
+            .filter(|key| only.is_none_or(|only| only.contains(key)))
+            .cloned()
             .collect();
         let mut cancelled_opt_in = false;
-        for (request_id, pending) in entries {
+        for request_id in keys {
+            let Some(pending) = self.pending.shift_remove(&request_id) else {
+                continue;
+            };
             if let Some(index) = self.item_index(&pending.item_id) {
                 let item = &mut self.state.items[index];
                 if item.get("requestId").is_some() {
@@ -610,9 +799,14 @@ impl SessionData {
                     self.notify(ServerEvent::Item { item });
                 }
             }
-            self.pending.shift_remove(&request_id);
-            if pending.anki_opt_in && !self.closing {
-                cancelled_opt_in = true;
+            match pending.resolver {
+                Resolver::Tool(tx) => {
+                    // A dropped receiver means the HTTP call already went away.
+                    let _ = tx.send(Err(Cancelled));
+                }
+                // The rejected `askAnkiOptIn` promise lands here: nothing ran, so the session is idle again.
+                Resolver::AnkiOptIn if !self.closing => cancelled_opt_in = true,
+                Resolver::AnkiOptIn => {}
             }
         }
         if self.state.pending_request_id.is_some() {
@@ -622,7 +816,6 @@ impl SessionData {
             let retryable = self.state.retryable;
             self.apply_status(SessionStatus::Running, None, retryable);
         }
-        // The rejected `askAnkiOptIn` promise lands here: nothing ran, so the session is idle again.
         if cancelled_opt_in {
             let retryable = self.state.retryable;
             self.apply_status(SessionStatus::Idle, None, retryable);
@@ -849,7 +1042,7 @@ impl TurnHost for SessionData {
     }
 
     fn cancel_pending(&mut self) {
-        SessionData::cancel_pending(self);
+        self.cancel_pending_only(None);
     }
 }
 
@@ -911,6 +1104,178 @@ impl Shared {
         let mut guard = session.lock().expect("session lock");
         let Session { data, turns } = &mut *guard;
         turns.watchdog_fired(data, ticket);
+    }
+}
+
+/// The request ids one `tools/call` created: the route cancels exactly these when it is dropped.
+pub type CallRequests = Arc<Mutex<Vec<String>>>;
+
+/// One session as the tools see it: port of Node's `makeContext` (`sessions.ts:319-379`). Every
+/// method takes the session lock briefly and never holds it across an await.
+pub struct SessionToolHost {
+    shared: Arc<Shared>,
+    session: Arc<Mutex<Session>>,
+    call: CallRequests,
+    id: String,
+}
+
+/// Node's `{...item, …fields}`: the item's keys keep their place, the fields replace or append.
+fn spread(item: Value, fields: Vec<(&str, Value)>) -> Value {
+    let mut full = match item {
+        Value::Object(map) => map,
+        _ => Map::new(),
+    };
+    for (key, value) in fields {
+        full.insert(key.to_string(), value);
+    }
+    Value::Object(full)
+}
+
+impl tools::ToolHost for SessionToolHost {
+    fn data_root(&self) -> &Path {
+        &self.shared.opts.data_root
+    }
+
+    fn repo_root(&self) -> &Path {
+        &self.shared.opts.repo_root
+    }
+
+    fn config(&self) -> Map<String, Value> {
+        self.session
+            .lock()
+            .expect("session lock")
+            .data
+            .state
+            .config
+            .clone()
+    }
+
+    fn lesson_path(&self) -> Option<String> {
+        self.session
+            .lock()
+            .expect("session lock")
+            .data
+            .state
+            .lesson_path
+            .clone()
+    }
+
+    fn plan(&self) -> Value {
+        self.session
+            .lock()
+            .expect("session lock")
+            .data
+            .state
+            .plan
+            .clone()
+    }
+
+    fn set_plan(&self, plan: Value) {
+        let mut guard = self.session.lock().expect("session lock");
+        guard.data.state.plan = plan.clone();
+        guard.data.notify(ServerEvent::Plan { plan });
+    }
+
+    fn set_lesson(&self, lesson_path: String, node_id: Option<String>) {
+        let mut guard = self.session.lock().expect("session lock");
+        guard.data.state.lesson_path = Some(lesson_path.clone());
+        guard.data.notify(ServerEvent::Lesson {
+            lesson_path,
+            node_id,
+        });
+    }
+
+    fn request(
+        &self,
+        item: Value,
+    ) -> Result<oneshot::Receiver<Result<Value, Cancelled>>, Cancelled> {
+        let mut guard = self.session.lock().expect("session lock");
+        if guard.data.closing || !guard.turns.live() {
+            return Err(Cancelled);
+        }
+        // At most one pending interactive request at a time: a newer card supersedes the older ones.
+        if !guard.data.pending.is_empty() {
+            guard.data.cancel_pending_only(None);
+        }
+        let request_id = engine::uuid_v4();
+        self.call
+            .lock()
+            .expect("call lock")
+            .push(request_id.clone());
+        let item_id = format!("req:{request_id}");
+        let item = spread(
+            item,
+            vec![
+                ("id", json!(item_id)),
+                ("at", json!(events::iso_now())),
+                ("requestId", json!(request_id.clone())),
+            ],
+        );
+        let kind = item
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let (tx, rx) = oneshot::channel();
+        let Session { data, turns } = &mut *guard;
+        data.pending.insert(
+            request_id,
+            PendingReq {
+                item_id,
+                kind,
+                resolver: Resolver::Tool(tx),
+            },
+        );
+        data.upsert(item);
+        data.set_pending();
+        let retryable = turns.can_retry();
+        data.apply_status(SessionStatus::Waiting, None, retryable);
+        Ok(rx)
+    }
+
+    fn emit(&self, item: Value) -> String {
+        let id = match item.get("id").and_then(Value::as_str) {
+            Some(id) => id.to_string(),
+            None => engine::uuid_v4(),
+        };
+        let item = spread(
+            item,
+            vec![("id", json!(id)), ("at", json!(events::iso_now()))],
+        );
+        self.session.lock().expect("session lock").data.upsert(item);
+        id
+    }
+
+    fn log_progress(&self, record: Map<String, Value>) -> Result<(), String> {
+        let (session_id, course) = {
+            let guard = self.session.lock().expect("session lock");
+            let state = &guard.data.state;
+            (
+                state.id.clone(),
+                state.config.get("course").cloned().unwrap_or(Value::Null),
+            )
+        };
+        // Node's `{...rec, at, sessionId, course}`: the extra keys land last, in this order.
+        let mut full = record;
+        full.insert("at".to_string(), json!(events::iso_now()));
+        full.insert("sessionId".to_string(), json!(session_id));
+        if !course.is_null() {
+            full.insert("course".to_string(), course);
+        }
+        knowledge::append_progress(&self.shared.opts.data_root, &Value::Object(full))
+            .map_err(|error| error.to_string())
+    }
+
+    fn start_job(&self, kind: &str, input: Value, title: &str) -> Result<String, String> {
+        self.shared.opts.jobs.start(kind, input, title, &self.id)
+    }
+
+    fn start_map(&self, target: &str) -> Result<(), String> {
+        self.shared.opts.jobs.start_map(target, &self.id)
+    }
+
+    fn courses_changed(&self) {
+        tools::board::courses_changed(&self.shared.opts.data_root, &self.shared.opts.events);
     }
 }
 
@@ -1435,7 +1800,7 @@ impl SessionManager {
             PendingReq {
                 item_id,
                 kind: "ask".to_string(),
-                anki_opt_in: true,
+                resolver: Resolver::AnkiOptIn,
             },
         );
         data.upsert(item);
@@ -1497,6 +1862,145 @@ impl SessionManager {
             let Session { data, turns } = &mut *guard;
             data.pending_start = None;
             flush(&self.0, data, turns);
+        }
+        Ok(())
+    }
+
+    /// The shared secret the engine's `mcp.json` carries.
+    pub fn token(&self) -> String {
+        self.0.opts.token.clone()
+    }
+
+    pub fn session_config(&self, id: &str) -> Option<Map<String, Value>> {
+        let session = self.0.session(id)?;
+        let guard = session.lock().expect("session lock");
+        Some(guard.data.state.config.clone())
+    }
+
+    /// The MCP route for one session: `None` when the id is unknown (Node's `getContext`).
+    pub fn tool_host(&self, id: &str, call: CallRequests) -> Option<SessionToolHost> {
+        let session = self.0.session(id)?;
+        let id = session.lock().expect("session lock").data.state.id.clone();
+        Some(SessionToolHost {
+            shared: self.0.clone(),
+            session,
+            call,
+            id,
+        })
+    }
+
+    /// The `/mcp` call was dropped: only the cards it created can never be answered.
+    pub fn cancel_requests(&self, id: &str, only: &[String]) {
+        let Some(session) = self.0.session(id) else {
+            return;
+        };
+        session
+            .lock()
+            .expect("session lock")
+            .data
+            .cancel_pending_only(Some(only));
+    }
+
+    /// Port of Node's `answer` (`sessions.ts:577-601`): the card settles and its caller resumes.
+    pub fn answer(&self, id: &str, body: Value) -> Result<(), HttpError> {
+        // Node parses the body before it looks the session up.
+        let body = validate_answer(&body)?;
+        let Some(session) = self.0.session(id) else {
+            return Err(HttpError::new(404, "Session not found"));
+        };
+        let kind = body
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let payload = body.get("answer").cloned().unwrap_or(Value::Null);
+        let mut request_id = body
+            .get("requestId")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let resolver = {
+            let mut guard = session.lock().expect("session lock");
+            let found = guard
+                .data
+                .pending
+                .get(&request_id)
+                .map(|pending| (pending.kind.clone(), pending.item_id.clone()));
+            let (pending_kind, item_id) = match found {
+                Some(found) => found,
+                None => {
+                    // Superseded by a retry: the answer goes to the active card of the same kind.
+                    match guard.data.pending.iter().next() {
+                        Some((key, first)) if first.kind == kind => {
+                            request_id = key.clone();
+                            (first.kind.clone(), first.item_id.clone())
+                        }
+                        _ => return Err(HttpError::new(409, "No pending request with that id")),
+                    }
+                }
+            };
+            if pending_kind != kind {
+                return Err(HttpError::new(
+                    400,
+                    format!("Request is a {pending_kind}, not a {kind}"),
+                ));
+            }
+            if let Some(index) = guard.data.item_index(&item_id) {
+                let item = &mut guard.data.state.items[index];
+                match kind.as_str() {
+                    "quiz" => {
+                        let input = item.get("input").cloned().unwrap_or(Value::Null);
+                        item["result"] = tools::util::grade_quiz(&input, &payload);
+                    }
+                    "ask" => item["answer"] = payload.clone(),
+                    _ => item["decision"] = payload.clone(),
+                }
+                let item = item.clone();
+                guard.data.notify(ServerEvent::Item { item });
+            }
+            let pending = guard.data.pending.shift_remove(&request_id);
+            guard.data.set_pending();
+            if guard.data.pending.is_empty() {
+                let retryable = guard.turns.can_retry();
+                guard
+                    .data
+                    .apply_status(SessionStatus::Running, None, retryable);
+            }
+            pending.map(|pending| pending.resolver)
+        };
+        match resolver {
+            Some(Resolver::Tool(tx)) => {
+                let _ = tx.send(Ok(payload));
+            }
+            Some(Resolver::AnkiOptIn) => {
+                // Node's `.then`: store the opt-in, flush, then send the opening turn.
+                let opt_in = payload
+                    .get("selected")
+                    .and_then(Value::as_array)
+                    .and_then(|selected| selected.first())
+                    .and_then(Value::as_str)
+                    == Some("si");
+                let title = {
+                    let mut guard = session.lock().expect("session lock");
+                    guard
+                        .data
+                        .state
+                        .config
+                        .insert("ankiOptIn".to_string(), json!(opt_in));
+                    let Session { data, turns } = &mut *guard;
+                    flush(&self.0, data, turns);
+                    data.pending_start.clone()
+                };
+                if let Some(title) = title {
+                    let manager = self.clone();
+                    let session = session.clone();
+                    tokio::spawn(async move {
+                        // A failed start already set status "error": nothing left to report.
+                        let _ = manager.start(&session, &title, None, None).await;
+                    });
+                }
+            }
+            None => {}
         }
         Ok(())
     }
@@ -2007,7 +2511,7 @@ impl SessionManager {
                 let mut guard = session.lock().expect("session lock");
                 let Session { data, turns } = &mut *guard;
                 data.closing = true;
-                data.cancel_pending();
+                data.cancel_pending_only(None);
                 flush(&self.0, data, turns);
                 turns.stop()
             };
@@ -2020,7 +2524,10 @@ impl SessionManager {
 
 #[cfg(test)]
 mod tests {
+    use std::future::Future;
+
     use super::*;
+    use crate::tools::ToolHost;
 
     #[test]
     fn config_validation_keeps_schema_order_and_drops_unknown_keys() {
@@ -2159,6 +2666,68 @@ mod tests {
         assert_eq!(trunc("😀😀", 4), "😀😀");
     }
 
+    #[test]
+    fn answer_validation_ports_the_node_union() {
+        // Key order is what Node keeps: the union's schema order, unknown keys dropped.
+        assert_eq!(
+            serde_json::to_string(
+                &validate_answer(&json!({
+                    "answer": {"note": "n", "confidence": 5, "dontKnow": false, "selected": ["a"], "extra": 1},
+                    "kind": "quiz",
+                    "requestId": "r",
+                }))
+                .unwrap()
+            )
+            .unwrap(),
+            r#"{"requestId":"r","kind":"quiz","answer":{"selected":["a"],"dontKnow":false,"confidence":5,"note":"n"}}"#
+        );
+        assert_eq!(
+            validate_answer(&json!({
+                "requestId": "r",
+                "kind": "ask",
+                "answer": {"other": "o", "selected": ["a"]},
+            }))
+            .unwrap(),
+            json!({"requestId": "r", "kind": "ask", "answer": {"selected": ["a"], "other": "o"}})
+        );
+        for kind in ["plan", "curriculum"] {
+            assert_eq!(
+                validate_answer(&json!({
+                    "requestId": "r",
+                    "kind": kind,
+                    "answer": {"feedback": "f", "approved": true},
+                }))
+                .unwrap(),
+                json!({"requestId": "r", "kind": kind, "answer": {"approved": true, "feedback": "f"}})
+            );
+        }
+
+        // Messages pinned from zod 4.6.7 (`main.ts:104-114`).
+        let cases = [
+            (
+                json!({"kind": "ask", "answer": {"selected": []}}),
+                "requestId: Invalid input: expected string, received undefined",
+            ),
+            (
+                json!({"requestId": "r", "kind": "nope", "answer": {}}),
+                "kind: Invalid discriminator value. Expected 'quiz' | 'ask' | 'plan' | 'curriculum'",
+            ),
+            (
+                json!({"requestId": "r", "kind": "quiz", "answer": {"selected": [], "dontKnow": false, "confidence": 101}}),
+                "answer.confidence: Too big: expected number to be <=100",
+            ),
+            (
+                json!({"requestId": "r", "kind": "quiz", "answer": {"selected": [], "dontKnow": false, "note": "x".repeat(5001)}}),
+                "answer.note: Too big: expected string to have <=5000 characters",
+            ),
+        ];
+        for (body, message) in cases {
+            let error = validate_answer(&body).unwrap_err();
+            assert_eq!(error.status, StatusCode::BAD_REQUEST);
+            assert_eq!(error.message, message);
+        }
+    }
+
     fn saved_state() -> SessionState {
         SessionState {
             id: "s".to_string(),
@@ -2214,6 +2783,128 @@ mod tests {
         assert!(
             json.ends_with(r#""provider":"claude","pendingStart":"Piano · Demo","lastTurn":{"text":"x","show":["x"],"attachments":[],"turnText":"x","pushedLearner":true},"canRetry":true}"#),
             "{json}"
+        );
+    }
+
+    /// A live engine handle is all `request` checks: this one never reads or writes.
+    struct FakeHandle;
+
+    impl EngineHandle for FakeHandle {
+        fn send(&mut self, _text: &str) {}
+
+        fn interrupt(&mut self) {}
+
+        fn stop(&mut self) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
+            Box::pin(async {})
+        }
+
+        fn pid(&self) -> Option<u32> {
+            None
+        }
+    }
+
+    /// AC4's other half: a dropped `/mcp` call cancels its own cards and nothing else.
+    #[tokio::test]
+    async fn cancel_requests_only_touches_the_ids_it_is_given() {
+        let shared = Arc::new(Shared {
+            opts: ManagerOptions {
+                repo_root: PathBuf::from("repo"),
+                data_root: PathBuf::from("data"),
+                code_root: PathBuf::from("code"),
+                port: 4599,
+                token: "test-token".to_string(),
+                claude: ClaudeBin {
+                    cmd: "node".to_string(),
+                    args: Vec::new(),
+                },
+                agy: ClaudeBin {
+                    cmd: "node".to_string(),
+                    args: Vec::new(),
+                },
+                opencode: ClaudeBin {
+                    cmd: "node".to_string(),
+                    args: Vec::new(),
+                },
+                add_dirs: Vec::new(),
+                events: EventBus::new(),
+                limits: Arc::new(crate::limits::LimitsCache::new()),
+                anki: AnkiClient::new("http://127.0.0.1:1").expect("anki client"),
+                imports: ImportRegistry::new(),
+                jobs: Arc::new(tools::NoJobs),
+            },
+            sessions: Mutex::new(IndexMap::new()),
+            sessions_touch_pending: AtomicBool::new(false),
+        });
+        let manager = SessionManager(shared.clone());
+        let session = make_session(
+            &shared,
+            saved_state(),
+            "claude".to_string(),
+            None,
+            None,
+            false,
+        );
+        session
+            .lock()
+            .expect("session lock")
+            .turns
+            .attach(Box::new(FakeHandle))
+            .ok()
+            .expect("a fresh handle attaches");
+        shared
+            .sessions
+            .lock()
+            .expect("sessions lock")
+            .insert("s".to_string(), session.clone());
+
+        let call: CallRequests = Default::default();
+        let host = manager
+            .tool_host("s", call.clone())
+            .expect("the session exists");
+        let receiver = host
+            .request(json!({"kind": "ask", "input": {"question": "Quale?"}}))
+            .expect("a card opens");
+        let card = {
+            let guard = session.lock().expect("session lock");
+            let card = guard.data.pending.keys().next().cloned().expect("one pending");
+            assert_eq!(guard.data.state.pending_request_id.as_deref(), Some(card.as_str()));
+            assert_eq!(guard.data.state.status, SessionStatus::Waiting);
+            card
+        };
+
+        // Ids this call never created: the card stays pending and untouched.
+        manager.cancel_requests("s", &["other".to_string()]);
+        {
+            let guard = session.lock().expect("session lock");
+            assert!(guard.data.pending.contains_key(&card));
+            assert_eq!(guard.data.state.pending_request_id.as_deref(), Some(card.as_str()));
+            assert_eq!(guard.data.state.status, SessionStatus::Waiting);
+            assert!(
+                guard
+                    .data
+                    .state
+                    .items
+                    .iter()
+                    .all(|item| item.get("cancelled").is_none()),
+                "{:?}",
+                guard.data.state.items
+            );
+        }
+
+        // Its own ids: the card is cancelled, the call unblocks with `Cancelled`.
+        let ids = call.lock().expect("call lock").clone();
+        assert_eq!(ids, [card.clone()]);
+        manager.cancel_requests("s", &ids);
+        {
+            let guard = session.lock().expect("session lock");
+            assert!(guard.data.pending.is_empty());
+            assert_eq!(guard.data.state.pending_request_id, None);
+            assert_eq!(guard.data.state.status, SessionStatus::Running);
+            assert_eq!(guard.data.state.items[0]["cancelled"], json!(true));
+        }
+        assert!(
+            matches!(receiver.await, Ok(Err(Cancelled))),
+            "the call must wake with Cancelled"
         );
     }
 }

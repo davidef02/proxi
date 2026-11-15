@@ -3,10 +3,12 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 
 use serde_json::{Map, Value};
 
+use crate::course_data;
 use crate::js;
 use crate::lesson;
 
@@ -72,6 +74,25 @@ pub fn read_progress(data_root: &Path, course: &str) -> Vec<Value> {
         out.push(rec);
     }
     out
+}
+
+/// Appends one line to the course ledger. Node's `appendFileSync` creates the file but not the
+/// directory, so a missing course folder is an error.
+pub fn append_progress(data_root: &Path, record: &Value) -> std::io::Result<()> {
+    let Some(course) = record.get("course").and_then(Value::as_str) else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "progress record without a course",
+        ));
+    };
+    let file = course_data::progress_file(data_root, course);
+    let mut line = record.to_string();
+    line.push('\n');
+    let mut handle = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(file)?;
+    handle.write_all(line.as_bytes())
 }
 
 /// Anki's verdict on the latest review of every card: shaky while a card is floored.
@@ -541,6 +562,32 @@ mod tests {
     fn read_progress_of_a_missing_course_is_empty() {
         let root = make_repo("empty");
         assert!(read_progress(&root, "nope").is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn append_progress_creates_the_ledger_and_reads_back_in_order() {
+        let root = make_repo("append");
+        let first =
+            rec(json!({"nodeRefs": ["alpha"], "correct": true, "at": "2026-01-01T00:00:00Z"}));
+        let second =
+            rec(json!({"nodeRefs": ["beta"], "correct": false, "at": "2026-01-02T00:00:00Z"}));
+        super::append_progress(&root, &first).unwrap();
+        super::append_progress(&root, &second).unwrap();
+
+        let text =
+            fs::read_to_string(root.join("courses").join("demo").join("progress.jsonl")).unwrap();
+        assert_eq!(text, format!("{first}\n{second}\n"));
+        assert_eq!(read_progress(&root, "demo"), vec![first, second]);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn append_progress_never_creates_the_course_directory() {
+        let root = make_repo("append-missing");
+        let err = super::append_progress(&root, &rec(json!({"course": "nope"}))).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+        assert!(!root.join("courses").join("nope").exists());
         let _ = fs::remove_dir_all(&root);
     }
 

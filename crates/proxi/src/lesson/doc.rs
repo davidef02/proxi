@@ -246,6 +246,8 @@ pub struct AppendResult {
     pub file_path: String,
     pub node_count: usize,
     pub node_id: Option<Value>,
+    /// The node as written: `capturedAt` and any content filled from `steps` included.
+    pub node: Value,
 }
 
 impl AppendResult {
@@ -386,6 +388,7 @@ pub fn append_node(o: AppendOptions) -> Result<AppendResult, String> {
         file_path,
         node_count: doc["nodes"].as_array().expect("validated nodes").len(),
         node_id,
+        node: doc["nodes"][index].clone(),
     })
 }
 

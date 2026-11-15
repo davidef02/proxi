@@ -1,0 +1,19 @@
+{
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Short Italian title of the demo."
+    },
+    "brief": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Self-contained description of what the learner can manipulate and what it should make visible. The demo-builder sees nothing else of the lesson."
+    }
+  },
+  "required": [
+    "title",
+    "brief"
+  ]
+}

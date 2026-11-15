@@ -290,6 +290,14 @@ pub enum ServerEvent {
     Usage {
         usage: Usage,
     },
+    Lesson {
+        lesson_path: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        node_id: Option<String>,
+    },
+    Plan {
+        plan: serde_json::Value,
+    },
 }
 
 /// A number as JS prints it: `JSON.stringify(4)` is `4`, serde prints `4.0` for an f64.
@@ -941,6 +949,33 @@ mod tests {
             })
             .unwrap(),
             r#"{"type":"item","item":{"id":"i"}}"#
+        );
+    }
+
+    #[test]
+    fn lesson_and_plan_events_match_node() {
+        assert_eq!(
+            serde_json::to_string(&ServerEvent::Lesson {
+                lesson_path: "courses/demo/lessons/x.html".to_string(),
+                node_id: None,
+            })
+            .unwrap(),
+            r#"{"type":"lesson","lessonPath":"courses/demo/lessons/x.html"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&ServerEvent::Lesson {
+                lesson_path: "p".to_string(),
+                node_id: Some("prima-cosa".to_string()),
+            })
+            .unwrap(),
+            r#"{"type":"lesson","lessonPath":"p","nodeId":"prima-cosa"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&ServerEvent::Plan {
+                plan: json!({"topic": "t"})
+            })
+            .unwrap(),
+            r#"{"type":"plan","plan":{"topic":"t"}}"#
         );
     }
 

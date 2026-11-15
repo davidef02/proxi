@@ -11,6 +11,7 @@ use axum::{Json, Router};
 use serde_json::{Map, Value, json};
 
 use crate::events::EventBus;
+use crate::js;
 use crate::sync::secrets::{GDRIVE_ACCOUNT, GITHUB_ACCOUNT};
 use crate::sync::service::SyncService;
 
@@ -111,22 +112,11 @@ fn request_json(body: &[u8]) -> Value {
     serde_json::from_slice(body).unwrap_or_else(|_| json!({}))
 }
 
-fn js_type(value: &Value) -> &'static str {
-    match value {
-        Value::Array(_) => "array",
-        Value::Null => "null",
-        Value::String(_) => "string",
-        Value::Number(_) => "number",
-        Value::Bool(_) => "boolean",
-        Value::Object(_) => "object",
-    }
-}
-
 /// zod's root `unrecognized object` error, formatted like `main.ts:182` does (empty path → leading colon).
 fn invalid_object(value: &Value) -> Response {
     bad_request(&format!(
         ": Invalid input: expected object, received {}",
-        js_type(value)
+        js::js_type(value)
     ))
 }
 
@@ -142,7 +132,7 @@ fn zod_string(
         Some(other) => {
             return Err(format!(
                 "{key}: Invalid input: expected string, received {}",
-                js_type(other)
+                js::js_type(other)
             ));
         }
         None => {
@@ -197,7 +187,7 @@ async fn post_run(State(svc): State<SyncService>, body: Bytes) -> Response {
         Some(other) => {
             return bad_request(&format!(
                 "confirmDeletions: Invalid input: expected boolean, received {}",
-                js_type(other)
+                js::js_type(other)
             ));
         }
     };

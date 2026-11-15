@@ -1,0 +1,1317 @@
+{
+  "route": "mcp",
+  "seed": {
+    ".learner/settings.json": {
+      "autoMap": false
+    }
+  },
+  "dataSeed": {
+    "curriculum.json": "{\"chapters\":[{\"title\":\"Demo\",\"slug\":\"demo\",\"lessons\":[{\"title\":\"Prima lezione\",\"slug\":\"prima-lezione\",\"plannedNodes\":2}]}]}",
+    "courses/demo/MISSION.md": "# Mission\n",
+    "courses/demo/NOTES.md": "# Notes\n",
+    "courses/demo/lessons/.keep": "",
+    "courses/demo/lessons/0001-prima-lezione.html": "<!DOCTYPE html>\n<html lang=\"en\" data-theme=\"light\">\n<head>\n  <meta charset=\"UTF-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n  <title>Prima lezione | Proxi</title>\n  <meta name=\"description\" content=\"Personalized standalone lesson synthesized by Proxi\">\n  \n  <!-- Early Theme Init Script to Prevent FOUT -->\n  <script>\n    (function() {\n      const savedTheme = localStorage.getItem(\"learn-forme-theme\");\n      const prefersDark = window.matchMedia(\"(prefers-color-scheme: dark)\").matches;\n      const activeTheme = savedTheme || (prefersDark ? \"dark\" : \"light\");\n      document.documentElement.setAttribute(\"data-theme\", activeTheme);\n    })();\n  </script>\n\n  <!-- KaTeX CSS & JS CDN -->\n  <link rel=\"stylesheet\" href=\"https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css\" crossorigin=\"anonymous\">\n  <script defer src=\"https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js\" crossorigin=\"anonymous\"></script>\n  <script defer src=\"https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js\" crossorigin=\"anonymous\"></script>\n\n  <!-- Mermaid JS CDN -->\n  <script src=\"https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js\"></script>\n\n  <style>\n    /* ==========================================================================\n       CSS Custom Properties / Design Tokens\n       ========================================================================== */\n    :root {\n      --font-body: Charter, \"Bitstream Charter\", \"Sitka Text\", Cambria, Georgia, serif, -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif;\n      --font-ui: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Inter, Helvetica, Arial, sans-serif;\n      --font-mono: ui-monospace, \"SF Mono\", Monaco, \"Cascadia Code\", \"Roboto Mono\", Consolas, monospace;\n      \n      --max-width: 72ch;\n      --radius-sm: 6px;\n      --radius-md: 10px;\n      --radius-lg: 16px;\n      --shadow-sm: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);\n      --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.08), 0 2px 4px -1px rgba(0,0,0,0.04);\n      --shadow-lg: 0 10px 15px -3px rgba(0,0,0,0.08), 0 4px 6px -2px rgba(0,0,0,0.03);\n      --transition-smooth: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);\n    }\n\n    /* Light Theme */\n    :root[data-theme=\"light\"] {\n      --bg: #fcfbfa;\n      --fg: #1c1917;\n      --bg-canvas: #fcfbfa;\n      --bg-surface: #ffffff;\n      --bg-surface-elevated: #ffffff;\n      --bg-subtle: #f4f3ef;\n      --bg-code: #f1f0eb;\n      \n      --text-primary: #1c1917;\n      --text-secondary: #44403c;\n      --text-muted: #6b645f;\n      --text-link: #0369a1;\n      \n      --border-default: #e7e5e0;\n      --border-subtle: #f0eee8;\n      \n      --step-motivate-border: #f59e0b;\n      --step-motivate-bg: #fffbeb;\n      --step-motivate-text: #92400e;\n      \n      --step-connect-border: #10b981;\n      --step-connect-bg: #ecfdf5;\n      --step-connect-text: #065f46;\n      \n      --step-quiz-border: #8b5cf6;\n      --step-quiz-bg: #f5f3ff;\n      --step-quiz-text: #5b21b6;\n      \n      --badge-axiom-bg: #ccfbf1;\n      --badge-axiom-text: #0f766e;\n      --badge-derivation-bg: #e0e7ff;\n      --badge-derivation-text: #3730a3;\n\n      --quiz-ok: #047857;\n      --quiz-ok-on: #ffffff;\n      --quiz-err: #b91c1c;\n      --quiz-err-on: #ffffff;\n\n      --mermaid-theme: default;\n    }\n\n    /* Dark Theme */\n    :root[data-theme=\"dark\"] {\n      --bg: #0f172a;\n      --fg: #f8fafc;\n      --bg-canvas: #0f172a;\n      --bg-surface: #1e293b;\n      --bg-surface-elevated: #283548;\n      --bg-subtle: #192434;\n      --bg-code: #0b1120;\n      \n      --text-primary: #f8fafc;\n      --text-secondary: #cbd5e1;\n      --text-muted: #94a3b8;\n      --text-link: #38bdf8;\n      \n      --border-default: #334155;\n      --border-subtle: #1e293b;\n      \n      --step-motivate-border: #fbbf24;\n      --step-motivate-bg: #451a03;\n      --step-motivate-text: #fde68a;\n      \n      --step-connect-border: #34d399;\n      --step-connect-bg: #064e3b;\n      --step-connect-text: #a7f3d0;\n      \n      --step-quiz-border: #a78bfa;\n      --step-quiz-bg: #2e1065;\n      --step-quiz-text: #ddd6fe;\n      \n      --badge-axiom-bg: #134e4a;\n      --badge-axiom-text: #5eead4;\n      --badge-derivation-bg: #312e81;\n      --badge-derivation-text: #c7d2fe;\n\n      --quiz-ok: #34d399;\n      --quiz-ok-on: #052e1f;\n      --quiz-err: #f87171;\n      --quiz-err-on: #2a0a0a;\n\n      --mermaid-theme: dark;\n    }\n\n    @media (prefers-color-scheme: dark) {\n      :root:not([data-theme=\"light\"]) {\n        --bg: #0f172a;\n        --fg: #f8fafc;\n      }\n    }\n\n    *, *::before, *::after {\n      box-sizing: border-box;\n      margin: 0;\n      padding: 0;\n    }\n\n    html {\n      font-family: var(--font-body);\n      font-size: clamp(1rem, 0.95rem + 0.25vw, 1.125rem);\n      line-height: 1.68;\n      background-color: var(--bg-canvas);\n      color: var(--text-primary);\n      text-rendering: optimizeLegibility;\n      -webkit-font-smoothing: antialiased;\n      transition: background-color 0.25s ease, color 0.25s ease;\n    }\n\n    body {\n      min-height: 100vh;\n      display: flex;\n      flex-direction: column;\n      align-items: center;\n      padding: 2.5rem 1.25rem 6rem 1.25rem;\n    }\n\n    .container {\n      width: 100%;\n      max-width: var(--max-width);\n    }\n\n    h1, h2, h3, h4, h5, h6 {\n      font-family: var(--font-ui);\n      color: var(--text-primary);\n      font-weight: 700;\n      line-height: 1.25;\n      letter-spacing: -0.02em;\n    }\n\n    h1 { font-size: 2.25rem; margin-bottom: 0.5rem; }\n    h2 { font-size: 1.65rem; margin-top: 2rem; margin-bottom: 0.75rem; }\n    h3 { font-size: 1.25rem; margin-top: 1.5rem; margin-bottom: 0.5rem; }\n\n    p { margin-bottom: 1.25rem; }\n    p:last-child { margin-bottom: 0; }\n\n    a {\n      color: var(--text-link);\n      text-decoration: underline;\n      text-underline-offset: 3px;\n    }\n    a:hover { opacity: 0.85; }\n\n    .theme-toggle-container {\n      position: fixed;\n      top: 1.25rem;\n      right: 1.25rem;\n      z-index: 1000;\n    }\n\n    .theme-toggle-btn {\n      display: inline-flex;\n      align-items: center;\n      gap: 0.5rem;\n      padding: 0.5rem 0.875rem;\n      font-family: var(--font-ui);\n      font-size: 0.875rem;\n      font-weight: 600;\n      color: var(--text-secondary);\n      background: var(--bg-surface-elevated);\n      border: 1px solid var(--border-default);\n      border-radius: 9999px;\n      box-shadow: var(--shadow-md);\n      cursor: pointer;\n      backdrop-filter: blur(8px);\n      transition: var(--transition-smooth);\n    }\n\n    .theme-toggle-btn:hover {\n      color: var(--text-primary);\n      transform: translateY(-1px);\n      box-shadow: var(--shadow-lg);\n    }\n\n    .lesson-header {\n      margin-bottom: 2.5rem;\n      padding-bottom: 2rem;\n      border-bottom: 1px solid var(--border-default);\n    }\n\n    .lesson-tagline {\n      font-family: var(--font-ui);\n      font-size: 0.875rem;\n      text-transform: uppercase;\n      letter-spacing: 0.08em;\n      font-weight: 700;\n      color: var(--text-muted);\n      margin-bottom: 0.5rem;\n    }\n\n    .lesson-meta-bar {\n      display: flex;\n      flex-wrap: wrap;\n      gap: 0.75rem;\n      align-items: center;\n      margin-top: 1rem;\n      font-family: var(--font-ui);\n      font-size: 0.875rem;\n      color: var(--text-muted);\n    }\n\n    .badge {\n      display: inline-flex;\n      align-items: center;\n      gap: 0.35rem;\n      padding: 0.2rem 0.6rem;\n      border-radius: 9999px;\n      font-size: 0.75rem;\n      font-weight: 700;\n      text-transform: uppercase;\n      letter-spacing: 0.04em;\n    }\n\n    .badge-axiom, .badge-unconditional-truth {\n      background-color: var(--badge-axiom-bg);\n      color: var(--badge-axiom-text);\n    }\n\n    .badge-derivation {\n      background-color: var(--badge-derivation-bg);\n      color: var(--badge-derivation-text);\n    }\n\n    .badge-status {\n      background-color: var(--bg-subtle);\n      color: var(--text-secondary);\n      border: 1px solid var(--border-default);\n    }\n\n    .diagram-container {\n      background: var(--bg-surface);\n      border: 1px solid var(--border-default);\n      border-radius: var(--radius-md);\n      padding: 1.5rem;\n      margin: 1.75rem 0;\n      box-shadow: var(--shadow-sm);\n      overflow-x: auto;\n      text-align: center;\n    }\n\n    .diagram-title {\n      font-family: var(--font-ui);\n      font-size: 0.875rem;\n      font-weight: 700;\n      text-transform: uppercase;\n      letter-spacing: 0.05em;\n      color: var(--text-muted);\n      margin-bottom: 1rem;\n      text-align: left;\n    }\n\n    .svg-figure {\n      display: flex;\n      flex-direction: column;\n      align-items: center;\n      margin: 1.75rem 0;\n      background: var(--bg-surface);\n      border: 1px solid var(--border-default);\n      border-radius: var(--radius-md);\n      padding: 1.5rem;\n    }\n\n    .svg-figure svg {\n      max-width: 100%;\n      height: auto;\n    }\n\n    .svg-figure figcaption {\n      margin-top: 0.875rem;\n      font-family: var(--font-ui);\n      font-size: 0.875rem;\n      color: var(--text-muted);\n      font-style: italic;\n    }\n\n    .cognitive-node {\n      background: var(--bg-surface);\n      border: 1px solid var(--border-default);\n      border-radius: var(--radius-lg);\n      padding: 2rem;\n      margin: 2.5rem 0;\n      box-shadow: var(--shadow-md);\n      transition: var(--transition-smooth);\n    }\n\n    .cognitive-node:hover {\n      box-shadow: var(--shadow-lg);\n    }\n\n    .node-header {\n      display: flex;\n      justify-content: space-between;\n      align-items: flex-start;\n      margin-bottom: 1.5rem;\n      padding-bottom: 1rem;\n      border-bottom: 1px solid var(--border-subtle);\n    }\n\n    .node-title-group {\n      display: flex;\n      flex-direction: column;\n      gap: 0.25rem;\n    }\n\n    .node-number {\n      font-family: var(--font-ui);\n      font-size: 0.75rem;\n      font-weight: 800;\n      text-transform: uppercase;\n      letter-spacing: 0.1em;\n      color: var(--text-muted);\n    }\n\n    .node-title {\n      font-size: 1.5rem;\n      margin: 0;\n    }\n\n    .step-motivate {\n      background-color: var(--step-motivate-bg);\n      border-left: 4px solid var(--step-motivate-border);\n      padding: 1rem 1.25rem;\n      border-radius: 0 var(--radius-sm) var(--radius-sm) 0;\n      margin: 1.25rem 0;\n      color: var(--step-motivate-text);\n      font-size: 0.95rem;\n    }\n\n    .step-label {\n      font-family: var(--font-ui);\n      font-size: 0.75rem;\n      font-weight: 800;\n      text-transform: uppercase;\n      letter-spacing: 0.06em;\n      display: flex;\n      align-items: center;\n      gap: 0.4rem;\n      margin-bottom: 0.4rem;\n    }\n\n    .step-establish {\n      margin: 1.5rem 0;\n      font-size: 1.05rem;\n    }\n\n    .node-steps {\n      display: flex;\n      flex-direction: column;\n      gap: 1.25rem;\n      margin: 1.5rem 0;\n    }\n\n    .node-step {\n      background: var(--bg-surface);\n      border: 1px solid var(--border-default);\n      border-radius: var(--radius-md);\n      padding: 1.25rem;\n      box-shadow: var(--shadow-sm);\n    }\n\n    .node-step .step-header {\n      display: flex;\n      align-items: center;\n      gap: 0.75rem;\n      margin-bottom: 0.75rem;\n    }\n\n    .node-step .step-id {\n      font-family: var(--font-mono);\n      font-size: 0.75rem;\n      font-weight: 700;\n      color: var(--text-muted);\n      text-transform: uppercase;\n      background: var(--bg-subtle);\n      padding: 0.15rem 0.45rem;\n      border-radius: var(--radius-sm);\n    }\n\n    .node-step .step-title {\n      font-size: 1.15rem;\n      margin: 0;\n      color: var(--text-primary);\n    }\n\n    .node-step .step-content {\n      font-size: 1.05rem;\n    }\n\n    .step-connect {\n      background-color: var(--step-connect-bg);\n      border-left: 4px solid var(--step-connect-border);\n      padding: 1rem 1.25rem;\n      border-radius: 0 var(--radius-sm) var(--radius-sm) 0;\n      margin: 1.25rem 0;\n      color: var(--step-connect-text);\n      font-size: 0.95rem;\n    }\n\n    .step-quiz {\n      background-color: var(--bg-subtle);\n      border: 1px solid var(--border-default);\n      border-top: 3px solid var(--step-quiz-border);\n      border-radius: var(--radius-md);\n      padding: 1.5rem;\n      margin: 1.75rem 0;\n    }\n\n    .quiz-question {\n      font-family: var(--font-ui);\n      font-weight: 700;\n      font-size: 1.05rem;\n      margin-bottom: 0.4rem;\n      color: var(--text-primary);\n    }\n\n    .quiz-instruction {\n      font-family: var(--font-ui);\n      font-size: 0.85rem;\n      color: var(--text-muted);\n      margin-bottom: 1rem;\n    }\n\n    .quiz-options {\n      list-style: none;\n      display: flex;\n      flex-direction: column;\n      gap: 0.65rem;\n      margin-bottom: 1rem;\n      padding: 0;\n    }\n\n    .quiz-option-item {\n      list-style: none;\n      margin: 0;\n      padding: 0;\n    }\n\n    .quiz-option-btn {\n      width: 100%;\n      text-align: left;\n      display: flex;\n      align-items: center;\n      gap: 0.85rem;\n      background: var(--bg-surface);\n      border: 1.5px solid var(--border-default);\n      padding: 0.85rem 1.15rem;\n      border-radius: var(--radius-md);\n      font-size: 0.95rem;\n      font-family: var(--font-ui);\n      color: var(--text-primary);\n      cursor: pointer;\n      transition: var(--transition-smooth);\n      box-shadow: var(--shadow-sm);\n    }\n\n    .quiz-option-btn:hover:not(.is-disabled) {\n      border-color: var(--step-quiz-border);\n      background: var(--bg-surface-elevated);\n      transform: translateY(-1px);\n      box-shadow: var(--shadow-md);\n    }\n\n    .quiz-option-letter {\n      display: inline-flex;\n      align-items: center;\n      justify-content: center;\n      width: 26px;\n      height: 26px;\n      border-radius: 50%;\n      background: var(--bg-subtle);\n      border: 1px solid var(--border-default);\n      font-size: 0.8rem;\n      font-weight: 700;\n      color: var(--text-secondary);\n      flex-shrink: 0;\n      transition: var(--transition-smooth);\n    }\n\n    .quiz-option-text {\n      flex: 1;\n      line-height: 1.45;\n    }\n\n    .quiz-option-status {\n      font-size: 0.8rem;\n      font-weight: 700;\n      flex-shrink: 0;\n    }\n\n    .quiz-option-btn.is-answered-correct {\n      background: rgba(16, 185, 129, 0.1) !important;\n      border-color: var(--quiz-ok) !important;\n      color: var(--step-connect-text) !important;\n    }\n\n    .quiz-option-btn.is-answered-correct .quiz-option-letter {\n      background: var(--quiz-ok) !important;\n      color: var(--quiz-ok-on) !important;\n      border-color: var(--quiz-ok) !important;\n    }\n\n    .quiz-option-btn.is-answered-correct .quiz-option-status {\n      color: var(--quiz-ok);\n    }\n\n    .quiz-option-btn.is-answered-wrong {\n      background: rgba(239, 68, 68, 0.1) !important;\n      border-color: var(--quiz-err) !important;\n      color: var(--quiz-err) !important;\n    }\n\n    .quiz-option-btn.is-answered-wrong .quiz-option-letter {\n      background: var(--quiz-err) !important;\n      color: var(--quiz-err-on) !important;\n      border-color: var(--quiz-err) !important;\n    }\n\n    .quiz-option-btn.is-answered-wrong .quiz-option-status {\n      color: var(--quiz-err);\n    }\n\n    .quiz-option-btn.is-disabled {\n      cursor: default;\n    }\n\n    .quiz-feedback-banner {\n      padding: 0.9rem 1.15rem;\n      border-radius: var(--radius-sm);\n      margin: 1rem 0;\n      font-family: var(--font-ui);\n      font-size: 0.925rem;\n      line-height: 1.5;\n    }\n\n    .quiz-feedback-banner.is-correct-banner {\n      background-color: var(--step-connect-bg);\n      border-left: 4px solid var(--step-connect-border);\n      color: var(--step-connect-text);\n    }\n\n    .quiz-feedback-banner.is-wrong-banner {\n      background-color: var(--step-motivate-bg);\n      border-left: 4px solid var(--quiz-err);\n      color: var(--text-primary);\n    }\n\n    .katex-error {\n      color: var(--quiz-err) !important;\n    }\n\n    .quiz-feedback-title {\n      font-weight: 700;\n      margin-bottom: 0.25rem;\n    }\n\n    .quiz-action-bar {\n      display: flex;\n      justify-content: flex-end;\n      margin-top: 0.75rem;\n    }\n\n    .quiz-retry-btn {\n      display: inline-flex;\n      align-items: center;\n      gap: 0.4rem;\n      padding: 0.45rem 0.9rem;\n      font-family: var(--font-ui);\n      font-size: 0.825rem;\n      font-weight: 600;\n      color: var(--text-secondary);\n      background: var(--bg-surface-elevated);\n      border: 1px solid var(--border-default);\n      border-radius: 9999px;\n      cursor: pointer;\n      box-shadow: var(--shadow-sm);\n      transition: var(--transition-smooth);\n    }\n\n    .quiz-retry-btn:hover {\n      background: var(--bg-subtle);\n      color: var(--text-primary);\n      border-color: var(--border-default);\n    }\n\n    .quiz-reveal {\n      margin-top: 1.25rem;\n    }\n\n    .quiz-reveal summary {\n      font-family: var(--font-ui);\n      font-size: 0.875rem;\n      font-weight: 700;\n      color: var(--text-link);\n      cursor: pointer;\n      user-select: none;\n    }\n\n    .quiz-explanation {\n      margin-top: 0.75rem;\n      padding: 1rem;\n      background: var(--bg-surface);\n      border-radius: var(--radius-sm);\n      border: 1px solid var(--border-subtle);\n      font-size: 0.925rem;\n    }\n\n    .step-capture {\n      display: flex;\n      align-items: center;\n      justify-content: space-between;\n      margin-top: 1.5rem;\n      padding-top: 1rem;\n      border-top: 1px solid var(--border-subtle);\n      font-family: var(--font-ui);\n      font-size: 0.8rem;\n      color: var(--text-muted);\n    }\n\n    details.deep-dive {\n      background: var(--bg-subtle);\n      border: 1px solid var(--border-default);\n      border-radius: var(--radius-md);\n      margin: 1.25rem 0;\n      overflow: hidden;\n    }\n\n    details.deep-dive summary {\n      padding: 0.875rem 1.25rem;\n      font-family: var(--font-ui);\n      font-weight: 700;\n      font-size: 0.95rem;\n      color: var(--text-primary);\n      cursor: pointer;\n      user-select: none;\n      background: var(--bg-surface);\n      border-bottom: 1px solid transparent;\n      transition: var(--transition-smooth);\n    }\n\n    details.deep-dive[open] summary {\n      border-bottom-color: var(--border-default);\n    }\n\n    details.deep-dive .details-content {\n      padding: 1.25rem;\n      font-size: 0.95rem;\n    }\n\n    pre, code {\n      font-family: var(--font-mono);\n      font-size: 0.9em;\n    }\n\n    code:not(pre code) {\n      background: var(--bg-code);\n      padding: 0.2em 0.4em;\n      border-radius: 4px;\n      border: 1px solid var(--border-subtle);\n    }\n\n    pre {\n      background: var(--bg-code);\n      border: 1px solid var(--border-default);\n      border-radius: var(--radius-md);\n      padding: 1.25rem;\n      overflow-x: auto;\n      margin: 1.25rem 0;\n      line-height: 1.45;\n    }\n\n    .math-card {\n      background: var(--bg-subtle);\n      border: 1px solid var(--border-default);\n      border-radius: var(--radius-sm);\n      padding: 1rem;\n      margin: 1rem 0;\n      overflow-x: auto;\n      text-align: center;\n    }\n\n    .summary-panel {\n      background: var(--bg-surface);\n      border: 2px solid var(--border-default);\n      border-radius: var(--radius-lg);\n      padding: 2.25rem;\n      margin: 3rem 0;\n      box-shadow: var(--shadow-md);\n    }\n\n    .summary-panel h2 {\n      margin-top: 0;\n      border-bottom: 1px solid var(--border-default);\n      padding-bottom: 0.75rem;\n      margin-bottom: 1.5rem;\n    }\n\n    .truth-table {\n      width: 100%;\n      border-collapse: collapse;\n      margin: 1.25rem 0;\n      font-size: 0.95rem;\n    }\n\n    .truth-table th, .truth-table td {\n      padding: 0.75rem 1rem;\n      text-align: left;\n      border-bottom: 1px solid var(--border-default);\n    }\n\n    .truth-table th {\n      font-family: var(--font-ui);\n      font-size: 0.8rem;\n      text-transform: uppercase;\n      letter-spacing: 0.05em;\n      color: var(--text-muted);\n      background: var(--bg-subtle);\n    }\n\n    @media print {\n      :root {\n        --bg-canvas: #ffffff !important;\n        --bg-surface: #ffffff !important;\n        --bg-subtle: #fafafa !important;\n        --text-primary: #000000 !important;\n        --text-secondary: #222222 !important;\n        --border-default: #cccccc !important;\n      }\n      \n      body {\n        padding: 0;\n        color: #000;\n        background: #fff;\n      }\n\n      .theme-toggle-container {\n        display: none !important;\n      }\n\n      .cognitive-node, .diagram-container, .summary-panel {\n        box-shadow: none !important;\n        border: 1px solid #ddd !important;\n        break-inside: avoid;\n        page-break-inside: avoid;\n        margin: 1.5rem 0;\n      }\n\n      details.deep-dive, details.quiz-reveal {\n        display: block !important;\n      }\n\n      details.deep-dive summary, details.quiz-reveal summary {\n        display: none !important;\n      }\n\n      details.deep-dive .details-content, details.quiz-reveal .quiz-explanation {\n        display: block !important;\n      }\n    }\n  </style>\n</head>\n<body>\n\n  <!-- Floating Theme Switcher -->\n  <div class=\"theme-toggle-container\">\n    <button class=\"theme-toggle-btn\" id=\"themeToggleBtn\" aria-label=\"Toggle dark/light mode\">\n      <span id=\"themeToggleIcon\">🌙</span>\n      <span id=\"themeToggleText\">Dark Mode</span>\n    </button>\n  </div>\n\n  <div class=\"container\">\n    <!-- LESSON_METADATA_SLOT -->\n    <header class=\"lesson-header\">\n      <div class=\"lesson-tagline\">learn-forme Standalone Lesson</div>\n      <h1 id=\"lessonTitle\">Prima lezione</h1>\n      <p id=\"lessonGoal\" style=\"font-size: 1.15rem; color: var(--text-secondary);\">capire</p>\n      \n      <div class=\"lesson-meta-bar\">\n        <span class=\"badge badge-status\" id=\"lessonDate\">Generated: 2026-01-01</span>\n        <span class=\"badge badge-status\">Lesson #0001</span>\n        <span class=\"badge badge-status\">Offline Archival Ready</span>\n      </div>\n    </header>\n\n    <!-- INITIAL_DAG_SLOT -->\n    <section class=\"diagram-container\" id=\"dagContainer\"><div class=\"diagram-title\">Curriculum Dependency Graph</div><pre class=\"mermaid\">\ngraph TD\n  N1[\"Nodo 1: la prima cosa\"] --> N2[\"Nodo 2: la seconda\"]\n</pre></section>\n\n    <!-- COGNITIVE_NODES_SLOT -->\n    <main id=\"lesson-nodes\" class=\"nodes-container\">\n      <article class=\"cognitive-node\" id=\"node-prima-cosa\" data-tier=\"axiom\"><header class=\"node-header\"><div class=\"node-title-group\"><span class=\"node-number\">Node 01</span><h2 class=\"node-title\">La prima cosa</h2></div><span class=\"badge badge-axiom\">Unconditional Truth</span></header><div class=\"step-establish prose\"><p>vera</p></div><footer class=\"step-capture\"><span>Captured in Deck: <code>Proxi::Topic</code></span><span>Card Type: nessuna</span></footer></article>\n      <!-- NODES_INJECTION_POINT -->\n    </main>\n\n    <!-- SUMMARY_PANEL_SLOT -->\n\n    <!-- FOOTER_SLOT -->\n    <footer style=\"margin-top: 3rem; text-align: center; color: var(--text-muted); font-size: 0.85rem; font-family: var(--font-ui);\">\n      <p>Generated by <code>learn-forme</code> teaching engine • Permanent Standalone Lesson</p>\n    </footer>\n  </div>\n\n  <script type=\"application/json\" id=\"lesson-data\">\n{\n  \"metadata\": {\n    \"lessonNumber\": 1,\n    \"topic\": \"Demo\",\n    \"title\": \"Prima lezione\",\n    \"slug\": \"prima-lezione\",\n    \"dateCreated\": \"2026-01-01T00:00:00.000Z\",\n    \"dateModified\": \"2026-01-01T00:00:00.000Z\",\n    \"initialDag\": \"graph TD\\n  N1[\\\"Nodo 1: la prima cosa\\\"] --> N2[\\\"Nodo 2: la seconda\\\"]\",\n    \"targetGoal\": \"capire\",\n    \"version\": \"1.0.0\"\n  },\n  \"nodes\": [\n    {\n      \"nodeId\": \"prima-cosa\",\n      \"title\": \"La prima cosa\",\n      \"tier\": \"axiom\",\n      \"summary\": \"Una cosa vera.\",\n      \"content\": \"\\u003cp>vera\\u003c/p>\",\n      \"capturedAt\": \"2026-01-01T00:00:00.000Z\"\n    }\n  ]\n}\n  </script>\n\n  <!-- Client-side KaTeX & Mermaid Theme Controller Script -->\n  <script>\n    document.addEventListener(\"DOMContentLoaded\", function() {\n      if (typeof renderMathInElement === \"function\") {\n        renderMathInElement(document.body, {\n          delimiters: [\n            {left: \"$$\", right: \"$$\", display: true},\n            {left: \"$\", right: \"$\", display: false},\n            {left: \"\\\\(\", right: \"\\\\)\", display: false},\n            {left: \"\\\\[\", right: \"\\\\]\", display: true}\n          ],\n          throwOnError: false,\n          errorColor: \"#dc2626\"\n        });\n      }\n    });\n\n    (function() {\n      document.querySelectorAll(\".mermaid\").forEach(function(el) {\n        el.dataset.mermaidSource = el.textContent.trim();\n      });\n\n      function renderMermaid(themeName) {\n        if (typeof mermaid === \"undefined\") return;\n        \n        document.querySelectorAll(\".mermaid\").forEach(function(el) {\n          if (el.dataset.mermaidSource) {\n            el.removeAttribute(\"data-processed\");\n            el.innerHTML = el.dataset.mermaidSource;\n          }\n        });\n\n        mermaid.initialize({\n          startOnLoad: false,\n          theme: themeName === \"dark\" ? \"dark\" : \"default\",\n          securityLevel: \"loose\",\n          fontFamily: '-apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif'\n        });\n\n        mermaid.run();\n      }\n\n      const currentTheme = document.documentElement.getAttribute(\"data-theme\") || \"light\";\n      renderMermaid(currentTheme);\n\n      const toggleBtn = document.getElementById(\"themeToggleBtn\");\n      const toggleIcon = document.getElementById(\"themeToggleIcon\");\n      const toggleText = document.getElementById(\"themeToggleText\");\n\n      function updateToggleUI(theme) {\n        if (!toggleIcon || !toggleText) return;\n        if (theme === \"dark\") {\n          toggleIcon.textContent = \"☀️\";\n          toggleText.textContent = \"Light Mode\";\n        } else {\n          toggleIcon.textContent = \"🌙\";\n          toggleText.textContent = \"Dark Mode\";\n        }\n      }\n\n      updateToggleUI(currentTheme);\n\n      if (toggleBtn) {\n        toggleBtn.addEventListener(\"click\", function() {\n          const activeTheme = document.documentElement.getAttribute(\"data-theme\");\n          const nextTheme = activeTheme === \"dark\" ? \"light\" : \"dark\";\n          \n          document.documentElement.setAttribute(\"data-theme\", nextTheme);\n          localStorage.setItem(\"learn-forme-theme\", nextTheme);\n          updateToggleUI(nextTheme);\n          renderMermaid(nextTheme);\n        });\n      }\n\n      // Interactive Quizzes Controller\n      function initInteractiveQuizzes() {\n        document.querySelectorAll(\".step-quiz\").forEach(function(quizEl) {\n          const buttons = quizEl.querySelectorAll(\".quiz-option-btn\");\n          const feedback = quizEl.querySelector(\".quiz-feedback-banner\");\n          const feedbackTitle = quizEl.querySelector(\".quiz-feedback-title\");\n          const feedbackDetail = quizEl.querySelector(\".quiz-feedback-detail\");\n          const actionBar = quizEl.querySelector(\".quiz-action-bar\");\n          const retryBtn = quizEl.querySelector(\".quiz-retry-btn\");\n          const revealDetails = quizEl.querySelector(\".quiz-reveal\");\n\n          if (!buttons.length) return;\n\n          buttons.forEach(function(btn) {\n            btn.addEventListener(\"click\", function() {\n              if (quizEl.dataset.answered === \"true\") return;\n              quizEl.dataset.answered = \"true\";\n\n              const isCorrect = btn.classList.contains(\"is-correct-target\");\n              const misconception = btn.getAttribute(\"data-misconception\");\n\n              buttons.forEach(function(b) {\n                b.classList.add(\"is-disabled\");\n                if (b.classList.contains(\"is-correct-target\")) {\n                  b.classList.add(\"is-answered-correct\");\n                  const status = b.querySelector(\".quiz-option-status\");\n                  if (status) status.textContent = \"✓ Corretto\";\n                }\n              });\n\n              if (isCorrect) {\n                btn.classList.add(\"is-answered-correct\");\n                if (feedback) {\n                  feedback.className = \"quiz-feedback-banner is-correct-banner\";\n                  feedback.style.display = \"block\";\n                  if (feedbackTitle) feedbackTitle.innerHTML = \"<strong>✓ Risposta Esatta!</strong>\";\n                  if (feedbackDetail) feedbackDetail.textContent = \"Comprensione confermata: hai individuato il principio corretto.\";\n                }\n              } else {\n                btn.classList.add(\"is-answered-wrong\");\n                const status = btn.querySelector(\".quiz-option-status\");\n                if (status) status.textContent = \"✗ Non corretto\";\n\n                if (feedback) {\n                  feedback.className = \"quiz-feedback-banner is-wrong-banner\";\n                  feedback.style.display = \"block\";\n                  if (feedbackTitle) feedbackTitle.innerHTML = \"<strong>✗ Risposta non corretta</strong>\";\n                  if (feedbackDetail) {\n                    if (misconception) {\n                      feedbackDetail.innerHTML = \"<strong>Diagnosi dell'errore:</strong> \" + misconception;\n                    } else {\n                      feedbackDetail.textContent = \"Osserva la risposta corretta evidenziata in verde e consulta la spiegazione dettagliata qui sotto.\";\n                    }\n                  }\n                }\n              }\n\n              if (revealDetails) {\n                revealDetails.open = true;\n              }\n\n              if (actionBar) {\n                actionBar.style.display = \"flex\";\n              }\n            });\n          });\n\n          if (retryBtn) {\n            retryBtn.addEventListener(\"click\", function() {\n              delete quizEl.dataset.answered;\n              buttons.forEach(function(b) {\n                b.classList.remove(\"is-disabled\", \"is-answered-correct\", \"is-answered-wrong\");\n                const status = b.querySelector(\".quiz-option-status\");\n                if (status) status.textContent = \"\";\n              });\n              if (feedback) feedback.style.display = \"none\";\n              if (actionBar) actionBar.style.display = \"none\";\n            });\n          }\n        });\n      }\n\n      initInteractiveQuizzes();\n    })();\n  </script>\n</body>\n</html>"
+  },
+  "createBody": {
+    "kind": "teach",
+    "course": "demo",
+    "model": "haiku",
+    "ankiOptIn": false,
+    "target": {
+      "mode": "existing",
+      "lessonPath": "courses/demo/lessons/0001-prima-lezione.html"
+    }
+  },
+  "inScope": [
+    "quiz",
+    "ask",
+    "write_node",
+    "research",
+    "visual",
+    "demo",
+    "finish_lesson",
+    "read_lesson"
+  ],
+  "cases": [
+    {
+      "name": "initialize",
+      "request": {
+        "method": "POST",
+        "path": "/mcp/<session>",
+        "headers": {
+          "content-type": "application/json",
+          "x-learner-token": "<token>"
+        },
+        "body": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "method": "initialize",
+          "params": {
+            "protocolVersion": "2025-03-26",
+            "capabilities": {},
+            "clientInfo": {
+              "name": "t",
+              "version": "1"
+            }
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "result": {
+            "protocolVersion": "2025-03-26",
+            "capabilities": {
+              "tools": {}
+            },
+            "serverInfo": {
+              "name": "app",
+              "version": "1"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "initialize-default",
+      "request": {
+        "method": "POST",
+        "path": "/mcp/<session>",
+        "headers": {
+          "content-type": "application/json",
+          "x-learner-token": "<token>"
+        },
+        "body": {
+          "jsonrpc": "2.0",
+          "id": 2,
+          "method": "initialize"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "jsonrpc": "2.0",
+          "id": 2,
+          "result": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {
+              "tools": {}
+            },
+            "serverInfo": {
+              "name": "app",
+              "version": "1"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "ping",
+      "request": {
+        "method": "POST",
+        "path": "/mcp/<session>",
+        "headers": {
+          "content-type": "application/json",
+          "x-learner-token": "<token>"
+        },
+        "body": {
+          "jsonrpc": "2.0",
+          "id": 3,
+          "method": "ping"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "jsonrpc": "2.0",
+          "id": 3,
+          "result": {}
+        }
+      }
+    },
+    {
+      "name": "notification",
+      "request": {
+        "method": "POST",
+        "path": "/mcp/<session>",
+        "headers": {
+          "content-type": "application/json",
+          "x-learner-token": "<token>"
+        },
+        "body": {
+          "jsonrpc": "2.0",
+          "method": "notifications/initialized"
+        }
+      },
+      "response": {
+        "status": 202,
+        "body": ""
+      }
+    },
+    {
+      "name": "unknown-method",
+      "request": {
+        "method": "POST",
+        "path": "/mcp/<session>",
+        "headers": {
+          "content-type": "application/json",
+          "x-learner-token": "<token>"
+        },
+        "body": {
+          "jsonrpc": "2.0",
+          "id": 4,
+          "method": "foo/bar"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "jsonrpc": "2.0",
+          "id": 4,
+          "error": {
+            "code": -32601,
+            "message": "Method not found: foo/bar"
+          }
+        }
+      }
+    },
+    {
+      "name": "unknown-notification",
+      "request": {
+        "method": "POST",
+        "path": "/mcp/<session>",
+        "headers": {
+          "content-type": "application/json",
+          "x-learner-token": "<token>"
+        },
+        "body": {
+          "jsonrpc": "2.0",
+          "method": "foo/bar"
+        }
+      },
+      "response": {
+        "status": 202,
+        "body": ""
+      }
+    },
+    {
+      "name": "invalid-request",
+      "request": {
+        "method": "POST",
+        "path": "/mcp/<session>",
+        "headers": {
+          "content-type": "application/json",
+          "x-learner-token": "<token>"
+        },
+        "body": {
+          "jsonrpc": "2.0",
+          "id": 5
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "jsonrpc": "2.0",
+          "id": 5,
+          "error": {
+            "code": -32600,
+            "message": "Invalid Request"
+          }
+        }
+      }
+    },
+    {
+      "name": "batch",
+      "request": {
+        "method": "POST",
+        "path": "/mcp/<session>",
+        "headers": {
+          "content-type": "application/json",
+          "x-learner-token": "<token>"
+        },
+        "body": [
+          {
+            "jsonrpc": "2.0",
+            "id": 6,
+            "method": "ping"
+          },
+          {
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized"
+          },
+          {
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "foo/bar"
+          }
+        ]
+      },
+      "response": {
+        "status": 200,
+        "body": [
+          {
+            "jsonrpc": "2.0",
+            "id": 6,
+            "result": {}
+          },
+          {
+            "jsonrpc": "2.0",
+            "id": 7,
+            "error": {
+              "code": -32601,
+              "message": "Method not found: foo/bar"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "empty-batch",
+      "request": {
+        "method": "POST",
+        "path": "/mcp/<session>",
+        "headers": {
+          "content-type": "application/json",
+          "x-learner-token": "<token>"
+        },
+        "body": []
+      },
+      "response": {
+        "status": 202,
+        "body": ""
+      }
+    },
+    {
+      "name": "unknown-tool",
+      "request": {
+        "method": "POST",
+        "path": "/mcp/<session>",
+        "headers": {
+          "content-type": "application/json",
+          "x-learner-token": "<token>"
+        },
+        "body": {
+          "jsonrpc": "2.0",
+          "id": 9,
+          "method": "tools/call",
+          "params": {
+            "name": "nope",
+            "arguments": {}
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "isError": true,
+          "textStartsWith": "Unknown tool \"nope\". Available:"
+        }
+      }
+    },
+    {
+      "name": "invalid-args",
+      "request": {
+        "method": "POST",
+        "path": "/mcp/<session>",
+        "headers": {
+          "content-type": "application/json",
+          "x-learner-token": "<token>"
+        },
+        "body": {
+          "jsonrpc": "2.0",
+          "id": 10,
+          "method": "tools/call",
+          "params": {
+            "name": "ask",
+            "arguments": {}
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "jsonrpc": "2.0",
+          "id": 10,
+          "result": {
+            "content": [
+              {
+                "type": "text",
+                "text": "Invalid input: question: Invalid input: expected string, received undefined. Fix and call again."
+              }
+            ],
+            "isError": true
+          }
+        }
+      }
+    },
+    {
+      "name": "tools-list",
+      "request": {
+        "method": "POST",
+        "path": "/mcp/<session>",
+        "headers": {
+          "content-type": "application/json",
+          "x-learner-token": "<token>"
+        },
+        "body": {
+          "jsonrpc": "2.0",
+          "id": 8,
+          "method": "tools/list"
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "jsonrpc": "2.0",
+          "id": 8,
+          "result": {
+            "tools": [
+              {
+                "name": "quiz",
+                "description": "Ask the learner one graded multiple-choice question as a clickable card; blocks until answered and returns the graded result with his confidence and optional note. Use for probes, predictions and checks.",
+                "inputSchema": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "probe",
+                        "predict",
+                        "check"
+                      ],
+                      "description": "probe = level mapping; predict = before teaching a node; check = after teaching it"
+                    },
+                    "nodeId": {
+                      "description": "Plan node id such as \"N3\". Required for predict and check.",
+                      "type": "string",
+                      "pattern": "^N\\d+$"
+                    },
+                    "question": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Exactly one question; markdown and LaTeX allowed."
+                    },
+                    "options": {
+                      "minItems": 2,
+                      "maxItems": 6,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "label": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "value": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "required": [
+                          "label"
+                        ]
+                      },
+                      "description": "2 to 6 bare claims. Never add an I-dont-know option: the app adds it."
+                    },
+                    "multiSelect": {
+                      "description": "Set when more than one option is correct.",
+                      "type": "boolean"
+                    },
+                    "explanation": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Shown after answering, whether right or wrong."
+                    },
+                    "correctAnswer": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      ],
+                      "description": "Option value(s) (the label when no value was given), not positions."
+                    },
+                    "misconceptions": {
+                      "description": "Per wrong option: the misconception it probes.",
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "value": {
+                            "type": "string"
+                          },
+                          "misconception": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "value",
+                          "misconception"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "question",
+                    "options",
+                    "explanation",
+                    "correctAnswer"
+                  ]
+                },
+                "_meta": {
+                  "antigravity/alwaysLoad": true
+                }
+              },
+              {
+                "name": "ask",
+                "description": "Ask the learner an ungraded question (goal, preference, fork) as a card; blocks until answered. Use quiz for anything with a right answer.",
+                "inputSchema": {
+                  "type": "object",
+                  "properties": {
+                    "question": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Exactly one question."
+                    },
+                    "details": {
+                      "type": "string"
+                    },
+                    "options": {
+                      "description": "Omit for a free-text answer. An Altro free-text row is always added.",
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "label": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "value": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "description": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "label"
+                        ]
+                      }
+                    },
+                    "multiSelect": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "question"
+                  ]
+                },
+                "_meta": {
+                  "antigravity/alwaysLoad": true
+                }
+              },
+              {
+                "name": "write_node",
+                "description": "Write (or replace, same nodeId) one node into the lesson artifact and show it to the learner. Requires an approved plan. Every new idea carries `anchors` (n_… ids and names from the concept tools) and its prose names those concepts.",
+                "inputSchema": {
+                  "type": "object",
+                  "properties": {
+                    "planNode": {
+                      "type": "string",
+                      "pattern": "^N\\d+$",
+                      "description": "The plan node this realises."
+                    },
+                    "node": {
+                      "type": "object",
+                      "properties": {
+                        "nodeId": {
+                          "type": "string",
+                          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                          "description": "Unique in the lesson; writing the same nodeId again replaces the node."
+                        },
+                        "title": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "tier": {
+                          "type": "string",
+                          "enum": [
+                            "unconditional-truth",
+                            "axiom",
+                            "derivation"
+                          ]
+                        },
+                        "summary": {
+                          "description": "Concise 1-2 sentence distilled claim for the Sintesi reference sheet.",
+                          "type": "string"
+                        },
+                        "motivation": {
+                          "description": "Authored HTML or prose.",
+                          "type": "string"
+                        },
+                        "content": {
+                          "description": "Authored HTML or prose: the Establish step.",
+                          "type": "string"
+                        },
+                        "steps": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "stepId": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "title": {
+                                "type": "string"
+                              },
+                              "content": {
+                                "type": "string"
+                              },
+                              "math": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "codeBlocks": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "language": {
+                                      "type": "string"
+                                    },
+                                    "code": {
+                                      "type": "string"
+                                    },
+                                    "caption": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "code"
+                                  ]
+                                }
+                              },
+                              "visuals": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": [
+                                        "svg-inline",
+                                        "image",
+                                        "mermaid"
+                                      ]
+                                    },
+                                    "content": {
+                                      "type": "string"
+                                    },
+                                    "caption": {
+                                      "type": "string"
+                                    },
+                                    "alt": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "type",
+                                    "content"
+                                  ]
+                                }
+                              }
+                            },
+                            "required": [
+                              "stepId",
+                              "content"
+                            ]
+                          }
+                        },
+                        "math": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "codeBlocks": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "language": {
+                                "type": "string"
+                              },
+                              "code": {
+                                "type": "string"
+                              },
+                              "caption": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "code"
+                            ]
+                          }
+                        },
+                        "visuals": {
+                          "type": "array",
+                          "items": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "enum": [
+                                      "svg-inline",
+                                      "image",
+                                      "mermaid"
+                                    ]
+                                  },
+                                  "content": {
+                                    "type": "string"
+                                  },
+                                  "caption": {
+                                    "type": "string"
+                                  },
+                                  "alt": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "type",
+                                  "content"
+                                ]
+                              },
+                              {
+                                "type": "string"
+                              }
+                            ]
+                          }
+                        },
+                        "dependencies": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "anchors": {
+                          "description": "Known concepts this idea builds on: id and name from search_concepts/open_concept/browse_concepts. Name them in the prose too.",
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "pattern": "^n_\\S+$"
+                              },
+                              "name": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "name"
+                            ]
+                          }
+                        },
+                        "connection": {
+                          "type": "string"
+                        },
+                        "quiz": {
+                          "type": "object",
+                          "properties": {
+                            "question": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "options": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "correctAnswer": {
+                              "description": "The text of the correct option; must equal options[correctIndex - 1].",
+                              "type": "string"
+                            },
+                            "correctIndex": {
+                              "description": "1-based index into options.",
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "explanation": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "misconceptions": {
+                              "description": "optionIndex is 1-based.",
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "optionIndex": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "misconception": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "optionIndex",
+                                  "misconception"
+                                ]
+                              }
+                            }
+                          },
+                          "required": [
+                            "question",
+                            "explanation"
+                          ]
+                        },
+                        "ankiParams": {
+                          "description": "Only when the learner opted in AND passed the check for this node: write the node first without it, then rewrite the same nodeId with ankiParams after the pass.",
+                          "type": "object",
+                          "properties": {
+                            "targetQuestion": {
+                              "type": "string"
+                            },
+                            "targetFact": {
+                              "type": "string"
+                            },
+                            "suggestedCloze": {
+                              "type": "string"
+                            },
+                            "clozeExtra": {
+                              "type": "string"
+                            },
+                            "deck": {
+                              "type": "string"
+                            },
+                            "tags": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "required": [
+                        "nodeId",
+                        "title",
+                        "tier"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "planNode",
+                    "node"
+                  ]
+                },
+                "_meta": {
+                  "antigravity/alwaysLoad": true
+                }
+              },
+              {
+                "name": "research",
+                "description": "Start a background web research subagent (WebSearch/WebFetch). Returns at once with a job id; the sourced brief arrives later as a message from the app.",
+                "inputSchema": {
+                  "type": "object",
+                  "properties": {
+                    "question": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "The precise question to verify, in the learner's language."
+                    },
+                    "context": {
+                      "description": "What the lesson is about and what version/constraints matter; the researcher sees nothing else.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "question"
+                  ]
+                },
+                "_meta": {
+                  "antigravity/alwaysLoad": true
+                }
+              },
+              {
+                "name": "visual",
+                "description": "Start a background subagent that draws one SVG figure and checks it by rendering it. Returns at once with a job id; the figure appears in the chat when ready.",
+                "inputSchema": {
+                  "type": "object",
+                  "properties": {
+                    "brief": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Self-contained description of the figure: what to show, the labels (Italian), the relations. The visual-maker sees nothing else of the lesson."
+                    }
+                  },
+                  "required": [
+                    "brief"
+                  ]
+                },
+                "_meta": {
+                  "antigravity/alwaysLoad": true
+                }
+              },
+              {
+                "name": "demo",
+                "description": "Start a background subagent that builds one interactive single-file HTML demo and tests it headless. Returns at once with a job id; the demo appears in the chat when ready.",
+                "inputSchema": {
+                  "type": "object",
+                  "properties": {
+                    "title": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Short Italian title of the demo."
+                    },
+                    "brief": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Self-contained description of what the learner can manipulate and what it should make visible. The demo-builder sees nothing else of the lesson."
+                    }
+                  },
+                  "required": [
+                    "title",
+                    "brief"
+                  ]
+                },
+                "_meta": {
+                  "antigravity/alwaysLoad": true
+                }
+              },
+              {
+                "name": "finish_lesson",
+                "description": "Close the lesson: compile the reference sheet, write the learning record (for the teacher), optionally append to NOTES.md and sync Anki. If the lesson already has its record, only the reference sheet is refreshed (and Anki resynced).",
+                "inputSchema": {
+                  "type": "object",
+                  "properties": {
+                    "recordTitle": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "What became true, e.g. 'Il contratto del componente: acquisito'."
+                    },
+                    "summary": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "What he can now do."
+                    },
+                    "evidence": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "What he actually did: quiz results, slips, quotes (markdown)."
+                    },
+                    "implications": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "What the next session must do differently (markdown)."
+                    },
+                    "notesAddendum": {
+                      "description": "What was learned about teaching him; appended to NOTES.md.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "recordTitle",
+                    "summary",
+                    "evidence",
+                    "implications"
+                  ]
+                },
+                "_meta": {
+                  "antigravity/alwaysLoad": true
+                }
+              },
+              {
+                "name": "read_lesson",
+                "description": "Read a lesson artifact as compact text: per node its title, tier, prose, code, connection, check question and card. Pass nodeIds to read only those nodes. Use this instead of Read on lesson HTML.",
+                "inputSchema": {
+                  "type": "object",
+                  "properties": {
+                    "lessonPath": {
+                      "type": "string",
+                      "description": "courses/<course>/lessons/<NNNN-slug>.html"
+                    },
+                    "nodeIds": {
+                      "description": "Only these nodes (nodeId); omit for the whole lesson.",
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "lessonPath"
+                  ]
+                },
+                "_meta": {
+                  "antigravity/alwaysLoad": true
+                }
+              }
+            ]
+          },
+          "filteredTo": [
+            "quiz",
+            "ask",
+            "write_node",
+            "research",
+            "visual",
+            "demo",
+            "finish_lesson",
+            "read_lesson"
+          ]
+        }
+      }
+    },
+    {
+      "name": "unauthorized",
+      "request": {
+        "method": "POST",
+        "path": "/mcp/<session>",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "method": "ping"
+        }
+      },
+      "response": {
+        "status": 401,
+        "body": {
+          "error": "Unauthorized"
+        }
+      }
+    },
+    {
+      "name": "unknown-session",
+      "request": {
+        "method": "POST",
+        "path": "/mcp/00000000-0000-4000-8000-000000000000",
+        "headers": {
+          "content-type": "application/json",
+          "x-learner-token": "<token>"
+        },
+        "body": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "method": "ping"
+        }
+      },
+      "response": {
+        "status": 404,
+        "body": {
+          "error": "Session not found"
+        }
+      }
+    },
+    {
+      "name": "bad-json",
+      "request": {
+        "method": "POST",
+        "path": "/mcp/<session>",
+        "headers": {
+          "content-type": "application/json",
+          "x-learner-token": "<token>"
+        },
+        "rawBody": "{"
+      },
+      "response": {
+        "status": 400,
+        "body": {
+          "error": "Invalid JSON body"
+        }
+      }
+    },
+    {
+      "name": "write-node",
+      "request": {
+        "method": "POST",
+        "path": "/mcp/<session>",
+        "headers": {
+          "content-type": "application/json",
+          "x-learner-token": "<token>"
+        },
+        "body": {
+          "jsonrpc": "2.0",
+          "id": 11,
+          "method": "tools/call",
+          "params": {
+            "name": "write_node",
+            "arguments": {
+              "planNode": "N2",
+              "node": {
+                "nodeId": "seconda",
+                "title": "La seconda",
+                "tier": "derivation",
+                "summary": "Segue.",
+                "content": "<p>segue dalla prima</p>"
+              }
+            }
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "jsonrpc": "2.0",
+          "id": 11,
+          "result": {
+            "content": [
+              {
+                "type": "text",
+                "text": "{\"ok\":true,\"nodeCount\":2}"
+              }
+            ],
+            "isError": false
+          }
+        }
+      },
+      "files": {
+        "courses/demo/lessons/0001-prima-lezione.html": "<!DOCTYPE html>\n<html lang=\"en\" data-theme=\"light\">\n<head>\n  <meta charset=\"UTF-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n  <title>Prima lezione | Proxi</title>\n  <meta name=\"description\" content=\"Personalized standalone lesson synthesized by Proxi\">\n  \n  <!-- Early Theme Init Script to Prevent FOUT -->\n  <script>\n    (function() {\n      const savedTheme = localStorage.getItem(\"learn-forme-theme\");\n      const prefersDark = window.matchMedia(\"(prefers-color-scheme: dark)\").matches;\n      const activeTheme = savedTheme || (prefersDark ? \"dark\" : \"light\");\n      document.documentElement.setAttribute(\"data-theme\", activeTheme);\n    })();\n  </script>\n\n  <!-- KaTeX CSS & JS CDN -->\n  <link rel=\"stylesheet\" href=\"https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css\" crossorigin=\"anonymous\">\n  <script defer src=\"https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js\" crossorigin=\"anonymous\"></script>\n  <script defer src=\"https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js\" crossorigin=\"anonymous\"></script>\n\n  <!-- Mermaid JS CDN -->\n  <script src=\"https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js\"></script>\n\n  <style>\n    /* ==========================================================================\n       CSS Custom Properties / Design Tokens\n       ========================================================================== */\n    :root {\n      --font-body: Charter, \"Bitstream Charter\", \"Sitka Text\", Cambria, Georgia, serif, -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif;\n      --font-ui: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Inter, Helvetica, Arial, sans-serif;\n      --font-mono: ui-monospace, \"SF Mono\", Monaco, \"Cascadia Code\", \"Roboto Mono\", Consolas, monospace;\n      \n      --max-width: 72ch;\n      --radius-sm: 6px;\n      --radius-md: 10px;\n      --radius-lg: 16px;\n      --shadow-sm: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);\n      --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.08), 0 2px 4px -1px rgba(0,0,0,0.04);\n      --shadow-lg: 0 10px 15px -3px rgba(0,0,0,0.08), 0 4px 6px -2px rgba(0,0,0,0.03);\n      --transition-smooth: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);\n    }\n\n    /* Light Theme */\n    :root[data-theme=\"light\"] {\n      --bg: #fcfbfa;\n      --fg: #1c1917;\n      --bg-canvas: #fcfbfa;\n      --bg-surface: #ffffff;\n      --bg-surface-elevated: #ffffff;\n      --bg-subtle: #f4f3ef;\n      --bg-code: #f1f0eb;\n      \n      --text-primary: #1c1917;\n      --text-secondary: #44403c;\n      --text-muted: #6b645f;\n      --text-link: #0369a1;\n      \n      --border-default: #e7e5e0;\n      --border-subtle: #f0eee8;\n      \n      --step-motivate-border: #f59e0b;\n      --step-motivate-bg: #fffbeb;\n      --step-motivate-text: #92400e;\n      \n      --step-connect-border: #10b981;\n      --step-connect-bg: #ecfdf5;\n      --step-connect-text: #065f46;\n      \n      --step-quiz-border: #8b5cf6;\n      --step-quiz-bg: #f5f3ff;\n      --step-quiz-text: #5b21b6;\n      \n      --badge-axiom-bg: #ccfbf1;\n      --badge-axiom-text: #0f766e;\n      --badge-derivation-bg: #e0e7ff;\n      --badge-derivation-text: #3730a3;\n\n      --quiz-ok: #047857;\n      --quiz-ok-on: #ffffff;\n      --quiz-err: #b91c1c;\n      --quiz-err-on: #ffffff;\n\n      --mermaid-theme: default;\n    }\n\n    /* Dark Theme */\n    :root[data-theme=\"dark\"] {\n      --bg: #0f172a;\n      --fg: #f8fafc;\n      --bg-canvas: #0f172a;\n      --bg-surface: #1e293b;\n      --bg-surface-elevated: #283548;\n      --bg-subtle: #192434;\n      --bg-code: #0b1120;\n      \n      --text-primary: #f8fafc;\n      --text-secondary: #cbd5e1;\n      --text-muted: #94a3b8;\n      --text-link: #38bdf8;\n      \n      --border-default: #334155;\n      --border-subtle: #1e293b;\n      \n      --step-motivate-border: #fbbf24;\n      --step-motivate-bg: #451a03;\n      --step-motivate-text: #fde68a;\n      \n      --step-connect-border: #34d399;\n      --step-connect-bg: #064e3b;\n      --step-connect-text: #a7f3d0;\n      \n      --step-quiz-border: #a78bfa;\n      --step-quiz-bg: #2e1065;\n      --step-quiz-text: #ddd6fe;\n      \n      --badge-axiom-bg: #134e4a;\n      --badge-axiom-text: #5eead4;\n      --badge-derivation-bg: #312e81;\n      --badge-derivation-text: #c7d2fe;\n\n      --quiz-ok: #34d399;\n      --quiz-ok-on: #052e1f;\n      --quiz-err: #f87171;\n      --quiz-err-on: #2a0a0a;\n\n      --mermaid-theme: dark;\n    }\n\n    @media (prefers-color-scheme: dark) {\n      :root:not([data-theme=\"light\"]) {\n        --bg: #0f172a;\n        --fg: #f8fafc;\n      }\n    }\n\n    *, *::before, *::after {\n      box-sizing: border-box;\n      margin: 0;\n      padding: 0;\n    }\n\n    html {\n      font-family: var(--font-body);\n      font-size: clamp(1rem, 0.95rem + 0.25vw, 1.125rem);\n      line-height: 1.68;\n      background-color: var(--bg-canvas);\n      color: var(--text-primary);\n      text-rendering: optimizeLegibility;\n      -webkit-font-smoothing: antialiased;\n      transition: background-color 0.25s ease, color 0.25s ease;\n    }\n\n    body {\n      min-height: 100vh;\n      display: flex;\n      flex-direction: column;\n      align-items: center;\n      padding: 2.5rem 1.25rem 6rem 1.25rem;\n    }\n\n    .container {\n      width: 100%;\n      max-width: var(--max-width);\n    }\n\n    h1, h2, h3, h4, h5, h6 {\n      font-family: var(--font-ui);\n      color: var(--text-primary);\n      font-weight: 700;\n      line-height: 1.25;\n      letter-spacing: -0.02em;\n    }\n\n    h1 { font-size: 2.25rem; margin-bottom: 0.5rem; }\n    h2 { font-size: 1.65rem; margin-top: 2rem; margin-bottom: 0.75rem; }\n    h3 { font-size: 1.25rem; margin-top: 1.5rem; margin-bottom: 0.5rem; }\n\n    p { margin-bottom: 1.25rem; }\n    p:last-child { margin-bottom: 0; }\n\n    a {\n      color: var(--text-link);\n      text-decoration: underline;\n      text-underline-offset: 3px;\n    }\n    a:hover { opacity: 0.85; }\n\n    .theme-toggle-container {\n      position: fixed;\n      top: 1.25rem;\n      right: 1.25rem;\n      z-index: 1000;\n    }\n\n    .theme-toggle-btn {\n      display: inline-flex;\n      align-items: center;\n      gap: 0.5rem;\n      padding: 0.5rem 0.875rem;\n      font-family: var(--font-ui);\n      font-size: 0.875rem;\n      font-weight: 600;\n      color: var(--text-secondary);\n      background: var(--bg-surface-elevated);\n      border: 1px solid var(--border-default);\n      border-radius: 9999px;\n      box-shadow: var(--shadow-md);\n      cursor: pointer;\n      backdrop-filter: blur(8px);\n      transition: var(--transition-smooth);\n    }\n\n    .theme-toggle-btn:hover {\n      color: var(--text-primary);\n      transform: translateY(-1px);\n      box-shadow: var(--shadow-lg);\n    }\n\n    .lesson-header {\n      margin-bottom: 2.5rem;\n      padding-bottom: 2rem;\n      border-bottom: 1px solid var(--border-default);\n    }\n\n    .lesson-tagline {\n      font-family: var(--font-ui);\n      font-size: 0.875rem;\n      text-transform: uppercase;\n      letter-spacing: 0.08em;\n      font-weight: 700;\n      color: var(--text-muted);\n      margin-bottom: 0.5rem;\n    }\n\n    .lesson-meta-bar {\n      display: flex;\n      flex-wrap: wrap;\n      gap: 0.75rem;\n      align-items: center;\n      margin-top: 1rem;\n      font-family: var(--font-ui);\n      font-size: 0.875rem;\n      color: var(--text-muted);\n    }\n\n    .badge {\n      display: inline-flex;\n      align-items: center;\n      gap: 0.35rem;\n      padding: 0.2rem 0.6rem;\n      border-radius: 9999px;\n      font-size: 0.75rem;\n      font-weight: 700;\n      text-transform: uppercase;\n      letter-spacing: 0.04em;\n    }\n\n    .badge-axiom, .badge-unconditional-truth {\n      background-color: var(--badge-axiom-bg);\n      color: var(--badge-axiom-text);\n    }\n\n    .badge-derivation {\n      background-color: var(--badge-derivation-bg);\n      color: var(--badge-derivation-text);\n    }\n\n    .badge-status {\n      background-color: var(--bg-subtle);\n      color: var(--text-secondary);\n      border: 1px solid var(--border-default);\n    }\n\n    .diagram-container {\n      background: var(--bg-surface);\n      border: 1px solid var(--border-default);\n      border-radius: var(--radius-md);\n      padding: 1.5rem;\n      margin: 1.75rem 0;\n      box-shadow: var(--shadow-sm);\n      overflow-x: auto;\n      text-align: center;\n    }\n\n    .diagram-title {\n      font-family: var(--font-ui);\n      font-size: 0.875rem;\n      font-weight: 700;\n      text-transform: uppercase;\n      letter-spacing: 0.05em;\n      color: var(--text-muted);\n      margin-bottom: 1rem;\n      text-align: left;\n    }\n\n    .svg-figure {\n      display: flex;\n      flex-direction: column;\n      align-items: center;\n      margin: 1.75rem 0;\n      background: var(--bg-surface);\n      border: 1px solid var(--border-default);\n      border-radius: var(--radius-md);\n      padding: 1.5rem;\n    }\n\n    .svg-figure svg {\n      max-width: 100%;\n      height: auto;\n    }\n\n    .svg-figure figcaption {\n      margin-top: 0.875rem;\n      font-family: var(--font-ui);\n      font-size: 0.875rem;\n      color: var(--text-muted);\n      font-style: italic;\n    }\n\n    .cognitive-node {\n      background: var(--bg-surface);\n      border: 1px solid var(--border-default);\n      border-radius: var(--radius-lg);\n      padding: 2rem;\n      margin: 2.5rem 0;\n      box-shadow: var(--shadow-md);\n      transition: var(--transition-smooth);\n    }\n\n    .cognitive-node:hover {\n      box-shadow: var(--shadow-lg);\n    }\n\n    .node-header {\n      display: flex;\n      justify-content: space-between;\n      align-items: flex-start;\n      margin-bottom: 1.5rem;\n      padding-bottom: 1rem;\n      border-bottom: 1px solid var(--border-subtle);\n    }\n\n    .node-title-group {\n      display: flex;\n      flex-direction: column;\n      gap: 0.25rem;\n    }\n\n    .node-number {\n      font-family: var(--font-ui);\n      font-size: 0.75rem;\n      font-weight: 800;\n      text-transform: uppercase;\n      letter-spacing: 0.1em;\n      color: var(--text-muted);\n    }\n\n    .node-title {\n      font-size: 1.5rem;\n      margin: 0;\n    }\n\n    .step-motivate {\n      background-color: var(--step-motivate-bg);\n      border-left: 4px solid var(--step-motivate-border);\n      padding: 1rem 1.25rem;\n      border-radius: 0 var(--radius-sm) var(--radius-sm) 0;\n      margin: 1.25rem 0;\n      color: var(--step-motivate-text);\n      font-size: 0.95rem;\n    }\n\n    .step-label {\n      font-family: var(--font-ui);\n      font-size: 0.75rem;\n      font-weight: 800;\n      text-transform: uppercase;\n      letter-spacing: 0.06em;\n      display: flex;\n      align-items: center;\n      gap: 0.4rem;\n      margin-bottom: 0.4rem;\n    }\n\n    .step-establish {\n      margin: 1.5rem 0;\n      font-size: 1.05rem;\n    }\n\n    .node-steps {\n      display: flex;\n      flex-direction: column;\n      gap: 1.25rem;\n      margin: 1.5rem 0;\n    }\n\n    .node-step {\n      background: var(--bg-surface);\n      border: 1px solid var(--border-default);\n      border-radius: var(--radius-md);\n      padding: 1.25rem;\n      box-shadow: var(--shadow-sm);\n    }\n\n    .node-step .step-header {\n      display: flex;\n      align-items: center;\n      gap: 0.75rem;\n      margin-bottom: 0.75rem;\n    }\n\n    .node-step .step-id {\n      font-family: var(--font-mono);\n      font-size: 0.75rem;\n      font-weight: 700;\n      color: var(--text-muted);\n      text-transform: uppercase;\n      background: var(--bg-subtle);\n      padding: 0.15rem 0.45rem;\n      border-radius: var(--radius-sm);\n    }\n\n    .node-step .step-title {\n      font-size: 1.15rem;\n      margin: 0;\n      color: var(--text-primary);\n    }\n\n    .node-step .step-content {\n      font-size: 1.05rem;\n    }\n\n    .step-connect {\n      background-color: var(--step-connect-bg);\n      border-left: 4px solid var(--step-connect-border);\n      padding: 1rem 1.25rem;\n      border-radius: 0 var(--radius-sm) var(--radius-sm) 0;\n      margin: 1.25rem 0;\n      color: var(--step-connect-text);\n      font-size: 0.95rem;\n    }\n\n    .step-quiz {\n      background-color: var(--bg-subtle);\n      border: 1px solid var(--border-default);\n      border-top: 3px solid var(--step-quiz-border);\n      border-radius: var(--radius-md);\n      padding: 1.5rem;\n      margin: 1.75rem 0;\n    }\n\n    .quiz-question {\n      font-family: var(--font-ui);\n      font-weight: 700;\n      font-size: 1.05rem;\n      margin-bottom: 0.4rem;\n      color: var(--text-primary);\n    }\n\n    .quiz-instruction {\n      font-family: var(--font-ui);\n      font-size: 0.85rem;\n      color: var(--text-muted);\n      margin-bottom: 1rem;\n    }\n\n    .quiz-options {\n      list-style: none;\n      display: flex;\n      flex-direction: column;\n      gap: 0.65rem;\n      margin-bottom: 1rem;\n      padding: 0;\n    }\n\n    .quiz-option-item {\n      list-style: none;\n      margin: 0;\n      padding: 0;\n    }\n\n    .quiz-option-btn {\n      width: 100%;\n      text-align: left;\n      display: flex;\n      align-items: center;\n      gap: 0.85rem;\n      background: var(--bg-surface);\n      border: 1.5px solid var(--border-default);\n      padding: 0.85rem 1.15rem;\n      border-radius: var(--radius-md);\n      font-size: 0.95rem;\n      font-family: var(--font-ui);\n      color: var(--text-primary);\n      cursor: pointer;\n      transition: var(--transition-smooth);\n      box-shadow: var(--shadow-sm);\n    }\n\n    .quiz-option-btn:hover:not(.is-disabled) {\n      border-color: var(--step-quiz-border);\n      background: var(--bg-surface-elevated);\n      transform: translateY(-1px);\n      box-shadow: var(--shadow-md);\n    }\n\n    .quiz-option-letter {\n      display: inline-flex;\n      align-items: center;\n      justify-content: center;\n      width: 26px;\n      height: 26px;\n      border-radius: 50%;\n      background: var(--bg-subtle);\n      border: 1px solid var(--border-default);\n      font-size: 0.8rem;\n      font-weight: 700;\n      color: var(--text-secondary);\n      flex-shrink: 0;\n      transition: var(--transition-smooth);\n    }\n\n    .quiz-option-text {\n      flex: 1;\n      line-height: 1.45;\n    }\n\n    .quiz-option-status {\n      font-size: 0.8rem;\n      font-weight: 700;\n      flex-shrink: 0;\n    }\n\n    .quiz-option-btn.is-answered-correct {\n      background: rgba(16, 185, 129, 0.1) !important;\n      border-color: var(--quiz-ok) !important;\n      color: var(--step-connect-text) !important;\n    }\n\n    .quiz-option-btn.is-answered-correct .quiz-option-letter {\n      background: var(--quiz-ok) !important;\n      color: var(--quiz-ok-on) !important;\n      border-color: var(--quiz-ok) !important;\n    }\n\n    .quiz-option-btn.is-answered-correct .quiz-option-status {\n      color: var(--quiz-ok);\n    }\n\n    .quiz-option-btn.is-answered-wrong {\n      background: rgba(239, 68, 68, 0.1) !important;\n      border-color: var(--quiz-err) !important;\n      color: var(--quiz-err) !important;\n    }\n\n    .quiz-option-btn.is-answered-wrong .quiz-option-letter {\n      background: var(--quiz-err) !important;\n      color: var(--quiz-err-on) !important;\n      border-color: var(--quiz-err) !important;\n    }\n\n    .quiz-option-btn.is-answered-wrong .quiz-option-status {\n      color: var(--quiz-err);\n    }\n\n    .quiz-option-btn.is-disabled {\n      cursor: default;\n    }\n\n    .quiz-feedback-banner {\n      padding: 0.9rem 1.15rem;\n      border-radius: var(--radius-sm);\n      margin: 1rem 0;\n      font-family: var(--font-ui);\n      font-size: 0.925rem;\n      line-height: 1.5;\n    }\n\n    .quiz-feedback-banner.is-correct-banner {\n      background-color: var(--step-connect-bg);\n      border-left: 4px solid var(--step-connect-border);\n      color: var(--step-connect-text);\n    }\n\n    .quiz-feedback-banner.is-wrong-banner {\n      background-color: var(--step-motivate-bg);\n      border-left: 4px solid var(--quiz-err);\n      color: var(--text-primary);\n    }\n\n    .katex-error {\n      color: var(--quiz-err) !important;\n    }\n\n    .quiz-feedback-title {\n      font-weight: 700;\n      margin-bottom: 0.25rem;\n    }\n\n    .quiz-action-bar {\n      display: flex;\n      justify-content: flex-end;\n      margin-top: 0.75rem;\n    }\n\n    .quiz-retry-btn {\n      display: inline-flex;\n      align-items: center;\n      gap: 0.4rem;\n      padding: 0.45rem 0.9rem;\n      font-family: var(--font-ui);\n      font-size: 0.825rem;\n      font-weight: 600;\n      color: var(--text-secondary);\n      background: var(--bg-surface-elevated);\n      border: 1px solid var(--border-default);\n      border-radius: 9999px;\n      cursor: pointer;\n      box-shadow: var(--shadow-sm);\n      transition: var(--transition-smooth);\n    }\n\n    .quiz-retry-btn:hover {\n      background: var(--bg-subtle);\n      color: var(--text-primary);\n      border-color: var(--border-default);\n    }\n\n    .quiz-reveal {\n      margin-top: 1.25rem;\n    }\n\n    .quiz-reveal summary {\n      font-family: var(--font-ui);\n      font-size: 0.875rem;\n      font-weight: 700;\n      color: var(--text-link);\n      cursor: pointer;\n      user-select: none;\n    }\n\n    .quiz-explanation {\n      margin-top: 0.75rem;\n      padding: 1rem;\n      background: var(--bg-surface);\n      border-radius: var(--radius-sm);\n      border: 1px solid var(--border-subtle);\n      font-size: 0.925rem;\n    }\n\n    .step-capture {\n      display: flex;\n      align-items: center;\n      justify-content: space-between;\n      margin-top: 1.5rem;\n      padding-top: 1rem;\n      border-top: 1px solid var(--border-subtle);\n      font-family: var(--font-ui);\n      font-size: 0.8rem;\n      color: var(--text-muted);\n    }\n\n    details.deep-dive {\n      background: var(--bg-subtle);\n      border: 1px solid var(--border-default);\n      border-radius: var(--radius-md);\n      margin: 1.25rem 0;\n      overflow: hidden;\n    }\n\n    details.deep-dive summary {\n      padding: 0.875rem 1.25rem;\n      font-family: var(--font-ui);\n      font-weight: 700;\n      font-size: 0.95rem;\n      color: var(--text-primary);\n      cursor: pointer;\n      user-select: none;\n      background: var(--bg-surface);\n      border-bottom: 1px solid transparent;\n      transition: var(--transition-smooth);\n    }\n\n    details.deep-dive[open] summary {\n      border-bottom-color: var(--border-default);\n    }\n\n    details.deep-dive .details-content {\n      padding: 1.25rem;\n      font-size: 0.95rem;\n    }\n\n    pre, code {\n      font-family: var(--font-mono);\n      font-size: 0.9em;\n    }\n\n    code:not(pre code) {\n      background: var(--bg-code);\n      padding: 0.2em 0.4em;\n      border-radius: 4px;\n      border: 1px solid var(--border-subtle);\n    }\n\n    pre {\n      background: var(--bg-code);\n      border: 1px solid var(--border-default);\n      border-radius: var(--radius-md);\n      padding: 1.25rem;\n      overflow-x: auto;\n      margin: 1.25rem 0;\n      line-height: 1.45;\n    }\n\n    .math-card {\n      background: var(--bg-subtle);\n      border: 1px solid var(--border-default);\n      border-radius: var(--radius-sm);\n      padding: 1rem;\n      margin: 1rem 0;\n      overflow-x: auto;\n      text-align: center;\n    }\n\n    .summary-panel {\n      background: var(--bg-surface);\n      border: 2px solid var(--border-default);\n      border-radius: var(--radius-lg);\n      padding: 2.25rem;\n      margin: 3rem 0;\n      box-shadow: var(--shadow-md);\n    }\n\n    .summary-panel h2 {\n      margin-top: 0;\n      border-bottom: 1px solid var(--border-default);\n      padding-bottom: 0.75rem;\n      margin-bottom: 1.5rem;\n    }\n\n    .truth-table {\n      width: 100%;\n      border-collapse: collapse;\n      margin: 1.25rem 0;\n      font-size: 0.95rem;\n    }\n\n    .truth-table th, .truth-table td {\n      padding: 0.75rem 1rem;\n      text-align: left;\n      border-bottom: 1px solid var(--border-default);\n    }\n\n    .truth-table th {\n      font-family: var(--font-ui);\n      font-size: 0.8rem;\n      text-transform: uppercase;\n      letter-spacing: 0.05em;\n      color: var(--text-muted);\n      background: var(--bg-subtle);\n    }\n\n    @media print {\n      :root {\n        --bg-canvas: #ffffff !important;\n        --bg-surface: #ffffff !important;\n        --bg-subtle: #fafafa !important;\n        --text-primary: #000000 !important;\n        --text-secondary: #222222 !important;\n        --border-default: #cccccc !important;\n      }\n      \n      body {\n        padding: 0;\n        color: #000;\n        background: #fff;\n      }\n\n      .theme-toggle-container {\n        display: none !important;\n      }\n\n      .cognitive-node, .diagram-container, .summary-panel {\n        box-shadow: none !important;\n        border: 1px solid #ddd !important;\n        break-inside: avoid;\n        page-break-inside: avoid;\n        margin: 1.5rem 0;\n      }\n\n      details.deep-dive, details.quiz-reveal {\n        display: block !important;\n      }\n\n      details.deep-dive summary, details.quiz-reveal summary {\n        display: none !important;\n      }\n\n      details.deep-dive .details-content, details.quiz-reveal .quiz-explanation {\n        display: block !important;\n      }\n    }\n  </style>\n</head>\n<body>\n\n  <!-- Floating Theme Switcher -->\n  <div class=\"theme-toggle-container\">\n    <button class=\"theme-toggle-btn\" id=\"themeToggleBtn\" aria-label=\"Toggle dark/light mode\">\n      <span id=\"themeToggleIcon\">🌙</span>\n      <span id=\"themeToggleText\">Dark Mode</span>\n    </button>\n  </div>\n\n  <div class=\"container\">\n    <!-- LESSON_METADATA_SLOT -->\n    <header class=\"lesson-header\">\n      <div class=\"lesson-tagline\">learn-forme Standalone Lesson</div>\n      <h1 id=\"lessonTitle\">Prima lezione</h1>\n      <p id=\"lessonGoal\" style=\"font-size: 1.15rem; color: var(--text-secondary);\">capire</p>\n      \n      <div class=\"lesson-meta-bar\">\n        <span class=\"badge badge-status\" id=\"lessonDate\">Generated: <date></span>\n        <span class=\"badge badge-status\">Lesson #0001</span>\n        <span class=\"badge badge-status\">Offline Archival Ready</span>\n      </div>\n    </header>\n\n    <!-- INITIAL_DAG_SLOT -->\n    <section class=\"diagram-container\" id=\"dagContainer\"><div class=\"diagram-title\">Curriculum Dependency Graph</div><pre class=\"mermaid\">\ngraph TD\n  N1[\"Nodo 1: la prima cosa\"] --> N2[\"Nodo 2: la seconda\"]\n</pre></section>\n\n    <!-- COGNITIVE_NODES_SLOT -->\n    <main id=\"lesson-nodes\" class=\"nodes-container\">\n      <article class=\"cognitive-node\" id=\"node-prima-cosa\" data-tier=\"axiom\"><header class=\"node-header\"><div class=\"node-title-group\"><span class=\"node-number\">Node 01</span><h2 class=\"node-title\">La prima cosa</h2></div><span class=\"badge badge-axiom\">Unconditional Truth</span></header><div class=\"step-establish prose\"><p>vera</p></div><footer class=\"step-capture\"><span>Captured in Deck: <code>Proxi::Topic</code></span><span>Card Type: nessuna</span></footer></article>\n      <article class=\"cognitive-node\" id=\"node-seconda\" data-tier=\"derivation\"><header class=\"node-header\"><div class=\"node-title-group\"><span class=\"node-number\">Node 02</span><h2 class=\"node-title\">La seconda</h2></div><span class=\"badge badge-derivation\">Derivation</span></header><div class=\"step-establish prose\"><p>segue dalla prima</p></div><footer class=\"step-capture\"><span>Captured in Deck: <code>Proxi::Topic</code></span><span>Card Type: nessuna</span></footer></article>\n      <!-- NODES_INJECTION_POINT -->\n    </main>\n\n    <!-- SUMMARY_PANEL_SLOT -->\n\n    <!-- FOOTER_SLOT -->\n    <footer style=\"margin-top: 3rem; text-align: center; color: var(--text-muted); font-size: 0.85rem; font-family: var(--font-ui);\">\n      <p>Generated by <code>learn-forme</code> teaching engine • Permanent Standalone Lesson</p>\n    </footer>\n  </div>\n\n  <script type=\"application/json\" id=\"lesson-data\">\n{\n  \"metadata\": {\n    \"lessonNumber\": 1,\n    \"topic\": \"Demo\",\n    \"title\": \"Prima lezione\",\n    \"slug\": \"prima-lezione\",\n    \"dateCreated\": \"<iso>\",\n    \"dateModified\": \"<iso>\",\n    \"initialDag\": \"graph TD\\n  N1[\\\"Nodo 1: la prima cosa\\\"] --> N2[\\\"Nodo 2: la seconda\\\"]\",\n    \"targetGoal\": \"capire\",\n    \"version\": \"1.0.0\"\n  },\n  \"nodes\": [\n    {\n      \"nodeId\": \"prima-cosa\",\n      \"title\": \"La prima cosa\",\n      \"tier\": \"axiom\",\n      \"summary\": \"Una cosa vera.\",\n      \"content\": \"\\u003cp>vera\\u003c/p>\",\n      \"capturedAt\": \"<iso>\"\n    },\n    {\n      \"nodeId\": \"seconda\",\n      \"title\": \"La seconda\",\n      \"tier\": \"derivation\",\n      \"summary\": \"Segue.\",\n      \"content\": \"\\u003cp>segue dalla prima\\u003c/p>\",\n      \"capturedAt\": \"<iso>\"\n    }\n  ]\n}\n  </script>\n\n  <!-- Client-side KaTeX & Mermaid Theme Controller Script -->\n  <script>\n    document.addEventListener(\"DOMContentLoaded\", function() {\n      if (typeof renderMathInElement === \"function\") {\n        renderMathInElement(document.body, {\n          delimiters: [\n            {left: \"$$\", right: \"$$\", display: true},\n            {left: \"$\", right: \"$\", display: false},\n            {left: \"\\\\(\", right: \"\\\\)\", display: false},\n            {left: \"\\\\[\", right: \"\\\\]\", display: true}\n          ],\n          throwOnError: false,\n          errorColor: \"#dc2626\"\n        });\n      }\n    });\n\n    (function() {\n      document.querySelectorAll(\".mermaid\").forEach(function(el) {\n        el.dataset.mermaidSource = el.textContent.trim();\n      });\n\n      function renderMermaid(themeName) {\n        if (typeof mermaid === \"undefined\") return;\n        \n        document.querySelectorAll(\".mermaid\").forEach(function(el) {\n          if (el.dataset.mermaidSource) {\n            el.removeAttribute(\"data-processed\");\n            el.innerHTML = el.dataset.mermaidSource;\n          }\n        });\n\n        mermaid.initialize({\n          startOnLoad: false,\n          theme: themeName === \"dark\" ? \"dark\" : \"default\",\n          securityLevel: \"loose\",\n          fontFamily: '-apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif'\n        });\n\n        mermaid.run();\n      }\n\n      const currentTheme = document.documentElement.getAttribute(\"data-theme\") || \"light\";\n      renderMermaid(currentTheme);\n\n      const toggleBtn = document.getElementById(\"themeToggleBtn\");\n      const toggleIcon = document.getElementById(\"themeToggleIcon\");\n      const toggleText = document.getElementById(\"themeToggleText\");\n\n      function updateToggleUI(theme) {\n        if (!toggleIcon || !toggleText) return;\n        if (theme === \"dark\") {\n          toggleIcon.textContent = \"☀️\";\n          toggleText.textContent = \"Light Mode\";\n        } else {\n          toggleIcon.textContent = \"🌙\";\n          toggleText.textContent = \"Dark Mode\";\n        }\n      }\n\n      updateToggleUI(currentTheme);\n\n      if (toggleBtn) {\n        toggleBtn.addEventListener(\"click\", function() {\n          const activeTheme = document.documentElement.getAttribute(\"data-theme\");\n          const nextTheme = activeTheme === \"dark\" ? \"light\" : \"dark\";\n          \n          document.documentElement.setAttribute(\"data-theme\", nextTheme);\n          localStorage.setItem(\"learn-forme-theme\", nextTheme);\n          updateToggleUI(nextTheme);\n          renderMermaid(nextTheme);\n        });\n      }\n\n      // Interactive Quizzes Controller\n      function initInteractiveQuizzes() {\n        document.querySelectorAll(\".step-quiz\").forEach(function(quizEl) {\n          const buttons = quizEl.querySelectorAll(\".quiz-option-btn\");\n          const feedback = quizEl.querySelector(\".quiz-feedback-banner\");\n          const feedbackTitle = quizEl.querySelector(\".quiz-feedback-title\");\n          const feedbackDetail = quizEl.querySelector(\".quiz-feedback-detail\");\n          const actionBar = quizEl.querySelector(\".quiz-action-bar\");\n          const retryBtn = quizEl.querySelector(\".quiz-retry-btn\");\n          const revealDetails = quizEl.querySelector(\".quiz-reveal\");\n\n          if (!buttons.length) return;\n\n          buttons.forEach(function(btn) {\n            btn.addEventListener(\"click\", function() {\n              if (quizEl.dataset.answered === \"true\") return;\n              quizEl.dataset.answered = \"true\";\n\n              const isCorrect = btn.classList.contains(\"is-correct-target\");\n              const misconception = btn.getAttribute(\"data-misconception\");\n\n              buttons.forEach(function(b) {\n                b.classList.add(\"is-disabled\");\n                if (b.classList.contains(\"is-correct-target\")) {\n                  b.classList.add(\"is-answered-correct\");\n                  const status = b.querySelector(\".quiz-option-status\");\n                  if (status) status.textContent = \"✓ Corretto\";\n                }\n              });\n\n              if (isCorrect) {\n                btn.classList.add(\"is-answered-correct\");\n                if (feedback) {\n                  feedback.className = \"quiz-feedback-banner is-correct-banner\";\n                  feedback.style.display = \"block\";\n                  if (feedbackTitle) feedbackTitle.innerHTML = \"<strong>✓ Risposta Esatta!</strong>\";\n                  if (feedbackDetail) feedbackDetail.textContent = \"Comprensione confermata: hai individuato il principio corretto.\";\n                }\n              } else {\n                btn.classList.add(\"is-answered-wrong\");\n                const status = btn.querySelector(\".quiz-option-status\");\n                if (status) status.textContent = \"✗ Non corretto\";\n\n                if (feedback) {\n                  feedback.className = \"quiz-feedback-banner is-wrong-banner\";\n                  feedback.style.display = \"block\";\n                  if (feedbackTitle) feedbackTitle.innerHTML = \"<strong>✗ Risposta non corretta</strong>\";\n                  if (feedbackDetail) {\n                    if (misconception) {\n                      feedbackDetail.innerHTML = \"<strong>Diagnosi dell'errore:</strong> \" + misconception;\n                    } else {\n                      feedbackDetail.textContent = \"Osserva la risposta corretta evidenziata in verde e consulta la spiegazione dettagliata qui sotto.\";\n                    }\n                  }\n                }\n              }\n\n              if (revealDetails) {\n                revealDetails.open = true;\n              }\n\n              if (actionBar) {\n                actionBar.style.display = \"flex\";\n              }\n            });\n          });\n\n          if (retryBtn) {\n            retryBtn.addEventListener(\"click\", function() {\n              delete quizEl.dataset.answered;\n              buttons.forEach(function(b) {\n                b.classList.remove(\"is-disabled\", \"is-answered-correct\", \"is-answered-wrong\");\n                const status = b.querySelector(\".quiz-option-status\");\n                if (status) status.textContent = \"\";\n              });\n              if (feedback) feedback.style.display = \"none\";\n              if (actionBar) actionBar.style.display = \"none\";\n            });\n          }\n        });\n      }\n\n      initInteractiveQuizzes();\n    })();\n  </script>\n</body>\n</html>"
+      },
+      "session": {
+        "lessonPath": "courses/demo/lessons/0001-prima-lezione.html",
+        "plan": {
+          "topic": "Demo",
+          "goal": "capire",
+          "dag": "graph TD\n  N1[\"Nodo 1: la prima cosa\"] --> N2[\"Nodo 2: la seconda\"]",
+          "approved": true,
+          "nodeStatus": {
+            "N1": "done",
+            "N2": "done"
+          }
+        },
+        "pendingRequestId": null,
+        "items": [
+          {
+            "id": "node:seconda",
+            "kind": "node",
+            "nodeId": "seconda",
+            "planNode": "N2",
+            "title": "La seconda",
+            "lessonPath": "courses/demo/lessons/0001-prima-lezione.html",
+            "node": {
+              "nodeId": "seconda",
+              "title": "La seconda",
+              "tier": "derivation",
+              "summary": "Segue.",
+              "content": "<p>segue dalla prima</p>",
+              "capturedAt": "<iso>"
+            },
+            "at": "<iso>"
+          }
+        ]
+      }
+    },
+    {
+      "name": "finish",
+      "request": {
+        "method": "POST",
+        "path": "/mcp/<session>",
+        "headers": {
+          "content-type": "application/json",
+          "x-learner-token": "<token>"
+        },
+        "body": {
+          "jsonrpc": "2.0",
+          "id": 12,
+          "method": "tools/call",
+          "params": {
+            "name": "finish_lesson",
+            "arguments": {
+              "recordTitle": "Prima lezione: acquisita",
+              "summary": "Sa la prima cosa.",
+              "evidence": "Ha risposto bene.",
+              "implications": "Riprendere dalla seconda.",
+              "notesAddendum": "Preferisce esempi concreti."
+            }
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "jsonrpc": "2.0",
+          "id": 12,
+          "result": {
+            "content": [
+              {
+                "type": "text",
+                "text": "{\"recordPath\":\"courses/demo/learning-records/0001-prima-lezione-acquisita.md\",\"notesUpdated\":true,\"lessonPath\":\"courses/demo/lessons/0001-prima-lezione.html\",\"referencePath\":\"courses/demo/reference/prima-lezione.html\"}"
+              }
+            ],
+            "isError": false
+          }
+        }
+      },
+      "files": {
+        "courses/demo/NOTES.md": "# Notes\n\nPreferisce esempi concreti.\n",
+        "courses/demo/learning-records/0001-prima-lezione-acquisita.md": "# Prima lezione: acquisita\n\nSa la prima cosa.\n\n## Evidence\n\nHa risposto bene.\n\n## Implications\n\nRiprendere dalla seconda.\n\n<!-- lesson: prima-lezione -->\n",
+        "courses/demo/reference/prima-lezione.html": "<!DOCTYPE html>\n<html lang=\"it\" data-theme=\"light\">\n<head>\n  <meta charset=\"UTF-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n  <title>Sintesi: Prima lezione | Proxi</title>\n  <link rel=\"stylesheet\" href=\"https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css\" crossorigin=\"anonymous\">\n  <script defer src=\"https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js\" crossorigin=\"anonymous\"></script>\n  <script defer src=\"https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js\" crossorigin=\"anonymous\"></script>\n  <script src=\"https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js\"></script>\n  <style>\n    :root {\n      --font-body: Charter, Georgia, serif, -apple-system, sans-serif;\n      --font-ui: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif;\n      --font-mono: ui-monospace, \"SF Mono\", monospace;\n      --bg: #ffffff;\n      --fg: #0f172a;\n      --card-bg: #f8fafc;\n      --border: #cbd5e1;\n      --accent: #1e40af;\n      --truth: #047857;\n      --truth-bg: #ecfdf5;\n      --derive: #2563eb;\n      --derive-bg: #eff6ff;\n      --warn: #b45309;\n      --warn-bg: #fffbeb;\n    }\n    body { background: var(--bg); color: var(--fg); font-family: var(--font-body); margin: 0; padding: 2.5rem 1.5rem; line-height: 1.6; }\n    .ref-container { max-width: 960px; margin: 0 auto; }\n    header { margin-bottom: 2rem; border-bottom: 2px solid var(--accent); padding-bottom: 0.75rem; }\n    h1 { font-family: var(--font-ui); font-size: 2.2rem; margin: 0 0 0.5rem 0; color: var(--fg); }\n    .subtitle { font-size: 1rem; color: #64748b; margin: 0; }\n    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1.5rem; margin-bottom: 2rem; }\n    .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin-bottom: 1.5rem; }\n    .card h2 { font-family: var(--font-ui); font-size: 1.25rem; margin-top: 0; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }\n    .node-card { background: #ffffff; border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem; margin-bottom: 1rem; }\n    .node-card.tier-unconditional-truth, .node-card.tier-axiom { border-left: 4px solid var(--truth); }\n    .node-card.tier-derivation { border-left: 4px solid var(--derive); }\n    .node-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin-bottom: 0.75rem; }\n    .node-card-title-group { display: flex; flex-direction: column; gap: 0.25rem; }\n    .node-card-num { font-family: var(--font-mono); font-size: 0.75rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; }\n    .node-card-title { font-family: var(--font-ui); font-size: 1.1rem; margin: 0; color: var(--fg); }\n    .badge { font-family: var(--font-ui); font-size: 0.7rem; font-weight: 600; padding: 0.2rem 0.5rem; border-radius: 4px; white-space: nowrap; }\n    .badge-truth { background: var(--truth-bg); color: var(--truth); }\n    .badge-deriv { background: var(--derive-bg); color: var(--derive); }\n    .node-card-claim { font-size: 0.95rem; line-height: 1.5; color: #334155; margin-bottom: 0.75rem; }\n    .formula-card { background: #f8fafc; border: 1px solid var(--border); border-radius: 4px; padding: 0.75rem; margin-bottom: 0.75rem; text-align: center; }\n    .code-card { background: #0f172a; color: #f8fafc; border-radius: 4px; padding: 0.75rem 1rem; margin-top: 0.5rem; overflow-x: auto; }\n    .code-card pre { margin: 0; font-family: var(--font-mono); font-size: 0.85rem; }\n    .code-caption { display: block; color: #94a3b8; font-size: 0.75rem; margin-top: 0.25rem; }\n    .diagram-container { background: #ffffff; border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin-bottom: 1.5rem; }\n    .diagram-container h2 { font-family: var(--font-ui); font-size: 1.25rem; margin-top: 0; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }\n    .misconceptions-card { border-left: 4px solid var(--warn); background: var(--warn-bg); }\n    .misconceptions-card h2 { color: var(--warn); }\n    .misconceptions-list { margin: 0.5rem 0 0 1.25rem; padding: 0; font-size: 0.9rem; }\n    .misconceptions-list li { margin-bottom: 0.35rem; }\n    @media print {\n      body { padding: 0; }\n      .card, .node-card, .diagram-container { border: 1px solid #000; break-inside: avoid; }\n    }\n  </style>\n</head>\n<body>\n  <script type=\"application/json\" id=\"reference-data\">{\"title\":\"Prima lezione\",\"topic\":\"Demo\",\"slug\":\"prima-lezione\",\"initialDag\":\"graph TD\\n  N1[\\\"Nodo 1: la prima cosa\\\"] --> N2[\\\"Nodo 2: la seconda\\\"]\",\"nodes\":[{\"nodeId\":\"prima-cosa\",\"number\":1,\"title\":\"La prima cosa\",\"tier\":\"axiom\",\"summary\":\"Una cosa vera.\"},{\"nodeId\":\"seconda\",\"number\":2,\"title\":\"La seconda\",\"tier\":\"derivation\",\"summary\":\"Segue.\"}],\"formulas\":[],\"misconceptions\":[{\"description\":\"Ha risposto bene.\"}]}</script>\n  <main class=\"ref-container\">\n    <header>\n      <h1>Sintesi: Prima lezione</h1>\n      <p class=\"subtitle\">Sintesi rapida per il ripasso: concetti chiave, derivazioni, grafo ed inventario formule.</p>\n    </header>\n\n    <section class=\"card sintesi-nodes\">\n      <h2>Nodi concettuali</h2>\n      <div class=\"node-card tier-axiom\">\n  <div class=\"node-card-header\">\n    <div class=\"node-card-title-group\">\n      <span class=\"node-card-num\">Nodo 01</span>\n      <h3 class=\"node-card-title\">La prima cosa</h3>\n    </div>\n    <span class=\"badge badge-truth\">Assioma</span>\n  </div>\n  <div class=\"node-card-claim\"><p>Una cosa vera.</p></div>\n  \n</div>\n<div class=\"node-card tier-derivation\">\n  <div class=\"node-card-header\">\n    <div class=\"node-card-title-group\">\n      <span class=\"node-card-num\">Nodo 02</span>\n      <h3 class=\"node-card-title\">La seconda</h3>\n    </div>\n    <span class=\"badge badge-deriv\">Derivazione</span>\n  </div>\n  <div class=\"node-card-claim\"><p>Segue.</p></div>\n  \n</div>\n    </section>\n\n    <div class=\"diagram-container\">\n      <h2>Grafo delle dipendenze</h2>\n      <pre class=\"mermaid\">graph TD\n  N1[\"Nodo 1: la prima cosa\"] --> N2[\"Nodo 2: la seconda\"]</pre>\n    </div>\n\n<div class=\"card misconceptions-card\">\n  <h2>Errori e dubbi emersi nella sessione</h2>\n  <ul class=\"misconceptions-list\">\n<li>Ha risposto bene.</li>  </ul>\n</div>\n\n    <div class=\"card\">\n      <h2>Inventario formule</h2>\n      <p>Nessuna formula registrata.</p>\n    </div>\n  </main>\n\n  <script>\n    document.addEventListener(\"DOMContentLoaded\", function() {\n      if (typeof renderMathInElement === \"function\") {\n        renderMathInElement(document.body, {\n          delimiters: [\n            {left: \"$$\", right: \"$$\", display: true},\n            {left: \"$\", right: \"$\", display: false},\n            {left: \"\\(\", right: \"\\)\", display: false},\n            {left: \"\\[\", right: \"\\]\", display: true}\n          ],\n          throwOnError: false\n        });\n      }\n      if (typeof mermaid !== \"undefined\") {\n        mermaid.initialize({\n          startOnLoad: true,\n          fontFamily: '-apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif'\n        });\n      }\n    });\n  </script>\n</body>\n</html>"
+      },
+      "session": {
+        "lessonPath": "courses/demo/lessons/0001-prima-lezione.html",
+        "plan": {
+          "topic": "Demo",
+          "goal": "capire",
+          "dag": "graph TD\n  N1[\"Nodo 1: la prima cosa\"] --> N2[\"Nodo 2: la seconda\"]",
+          "approved": true,
+          "nodeStatus": {
+            "N1": "done",
+            "N2": "done"
+          }
+        },
+        "pendingRequestId": null,
+        "items": [
+          {
+            "id": "node:seconda",
+            "kind": "node",
+            "nodeId": "seconda",
+            "planNode": "N2",
+            "title": "La seconda",
+            "lessonPath": "courses/demo/lessons/0001-prima-lezione.html",
+            "node": {
+              "nodeId": "seconda",
+              "title": "La seconda",
+              "tier": "derivation",
+              "summary": "Segue.",
+              "content": "<p>segue dalla prima</p>",
+              "capturedAt": "<iso>"
+            },
+            "at": "<iso>"
+          },
+          {
+            "kind": "finish",
+            "result": {
+              "recordPath": "courses/demo/learning-records/0001-prima-lezione-acquisita.md",
+              "notesUpdated": true,
+              "lessonPath": "courses/demo/lessons/0001-prima-lezione.html",
+              "referencePath": "courses/demo/reference/prima-lezione.html"
+            },
+            "id": "<uuid>",
+            "at": "<iso>"
+          }
+        ]
+      }
+    },
+    {
+      "name": "finish-again",
+      "request": {
+        "method": "POST",
+        "path": "/mcp/<session>",
+        "headers": {
+          "content-type": "application/json",
+          "x-learner-token": "<token>"
+        },
+        "body": {
+          "jsonrpc": "2.0",
+          "id": 13,
+          "method": "tools/call",
+          "params": {
+            "name": "finish_lesson",
+            "arguments": {
+              "recordTitle": "Prima lezione: acquisita",
+              "summary": "Sa la prima cosa.",
+              "evidence": "Ha risposto bene.",
+              "implications": "Riprendere dalla seconda.",
+              "notesAddendum": "Preferisce esempi concreti."
+            }
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "jsonrpc": "2.0",
+          "id": 13,
+          "result": {
+            "content": [
+              {
+                "type": "text",
+                "text": "{\"recordPath\":\"courses/demo/learning-records/0001-prima-lezione-acquisita.md\",\"notesUpdated\":false,\"lessonPath\":\"courses/demo/lessons/0001-prima-lezione.html\",\"referencePath\":\"courses/demo/reference/prima-lezione.html\",\"message\":\"already closed: reference refreshed\"}"
+              }
+            ],
+            "isError": false
+          }
+        }
+      },
+      "files": {},
+      "session": {
+        "lessonPath": "courses/demo/lessons/0001-prima-lezione.html",
+        "plan": {
+          "topic": "Demo",
+          "goal": "capire",
+          "dag": "graph TD\n  N1[\"Nodo 1: la prima cosa\"] --> N2[\"Nodo 2: la seconda\"]",
+          "approved": true,
+          "nodeStatus": {
+            "N1": "done",
+            "N2": "done"
+          }
+        },
+        "pendingRequestId": null,
+        "items": [
+          {
+            "id": "node:seconda",
+            "kind": "node",
+            "nodeId": "seconda",
+            "planNode": "N2",
+            "title": "La seconda",
+            "lessonPath": "courses/demo/lessons/0001-prima-lezione.html",
+            "node": {
+              "nodeId": "seconda",
+              "title": "La seconda",
+              "tier": "derivation",
+              "summary": "Segue.",
+              "content": "<p>segue dalla prima</p>",
+              "capturedAt": "<iso>"
+            },
+            "at": "<iso>"
+          },
+          {
+            "kind": "finish",
+            "result": {
+              "recordPath": "courses/demo/learning-records/0001-prima-lezione-acquisita.md",
+              "notesUpdated": true,
+              "lessonPath": "courses/demo/lessons/0001-prima-lezione.html",
+              "referencePath": "courses/demo/reference/prima-lezione.html"
+            },
+            "id": "<uuid>",
+            "at": "<iso>"
+          },
+          {
+            "kind": "finish",
+            "result": {
+              "recordPath": "courses/demo/learning-records/0001-prima-lezione-acquisita.md",
+              "notesUpdated": false,
+              "lessonPath": "courses/demo/lessons/0001-prima-lezione.html",
+              "referencePath": "courses/demo/reference/prima-lezione.html"
+            },
+            "id": "<uuid>",
+            "at": "<iso>"
+          }
+        ]
+      }
+    }
+  ]
+}

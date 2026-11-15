@@ -8,7 +8,7 @@
 mod common;
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use reqwest::header::CONTENT_TYPE;
@@ -16,43 +16,11 @@ use reqwest::{Client, StatusCode};
 use serde_json::{json, Value};
 
 use common::sessions::{
-    body_json, data_events, delete, describe, fake_script_args, post, raw_inputs, read_until,
-    require_fake_engine, seed_demo_course, teach_planned, upload, user_texts, wait_for,
-    wait_for_state_file, UploadPart, INTERRUPT_REQUEST,
+    Fixture, INTERRUPT_REQUEST, UploadPart, body_json, data_events, delete, describe, post,
+    raw_inputs, read_until, require_fake_engine, teach_planned, upload, user_texts, wait_for,
+    wait_for_state_file,
 };
-use proxi::server::{start, RunningServer, ServerOptions};
-
-/// A temp repo (`.learner`) and a separate temp data folder holding the `demo` course.
-struct Fixture {
-    repo: common::TempDir,
-    data: common::TempDir,
-}
-
-impl Fixture {
-    fn new(tag: &str) -> Self {
-        let fixture = Self {
-            repo: common::temp_dir(tag),
-            data: common::temp_dir(&format!("{tag}-data")),
-        };
-        seed_demo_course(&fixture.data.0);
-        fixture
-    }
-
-    /// The fake engine, wired the way `proxi serve --claude-bin node --claude-bin-arg <fake>` is.
-    fn options(&self) -> ServerOptions {
-        self.options_with(&[])
-    }
-
-    /// The same with test-hook flags before the fake script (`--input-out`, `--env-out`).
-    fn options_with(&self, extra: &[&str]) -> ServerOptions {
-        let mut options = ServerOptions::new(self.repo.0.clone());
-        options.data_root = Some(self.data.0.clone());
-        options.memory_secrets = true;
-        options.bins.claude = Some(PathBuf::from("node"));
-        options.bins.claude_args = fake_script_args("fake-claude.mjs", extra);
-        options
-    }
-}
+use proxi::server::{start, RunningServer};
 
 fn url(server: &RunningServer, path: &str) -> String {
     format!("{}{}", server.url, path)

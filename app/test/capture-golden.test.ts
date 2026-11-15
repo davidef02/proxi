@@ -8,6 +8,7 @@ import { GOOGLE_CLIENT_ID } from "../server/sync/gdrive.ts";
 import { ANKI_ERROR, ANKI_GOLDEN, captureAnkiGolden } from "./capture-anki-golden.ts";
 import { captureGolden, GOLDEN_DIR, ISO_RE, normalise, normaliseSession, rootVariants } from "./capture-golden.ts";
 import { captureLessonGolden, LESSON_GOLDEN } from "./capture-lesson-golden.ts";
+import { captureMcpGolden, MCP_GOLDEN } from "./capture-mcp-golden.ts";
 import { REPO_ROOT } from "./harness.ts";
 
 const ROUTES = [
@@ -25,7 +26,7 @@ const ROUTES = [
   "sessions-agy",
   "sessions-opencode",
 ];
-const ALL_GOLDENS = [...ROUTES, LESSON_GOLDEN, ANKI_GOLDEN];
+const ALL_GOLDENS = [...ROUTES, LESSON_GOLDEN, ANKI_GOLDEN, MCP_GOLDEN];
 
 const dirs: string[] = [];
 function tempDir(prefix: string): string {
@@ -132,6 +133,7 @@ it("committed golden fixtures match a fresh Node capture", async () => {
   await captureGolden(out);
   await captureLessonGolden(out);
   await captureAnkiGolden(out);
+  await captureMcpGolden(out);
   for (const route of ALL_GOLDENS) {
     const committed = path.join(GOLDEN_DIR, `${route}.json`);
     assert.ok(fs.existsSync(committed), `missing ${committed}: run npm run golden:capture`);

@@ -34,8 +34,11 @@ pub struct SyncResult {
     pub synced: bool,
     /// `js_to_string` of the deck: Node interpolates the raw value into its lines.
     pub deck_name: String,
+    pub total_cards: usize,
     pub added_count: usize,
     pub duplicate_count: usize,
+    /// Node's `failedCount`: every card on a failed run, 0 on success.
+    pub failed_count: usize,
     pub tsv_export_path: Option<String>,
     pub warning: Option<String>,
     pub error: Option<String>,
@@ -69,6 +72,15 @@ impl CardList {
         match self {
             CardList::Items(items) => items.len().to_string(),
             CardList::NotArray(text) => text.clone(),
+        }
+    }
+
+    /// Node's `cards.length` for the sync counts: a non-array's `.length` is a string length or
+    /// `undefined`, not a card count, so both counts stay 0 there.
+    fn count(&self) -> usize {
+        match self {
+            CardList::Items(items) => items.len(),
+            CardList::NotArray(_) => 0,
         }
     }
 }
@@ -141,6 +153,7 @@ pub fn sync_to_anki_connect(
     let probe = ping::ping_anki_connect(url, timeout);
     if !probe.online {
         let error = probe.error.unwrap_or_default();
+        let total_cards = cards.count();
         let warning = format!(
             "[anki-sync] Note: AnkiConnect offline ({url} - {error}). Saved {} cards to {}.",
             cards.length_text(),
@@ -152,8 +165,10 @@ pub fn sync_to_anki_connect(
         return Ok(SyncResult {
             synced: false,
             deck_name: js_to_string(&deck),
+            total_cards,
             added_count: 0,
             duplicate_count: 0,
+            failed_count: total_cards,
             tsv_export_path: export.map(|export| export.file_path),
             warning: Some(warning),
             error: Some(error),
@@ -164,11 +179,14 @@ pub fn sync_to_anki_connect(
     let response = call_anki_connect(url, "createDeck", json!({ "deck": deck.clone() }), timeout);
     if let Some(error) = response_error(&response)? {
         let error = js_to_string(&error);
+        let total_cards = cards.count();
         return Ok(SyncResult {
             synced: false,
             deck_name: js_to_string(&deck),
+            total_cards,
             added_count: 0,
             duplicate_count: 0,
+            failed_count: total_cards,
             tsv_export_path: export.map(|export| export.file_path),
             warning: Some(format!(
                 "[anki-sync] Failed to create deck '{}': {error}",
@@ -186,11 +204,14 @@ pub fn sync_to_anki_connect(
     let response = call_anki_connect(url, "addNotes", json!({ "notes": notes }), notes_timeout);
     if let Some(error) = response_error(&response)? {
         let error = js_to_string(&error);
+        let total_cards = cards.count();
         return Ok(SyncResult {
             synced: false,
             deck_name: js_to_string(&deck),
+            total_cards,
             added_count: 0,
             duplicate_count: 0,
+            failed_count: total_cards,
             tsv_export_path: export.map(|export| export.file_path),
             warning: Some(format!("[anki-sync] addNotes failed: {error}")),
             error: Some(error),
@@ -201,8 +222,10 @@ pub fn sync_to_anki_connect(
     Ok(SyncResult {
         synced: true,
         deck_name: js_to_string(&deck),
+        total_cards: cards.count(),
         added_count,
         duplicate_count,
+        failed_count: 0,
         tsv_export_path: export.map(|export| export.file_path),
         warning: None,
         error: None,
@@ -500,6 +523,120 @@ fn response_result(response: &Value) -> Result<Option<Value>, String> {
 mod tests {
     use super::*;
 
+    use std::io::{BufRead, BufReader, Read};
+    use std::net::{TcpListener, TcpStream};
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct TempDir(PathBuf);
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn temp_dir(tag: &str) -> TempDir {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let path = std::env::temp_dir().join(format!(
+            "proxi-anki-sync-{tag}-{}-{nanos}-{n}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&path).expect("create temp dir");
+        TempDir(path)
+    }
+
+    /// A throwaway AnkiConnect that answers by action, so the sync's call order does not matter.
+    struct FakeAnki {
+        url: String,
+        stop: Arc<AtomicBool>,
+        thread: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl FakeAnki {
+        fn start(note_ids: Value) -> FakeAnki {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake anki");
+            let port = listener.local_addr().expect("fake anki addr").port();
+            listener
+                .set_nonblocking(true)
+                .expect("nonblocking listener");
+            let stop = Arc::new(AtomicBool::new(false));
+            let flag = Arc::clone(&stop);
+            let thread = std::thread::spawn(move || {
+                while !flag.load(Ordering::SeqCst) {
+                    // A non-blocking accept keeps drop() from hanging on a silent socket.
+                    match listener.accept() {
+                        Ok((stream, _)) => answer(stream, &note_ids),
+                        Err(_) => std::thread::sleep(Duration::from_millis(5)),
+                    }
+                }
+            });
+            FakeAnki {
+                url: format!("http://127.0.0.1:{port}"),
+                stop,
+                thread: Some(thread),
+            }
+        }
+    }
+
+    impl Drop for FakeAnki {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::SeqCst);
+            if let Some(thread) = self.thread.take() {
+                let _ = thread.join();
+            }
+        }
+    }
+
+    fn answer(mut stream: TcpStream, note_ids: &Value) {
+        let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+        let mut length = 0usize;
+        loop {
+            let mut line = String::new();
+            if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                break;
+            }
+            if let Some(value) = line
+                .to_ascii_lowercase()
+                .strip_prefix("content-length:")
+                .and_then(|rest| rest.trim().parse().ok())
+            {
+                length = value;
+            }
+        }
+        let mut body = vec![0u8; length];
+        let _ = reader.read_exact(&mut body);
+        let request: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+        let model = request
+            .get("params")
+            .and_then(|params| params.get("modelName"));
+        let reply = match request.get("action").and_then(Value::as_str) {
+            Some("version") => json!({ "result": 6, "error": null }),
+            Some("createDeck") => json!({ "result": true, "error": null }),
+            Some("modelNames") => json!({ "result": ["Basic", "Cloze"], "error": null }),
+            Some("modelFieldNames") if model == Some(&json!("Cloze")) => {
+                json!({ "result": ["Text", "Extra"], "error": null })
+            }
+            Some("modelFieldNames") => json!({ "result": ["Front", "Back"], "error": null }),
+            Some("addNotes") => json!({ "result": note_ids, "error": null }),
+            other => json!({ "result": null, "error": format!("Unsupported action {other:?}") }),
+        };
+        let text = serde_json::to_string(&reply).expect("fake anki reply");
+        let _ = write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
+            text.len()
+        );
+        let _ = stream.flush();
+    }
+
     fn notes_for(
         cards: Value,
         models: &NoteModels,
@@ -698,6 +835,81 @@ mod tests {
         assert_eq!(
             count_note_ids(Some(json!({ "a": 1 }))).unwrap_err(),
             "TypeError: noteIds is not iterable"
+        );
+    }
+
+    #[test]
+    fn offline_sync_counts_every_card_as_failed() {
+        let dir = temp_dir("offline-counts");
+        // A bound-then-dropped port refuses at once; long timeout so Windows' delay reads as offline.
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind a port to drop");
+        let port = listener.local_addr().expect("addr").port();
+        drop(listener);
+
+        let mut warn = Vec::new();
+        let result = sync_to_anki_connect(
+            &SyncOptions {
+                cards: Some(json!([
+                    { "type": "basic", "front": "Q1", "back": "A1" },
+                    { "type": "cloze", "text": "Il {{c1::x}}" }
+                ])),
+                topic: Some(json!("Demo")),
+                anki_url: Some(format!("http://127.0.0.1:{port}")),
+                timeout: Some("10000".to_string()),
+                base_dir: Some(dir.0.display().to_string()),
+                ..Default::default()
+            },
+            &mut warn,
+        )
+        .unwrap();
+
+        assert!(!result.synced);
+        assert_eq!(result.error.as_deref(), Some("fetch failed"));
+        assert_eq!(result.total_cards, 2);
+        assert_eq!(result.added_count, 0);
+        assert_eq!(result.duplicate_count, 0);
+        assert_eq!(result.failed_count, 2);
+    }
+
+    #[test]
+    fn sync_counts_cards_and_duplicates_against_anki() {
+        let dir = temp_dir("counts");
+        // One null for the card Anki already has.
+        let fake = FakeAnki::start(json!([2001, null, 2003]));
+        let mut warn = Vec::new();
+
+        let result = sync_to_anki_connect(
+            &SyncOptions {
+                cards: Some(json!([
+                    { "type": "basic", "front": "Q1", "back": "A1" },
+                    { "type": "basic", "front": "Q2", "back": "A2" },
+                    { "type": "cloze", "text": "Il {{c1::x}}", "extra": "e" }
+                ])),
+                topic: Some(json!("Demo")),
+                anki_url: Some(fake.url.clone()),
+                base_dir: Some(dir.0.display().to_string()),
+                ..Default::default()
+            },
+            &mut warn,
+        )
+        .unwrap();
+
+        assert!(result.synced);
+        assert_eq!(result.total_cards, 3);
+        assert_eq!(result.added_count, 2);
+        assert_eq!(result.duplicate_count, 1);
+        assert_eq!(result.failed_count, 0);
+    }
+
+    #[test]
+    fn a_non_array_card_list_counts_no_cards() {
+        // Node's `.length` on a non-array is a string length or undefined, not a card count.
+        assert_eq!(CardList::from_option(Some(&json!("ab"))).count(), 0);
+        assert_eq!(CardList::from_option(Some(&json!(5))).count(), 0);
+        assert_eq!(CardList::from_option(Some(&json!([]))).count(), 0);
+        assert_eq!(
+            CardList::from_option(Some(&json!([{ "type": "cloze" }]))).count(),
+            1
         );
     }
 }
