@@ -67,6 +67,12 @@ describe("RUST_PORTED", () => {
   it("runs the exercises routes against the spawned binary", () => {
     assert.ok(RUST_PORTED.includes("app/test/api-exercises.test.ts"));
   });
+
+  it("runs the attachments and session-control tests against the spawned binary", () => {
+    assert.ok(RUST_PORTED.includes("app/test/attachments.test.ts"));
+    assert.ok(RUST_PORTED.includes("app/test/sessions.test.ts"));
+    assert.ok(!RUST_PORTED.includes("app/test/sessions-answer.test.ts"));
+  });
 });
 
 describe("missingFiles", () => {

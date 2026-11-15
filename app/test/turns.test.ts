@@ -1,10 +1,10 @@
-// The per-session turn module, driven by an in-memory engine: no process, deterministic.
+// The per-session turn module, driven by an in-memory engine. Retry, interrupt and attachments moved to crates/proxi/src/turns.rs (#20); what stays has no Rust home yet (jobs, agy/opencode action-denied).
 import assert from "node:assert/strict";
-import { describe, it, mock } from "node:test";
+import { describe, it } from "node:test";
 import type { EngineEvent } from "../server/types.ts";
 import type { SessionStatus } from "../shared/protocol.ts";
 import { jobTurnText } from "../server/jobs/deliver.ts";
-import { Turns, WATCHDOG_MS } from "../server/turns.ts";
+import { Turns } from "../server/turns.ts";
 import { memoryEngine, memoryJobs, resultEvent } from "./helpers.ts";
 
 function harness(resume?: string) {
@@ -39,42 +39,6 @@ function harness(resume?: string) {
 }
 
 describe("Turns (in-memory engine)", () => {
-  it("interrupt, then the late result of the given-up turn does not idle the newer turn", async () => {
-    mock.timers.enable({ apis: ["setTimeout"] });
-    try {
-      const { engine, h, turns, emit } = harness();
-      await turns.send("uno", ["uno"]);
-      turns.interrupt();
-      assert.equal(engine.last().interrupts, 1);
-      mock.timers.tick(WATCHDOG_MS);
-      assert.equal(h.status, "idle");
-      assert.deepEqual(h.notices, ["Turno interrotto."]);
-      await turns.send("due", ["due"]);
-      emit(resultEvent()); // late result of "uno"
-      assert.equal(h.status, "running");
-      emit(resultEvent());
-      assert.equal(h.status, "idle");
-      assert.deepEqual(h.late, [true, false]);
-    } finally {
-      mock.timers.reset();
-    }
-  });
-
-  it("interrupt with a prompt result: one 'Turno interrotto.' notice, no error notice, watchdog disarmed", async () => {
-    mock.timers.enable({ apis: ["setTimeout"] });
-    try {
-      const { h, turns, emit } = harness();
-      await turns.send("uno", ["uno"]);
-      turns.interrupt();
-      emit(resultEvent({ isError: true, subtype: "error_during_execution" }));
-      mock.timers.tick(WATCHDOG_MS);
-      assert.equal(h.status, "idle");
-      assert.deepEqual(h.notices, ["Turno interrotto."]);
-    } finally {
-      mock.timers.reset();
-    }
-  });
-
   it("a failed relaunch leaves the owed results owed (status error); they ride along with the next learner message", async () => {
     const { engine, jobs, h, turns, emit, doneJob } = harness();
     const j = doneJob();
@@ -121,73 +85,5 @@ describe("Turns (in-memory engine)", () => {
     assert.equal(h.status, "running", "an exit after stop() is not an error");
     await assert.rejects(turns.send("z", ["z"]), /closed/);
     assert.equal(engine.procs.length, 1);
-  });
-
-  it("formats attachments into the turn prompt and passes them to learner bubbles", async () => {
-    const { engine, turns } = harness();
-    const atts = [
-      { id: "1", name: "diagram.png", path: ".learner/sessions/s/attachments/diagram.png", mimeType: "image/png", size: 100 },
-      { id: "2", name: "book.pdf", path: ".learner/sessions/s/attachments/book.pdf", mimeType: "application/pdf", size: 500 },
-    ];
-    await turns.send("Spiegami questo diagramma", ["Spiegami questo diagramma"], atts);
-    const sent = engine.last().sent[0];
-    assert.match(sent, /\[Allegati forniti dallo studente:/);
-    assert.match(sent, /- diagram\.png \(percorso: \.learner\/sessions\/s\/attachments\/diagram\.png\)/);
-    assert.match(sent, /- book\.pdf \(percorso: \.learner\/sessions\/s\/attachments\/book\.pdf\)/);
-    assert.match(sent, /Spiegami questo diagramma/);
-  });
-
-  it("model error (result isError: true) enables retry; retry re-submits without duplicating learner bubbles", async () => {
-    const { engine, h, turns, emit } = harness();
-    await turns.send("Qual è la derivata di x^2?", ["Qual è la derivata di x^2?"]);
-    assert.equal(turns.canRetry, false);
-    assert.deepEqual(h.learner, ["Qual è la derivata di x^2?"]);
-
-    emit({ type: "init", sessionId: "tok-err", tools: [], mcpServers: [] });
-    emit(resultEvent({ isError: true, subtype: "error_during_execution", text: "Rate limit reached" }));
-
-    assert.equal(h.status, "error");
-    assert.equal(turns.canRetry, true);
-    assert.match(h.notices[0], /Errore del docente.*Rate limit reached/);
-
-    // Retrying re-submits the exact input prompt without duplicating learner bubbles
-    await turns.retry();
-    assert.equal(h.status, "running");
-    assert.equal(turns.canRetry, false);
-    assert.deepEqual(h.learner, ["Qual è la derivata di x^2?"]); // still 1 bubble!
-    assert.deepEqual(engine.last().sent, ["Qual è la derivata di x^2?", "Qual è la derivata di x^2?"]);
-
-    // When the retry finishes successfully, it idles and resets canRetry
-    emit(resultEvent({ isError: false }));
-    assert.equal(h.status, "idle");
-    assert.equal(turns.canRetry, false);
-    assert.equal(turns.savedLastTurn, undefined);
-  });
-
-  it("process crash mid-turn enables retry; retry re-launches with resume token and re-sends turn", async () => {
-    const { engine, h, turns, emit } = harness();
-    await turns.send("Spiegazione", ["Spiegazione"]);
-    emit({ type: "init", sessionId: "tok-crash", tools: [], mcpServers: [] });
-
-    // Engine crashes while waiting for result
-    engine.last().cb.onStderr("SIGSEGV");
-    engine.last().cb.onExit(139, null);
-
-    assert.equal(h.status, "error");
-    assert.equal(turns.canRetry, true);
-    assert.equal(turns.live, false);
-
-    // Retrying re-spawns engine with resume token and re-sends
-    await turns.retry();
-    assert.equal(turns.live, true);
-    assert.equal(engine.last().resume, "tok-crash");
-    assert.deepEqual(engine.last().sent, ["Spiegazione"]);
-    assert.deepEqual(h.learner, ["Spiegazione"]); // no duplicate bubble
-    assert.equal(h.status, "running");
-  });
-
-  it("retry throws when not retryable", async () => {
-    const { turns } = harness();
-    await assert.rejects(turns.retry(), /Nessun turno fallito da riprovare/);
   });
 });

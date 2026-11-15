@@ -16,6 +16,8 @@ export const RUST_PORTED = [
   "app/test/api-update.test.ts",
   "app/test/api-courses.test.ts",
   "app/test/api-sessions.test.ts",
+  "app/test/attachments.test.ts",
+  "app/test/sessions.test.ts",
   "app/test/api-anki.test.ts",
   "app/test/graph-api.test.ts",
   "app/test/api-sync.test.ts",

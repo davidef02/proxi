@@ -44,7 +44,7 @@ use crate::model_download;
 use crate::protocol::{
     GlobalEvent, LearnerSettings, SettingsResponse, SyncStatus, UpdateStatusResponse, DEFAULT_PORT,
 };
-use crate::sessions::{ManagerOptions, SessionManager};
+use crate::sessions::{AttachmentUpload, ManagerOptions, SessionManager};
 use crate::settings::{self, SettingsError};
 use crate::stt;
 use crate::sync::gdrive::GoogleEndpoints;
@@ -432,7 +432,10 @@ fn router(state: Arc<AppState>, sync: SyncService) -> Router {
             "/api/sessions",
             get(get_sessions).post(post_sessions).fallback(not_found),
         )
-        .route("/api/sessions/{id}", get(get_session).fallback(not_found))
+        .route(
+            "/api/sessions/{id}",
+            get(get_session).delete(delete_session).fallback(not_found),
+        )
         .route(
             "/api/sessions/{id}/events",
             get(get_session_events).fallback(not_found),
@@ -440,6 +443,25 @@ fn router(state: Arc<AppState>, sync: SyncService) -> Router {
         .route(
             "/api/sessions/{id}/message",
             post(post_session_message).fallback(not_found),
+        )
+        .route(
+            "/api/sessions/{id}/attachments",
+            post(post_session_attachments)
+                // Node has no body cap on uploads; axum's 2 MB default would refuse a PDF.
+                .layer(DefaultBodyLimit::max(100 * 1024 * 1024))
+                .fallback(not_found),
+        )
+        .route(
+            "/api/sessions/{id}/retry",
+            post(post_session_retry).fallback(not_found),
+        )
+        .route(
+            "/api/sessions/{id}/interrupt",
+            post(post_session_interrupt).fallback(not_found),
+        )
+        .route(
+            "/api/sessions/{id}/close",
+            post(post_session_close).fallback(not_found),
         )
         .route(
             "/api/exercises/{course}",
@@ -921,7 +943,8 @@ async fn delete_graph_node(
     }
 }
 
-/// The session routes (main.ts:354-372): list, create, read, per-session SSE, message.
+/// The session routes (main.ts:354-409): list, create, read, per-session SSE, message, attachments,
+/// retry, interrupt, close and delete.
 async fn get_sessions(State(state): State<Arc<AppState>>) -> Json<Value> {
     Json(state.sessions.list())
 }
@@ -978,6 +1001,112 @@ async fn post_session_message(
     };
     // The manager checks the body before the id, as Node's `textBody` runs before `manager.message`.
     match state.sessions.message(&id, body).await {
+        Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Err(error) => json_error(error.status, &error.message),
+    }
+}
+
+/// Node's `c.req.formData()` throws this on a body it cannot parse; `onError` answers 500 (A16).
+const FORM_DATA_ERROR: &str = "Failed to parse body as FormData.";
+
+/// `POST /api/sessions/:id/attachments` (main.ts:374-384): every `files` part comes before the `file`
+/// ones in the answer, whatever order the body used.
+async fn post_session_attachments(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    multipart: Result<Multipart, MultipartRejection>,
+) -> Response {
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    // Node parses a form-urlencoded body into a FormData with no files; axum refuses it outright.
+    if content_type.starts_with("application/x-www-form-urlencoded") {
+        return json_error(StatusCode::BAD_REQUEST, "Nessun file caricato");
+    }
+    let Ok(mut multipart) = multipart else {
+        return json_error(StatusCode::INTERNAL_SERVER_ERROR, FORM_DATA_ERROR);
+    };
+    let mut files_group = Vec::new();
+    let mut file_group = Vec::new();
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(field)) => field,
+            Ok(None) => break,
+            Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, FORM_DATA_ERROR),
+        };
+        // Only a part carrying a filename is a file; a plain field counts for nothing, as in Node.
+        let Some(name) = field.file_name().map(str::to_string) else {
+            continue;
+        };
+        let group = match field.name() {
+            Some("files") => 0,
+            Some("file") => 1,
+            _ => continue,
+        };
+        // Node's `File.type` follows the WHATWG parser: `text/plain` when the part has no
+        // `Content-Type`, `""` when the header is empty (the manager answers octet-stream).
+        let mime_type = Some(match field.headers().get(header::CONTENT_TYPE) {
+            None => "text/plain".to_string(),
+            Some(value) => value.to_str().unwrap_or_default().to_string(),
+        });
+        match field.bytes().await {
+            Ok(bytes) => {
+                let upload = AttachmentUpload {
+                    name,
+                    mime_type,
+                    bytes: bytes.to_vec(),
+                };
+                if group == 0 {
+                    files_group.push(upload);
+                } else {
+                    file_group.push(upload);
+                }
+            }
+            Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, FORM_DATA_ERROR),
+        }
+    }
+    let mut uploads = files_group;
+    uploads.extend(file_group);
+    if uploads.is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "Nessun file caricato");
+    }
+    match state.sessions.save_attachments(&id, uploads) {
+        Ok(metas) => Json(metas).into_response(),
+        Err(error) => json_error(error.status, &error.message),
+    }
+}
+
+/// `POST /api/sessions/:id/retry`: no body read, as in Node (main.ts:390-393).
+async fn post_session_retry(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+    match state.sessions.retry(&id).await {
+        Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Err(error) => json_error(error.status, &error.message),
+    }
+}
+
+/// `POST /api/sessions/:id/interrupt`: in-band for Claude, so the engine stays up.
+async fn post_session_interrupt(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Response {
+    match state.sessions.interrupt(&id) {
+        Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Err(error) => json_error(error.status, &error.message),
+    }
+}
+
+async fn post_session_close(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+    match state.sessions.close(&id).await {
+        Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Err(error) => json_error(error.status, &error.message),
+    }
+}
+
+/// `DELETE /api/sessions/:id`: the saved dir goes with the session.
+async fn delete_session(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+    match state.sessions.delete(&id).await {
         Ok(()) => Json(json!({ "ok": true })).into_response(),
         Err(error) => json_error(error.status, &error.message),
     }

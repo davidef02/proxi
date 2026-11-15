@@ -13,6 +13,8 @@ const arg = (name) => {
   const i = argv.indexOf(name);
   return i >= 0 ? argv[i + 1] : undefined;
 };
+// Test hook: append every raw stdin line, so a test can see exactly what the server sent (attachment block, interrupt request).
+const inputOut = arg("--input-out");
 // Test hook: dump the env the engine handed us, so a test can check the auth/data-root contract (AC3).
 const envOut = arg("--env-out");
 if (envOut) {
@@ -234,6 +236,18 @@ async function play(scenario) {
   if (scenario === "crash") {
     process.exit(1);
   }
+  if (scenario === "stubborn") {
+    // Never honours an interrupt and never reports a result: the server's watchdog has to give the turn up.
+    const id = nextId("msg");
+    startMessage(id);
+    startThinking();
+    startText(1);
+    for (let k = 0; k < 150; k++) {
+      delta(1, `parola${k} `);
+      await sleep(200);
+    }
+    return;
+  }
   if (scenario === "slow" || scenario.startsWith("slow:")) {
     const count = scenario === "slow" ? 50 : Number(scenario.slice(5)) || 0;
     const id = nextId("msg");
@@ -271,6 +285,7 @@ async function play(scenario) {
 let chain = Promise.resolve();
 const rl = readline.createInterface({ input: process.stdin });
 rl.on("line", (line) => {
+  if (inputOut) fs.appendFileSync(inputOut, line + "\n");
   let m;
   try {
     m = JSON.parse(line);
