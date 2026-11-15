@@ -236,6 +236,18 @@ async function play(scenario) {
   if (scenario === "crash") {
     process.exit(1);
   }
+  if (scenario === "stubborn") {
+    // Never honours an interrupt and never reports a result: the server's watchdog has to give the turn up.
+    const id = nextId("msg");
+    startMessage(id);
+    startThinking();
+    startText(1);
+    for (let k = 0; k < 150; k++) {
+      delta(1, `parola${k} `);
+      await sleep(200);
+    }
+    return;
+  }
   if (scenario === "slow" || scenario.startsWith("slow:")) {
     const count = scenario === "slow" ? 50 : Number(scenario.slice(5)) || 0;
     const id = nextId("msg");

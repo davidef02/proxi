@@ -208,6 +208,16 @@ describe("sessions with fake-claude", () => {
     assert.equal((await post(`/api/sessions/${id2}/close`)).status, 200);
     assert.equal((await state(id2)).status, "closed");
     assert.equal((await post(`/api/sessions/${id2}/message`, { text: "x" })).status, 409);
+    // state.json is written 300 ms after the last event: closing the binary before that leaves the
+    // last saved turn as `running` with a lastTurn, which the restart would rightly call a cut turn.
+    await waitFor(() => {
+      try {
+        const saved = JSON.parse(fs.readFileSync(path.join(root, ".learner", "sessions", id, "state.json"), "utf-8"));
+        return saved.state?.status === "idle" && !saved.lastTurn ? saved : undefined;
+      } catch {
+        return undefined; // not written yet
+      }
+    });
     await srv.close();
     srv = await start();
     assert.equal((await state(id)).status, "idle");
@@ -236,6 +246,23 @@ describe("sessions with fake-claude", () => {
     assert.match(opening.text, /Trasformata di Fourier/);
     const courses = (await (await fetch(srv.url + "/api/courses")).json()) as { slug: string }[];
     assert.ok(!courses.some((c) => c.slug === "lezioni-singole"), "lezioni-singole stays out of GET /api/courses");
+  });
+
+  it("an interrupted turn that never reports a result is given up by the watchdog", async () => {
+    const created = await post("/api/sessions", { kind: "practice", course: "demo", model: "haiku" });
+    assert.equal(created.status, 200);
+    const wid = ((await created.json()) as { id: string }).id;
+    await idle(wid);
+    // The engine ignores the interrupt and never sends a result: only the 10 s watchdog can end the turn.
+    assert.equal((await post(`/api/sessions/${wid}/message`, { text: "FAKE:stubborn" })).status, 200);
+    await waitFor(async () => (await state(wid)).items.some((i) => i.kind === "teacher"));
+    const started = Date.now();
+    assert.equal((await post(`/api/sessions/${wid}/interrupt`)).status, 200);
+    await waitFor(async () => (await state(wid)).status === "idle", 20000);
+    assert.ok(Date.now() - started >= 9000, "the idle came from the watchdog, not the engine");
+    const notices = (await state(wid)).items.filter((i): i is Extract<ChatItem, { kind: "notice" }> => i.kind === "notice");
+    assert.equal(notices.filter((n) => n.level === "info" && n.text === "Turno interrotto.").length, 1);
+    assert.ok(!notices.some((n) => n.level === "error"), "the watchdog is not an error notice");
   });
 
   it("a turn cut by a restart comes back as a retryable error", async () => {
