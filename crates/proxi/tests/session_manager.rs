@@ -45,13 +45,18 @@ impl TestEnv {
 }
 
 fn fake_bin() -> ClaudeBin {
+    node_bin("fake-claude.mjs")
+}
+
+/// A node script as an engine: the same seam as Node's `fakeBins`.
+fn node_bin(script: &str) -> ClaudeBin {
     ClaudeBin {
         cmd: "node".to_string(),
         args: vec![
             common::repo_root()
                 .join("app")
                 .join("test")
-                .join("fake-claude.mjs")
+                .join(script)
                 .display()
                 .to_string(),
         ],
@@ -59,6 +64,10 @@ fn fake_bin() -> ClaudeBin {
 }
 
 fn manager_for(repo: &Path, data: &Path, events: &EventBus) -> SessionManager {
+    manager_with_agy(repo, data, events, node_bin("fake-agy.mjs"))
+}
+
+fn manager_with_agy(repo: &Path, data: &Path, events: &EventBus, agy: ClaudeBin) -> SessionManager {
     SessionManager::new(ManagerOptions {
         repo_root: repo.to_path_buf(),
         data_root: data.to_path_buf(),
@@ -66,6 +75,8 @@ fn manager_for(repo: &Path, data: &Path, events: &EventBus) -> SessionManager {
         port: 4599,
         token: "test-token".to_string(),
         claude: fake_bin(),
+        agy,
+        opencode: node_bin("fake-opencode.mjs"),
         add_dirs: vec![repo.parent().unwrap_or(repo).to_path_buf()],
         events: events.clone(),
         limits: Arc::new(LimitsCache::new()),
@@ -684,29 +695,122 @@ async fn api_key_without_a_key_reports_the_missing_key() {
     );
 }
 
+/// The teacher items' texts, in state order.
+fn teacher_texts(state: &Value) -> Vec<String> {
+    state["items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|item| item["kind"] == "teacher")
+        .map(|item| item["text"].as_str().unwrap_or("").to_string())
+        .collect()
+}
+
+/// The `(<prefix>…)` id a fake engine names in its answer (`conv-<pid>` / `ses-<pid>`).
+fn engine_id(text: &str, prefix: &str) -> Option<String> {
+    let start = text.find(&format!("({prefix}"))? + 1;
+    let end = start + text[start..].find(')')?;
+    Some(text[start..end].to_string())
+}
+
 #[tokio::test(flavor = "multi_thread")]
-async fn unsupported_provider_fails_the_create_and_marks_the_session() {
+async fn agy_provider_runs_a_session() {
     require_fake_engine();
     let env = TestEnv::new();
-    settings(&env, r#"{"provider": "agy"}"#);
+    settings(&env, r#"{"provider":"agy"}"#);
     let manager = env.manager();
 
-    let error = manager
-        .create(teach_planned(Some(false)))
-        .await
-        .unwrap_err();
-    assert_eq!(error.status, StatusCode::INTERNAL_SERVER_ERROR);
-    assert!(error.message.contains("agy"), "{}", error.message);
+    let id = manager.create(teach_planned(Some(false))).await.unwrap();
+    let state = wait_for(&manager, &id, SessionStatus::Idle).await;
+    let conv = teacher_texts(&state)
+        .iter()
+        .find_map(|text| engine_id(text, "conv-"))
+        .expect("the agy teacher names its conversation");
 
-    let list = manager.list();
-    let id = list[0]["id"]
-        .as_str()
-        .expect("the failed session stays")
-        .to_string();
-    let state = manager.get(&id).expect("a session");
-    assert_eq!(state["status"], "error");
-    assert_eq!(state["retryable"], true);
-    assert!(state["lastError"].as_str().unwrap_or("").contains("agy"));
+    manager.shutdown().await;
+    let file = state_file(&env.repo.0, &id);
+    assert_eq!(file["provider"], "agy");
+    assert_eq!(file["resume"], conv.as_str());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn opencode_provider_runs_two_turns_on_one_session() {
+    require_fake_engine();
+    let env = TestEnv::new();
+    settings(&env, r#"{"provider":"opencode"}"#);
+    let manager = env.manager();
+
+    let id = manager.create(teach_planned(Some(false))).await.unwrap();
+    let state = wait_for(&manager, &id, SessionStatus::Idle).await;
+    let session = teacher_texts(&state)
+        .iter()
+        .find_map(|text| engine_id(text, "ses-"))
+        .expect("the opencode teacher names its session");
+
+    manager.message(&id, json!({"text": "Ciao"})).await.unwrap();
+    let state = wait_for(&manager, &id, SessionStatus::Idle).await;
+    let texts = teacher_texts(&state);
+    assert_eq!(texts.len(), 2, "{texts:?}");
+    assert!(
+        texts
+            .iter()
+            .all(|text| engine_id(text, "ses-").as_deref() == Some(session.as_str())),
+        "{texts:?}"
+    );
+    assert_eq!(state["status"], "idle");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_missing_agy_executable_fails_like_node() {
+    let env = TestEnv::new();
+    settings(&env, r#"{"provider":"agy"}"#);
+    let name = if cfg!(windows) {
+        "missing-agy.exe"
+    } else {
+        "missing-agy"
+    };
+    let missing = env.repo.0.join(name);
+    let agy = ClaudeBin {
+        cmd: missing.display().to_string(),
+        args: Vec::new(),
+    };
+    let manager = manager_with_agy(&env.repo.0, &env.data.0, &env.events, agy);
+
+    let id = manager.create(teach_planned(Some(false))).await.unwrap();
+    let state = wait_for(&manager, &id, SessionStatus::Error).await;
+    assert_eq!(
+        state["lastError"],
+        format!(
+            "teacher process exited (null): spawn error: spawn {} ENOENT",
+            missing.display()
+        )
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn agy_sessions_keep_their_engine_after_a_settings_switch() {
+    require_fake_engine();
+    let env = TestEnv::new();
+    settings(&env, r#"{"provider":"agy"}"#);
+    let manager = env.manager();
+    let id = manager.create(teach_planned(Some(false))).await.unwrap();
+    let state = wait_for(&manager, &id, SessionStatus::Idle).await;
+    let conv = teacher_texts(&state)
+        .iter()
+        .find_map(|text| engine_id(text, "conv-"))
+        .expect("the agy teacher names its conversation");
+    manager.shutdown().await;
+
+    settings(&env, r#"{"provider":"claude"}"#);
+    let manager = env.manager();
+    manager
+        .message(&id, json!({"text": "Dopo il cambio"}))
+        .await
+        .unwrap();
+    let state = wait_for(&manager, &id, SessionStatus::Idle).await;
+    let texts = teacher_texts(&state);
+    let last = texts.last().expect("an answer after the reload");
+    assert!(last.contains(&format!("({conv})")), "{last}");
 }
 
 fn hand_state(id: &str, status: &str, items: Value) -> Value {

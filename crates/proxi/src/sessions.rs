@@ -13,6 +13,7 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
+use crate::agy;
 use crate::anki_client::AnkiClient;
 use crate::anki_import::ImportRegistry;
 use crate::claude::{self, ClaudeBin, ClaudeLaunch, Grant, McpServer};
@@ -25,6 +26,7 @@ use crate::js;
 use crate::knowledge;
 use crate::lesson;
 use crate::limits::{self, LimitsCache};
+use crate::opencode;
 use crate::planstate;
 use crate::protocol::{
     ANKI_OPT_IN_QUESTION, GlobalEvent, JsNumber, MODELS, ServerEvent, SessionState, SessionStatus,
@@ -65,6 +67,8 @@ pub struct ManagerOptions {
     pub port: u16,
     pub token: String,
     pub claude: ClaudeBin,
+    pub agy: ClaudeBin,
+    pub opencode: ClaudeBin,
     pub add_dirs: Vec<PathBuf>,
     pub events: EventBus,
     pub limits: Arc<LimitsCache>,
@@ -1484,19 +1488,17 @@ impl SessionManager {
         if session.lock().expect("session lock").data.closing {
             return Err("Session is closed".to_string());
         }
-        if provider != "claude" {
-            return Err(format!(
-                "Il motore {provider} non è ancora disponibile nel backend Rust."
-            ));
-        }
         let settings = settings::read_settings(&opts.repo_root);
-        let model = config
-            .get("model")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| settings.teacher_model.clone());
-        let effort =
-            (settings.effort.teacher != "default").then(|| settings.effort.teacher.clone());
+        let alias = config.get("model").and_then(Value::as_str);
+        let model = engine::model_for(&settings, &provider, "teacher", alias);
+        let effort = engine::effort_for(&settings, &provider, "teacher");
+        let grant = vec![Grant::Read, Grant::Web];
+        let system_prompt = engine::with_engine_note(&prompt, &provider, &grant);
+        let bin = match provider.as_str() {
+            "agy" => opts.agy.clone(),
+            "opencode" => opts.opencode.clone(),
+            _ => opts.claude.clone(),
+        };
         let on_limits = {
             let repo_root = opts.repo_root.clone();
             let cache = opts.limits.clone();
@@ -1506,14 +1508,14 @@ impl SessionManager {
             })
         };
         let launch = ClaudeLaunch {
-            bin: opts.claude.clone(),
+            bin,
             repo_root: opts.repo_root.clone(),
             data_root: Some(opts.data_root.clone()),
             scratch_dir: self.0.session_dir(&id),
             model,
             effort,
-            system_prompt: prompt,
-            grant: vec![Grant::Read, Grant::Web],
+            system_prompt,
+            grant,
             mcp: McpServer {
                 name: "app".to_string(),
                 url: format!("http://127.0.0.1:{}/mcp/{}", opts.port, id),
@@ -1525,7 +1527,11 @@ impl SessionManager {
             settings,
             on_limits,
         };
-        Ok(claude::spawn_claude(launch))
+        Ok(match provider.as_str() {
+            "agy" => agy::spawn_agy(launch),
+            "opencode" => opencode::spawn_opencode(launch),
+            _ => claude::spawn_claude(launch),
+        })
     }
 
     async fn pump(

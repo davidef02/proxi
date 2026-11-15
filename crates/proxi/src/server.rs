@@ -20,14 +20,17 @@ use axum::{Json, Router};
 use futures_util::stream::Stream;
 use futures_util::StreamExt;
 use serde_json::{json, Value};
+use tokio::sync::OnceCell;
 use tokio::task::JoinHandle;
 use tower_http::services::{ServeDir, ServeFile};
 
+use crate::agy;
 use crate::anki_client::{self, AnkiClient};
 use crate::anki_import::ImportRegistry;
 use crate::anki_status::{start_review, status_all, status_for_course, ReviewStart};
 use crate::child;
 use crate::claude::{self, ClaudeBin};
+use crate::claude_status;
 use crate::course_data::{course_deck_name_for, valid_course};
 use crate::courses::{self, CoursesError};
 use crate::data_root::{self, DataRootSource, DATA_ROOT_ENV};
@@ -41,8 +44,10 @@ use crate::knowledge;
 use crate::lesson;
 use crate::limits::{self, LimitsCache};
 use crate::model_download;
+use crate::opencode;
 use crate::protocol::{
-    GlobalEvent, LearnerSettings, SettingsResponse, SyncStatus, UpdateStatusResponse, DEFAULT_PORT,
+    ClaudeStatusResponse, GlobalEvent, LearnerSettings, SettingsResponse, SyncStatus,
+    UpdateStatusResponse, DEFAULT_PORT,
 };
 use crate::sessions::{ManagerOptions, SessionManager};
 use crate::settings::{self, SettingsError};
@@ -174,6 +179,11 @@ struct AppState {
     imports: ImportRegistry,
     graph: Arc<GraphStore>,
     sessions: SessionManager,
+    claude_bin: String,
+    agy_bin: ClaudeBin,
+    opencode_bin: ClaudeBin,
+    agy_models: OnceCell<Vec<String>>,
+    opencode_models: OnceCell<Vec<String>>,
     npm_bin: Option<PathBuf>,
     installs: exercises::Installs,
     touched: std::sync::Mutex<HashMap<String, std::time::Instant>>,
@@ -292,6 +302,24 @@ pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
             .unwrap_or_else(|| "claude".to_string()),
         args: opts.bins.claude_args.clone(),
     };
+    let agy = ClaudeBin {
+        cmd: opts
+            .bins
+            .agy
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "agy".to_string()),
+        args: opts.bins.agy_args.clone(),
+    };
+    let opencode = ClaudeBin {
+        cmd: opts
+            .bins
+            .opencode
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "opencode".to_string()),
+        args: opts.bins.opencode_args.clone(),
+    };
     // The engine may read the folder that holds this repo (sibling checkouts); a repo pinned at a
     // filesystem root is its own add-dir.
     let add_dirs = vec![
@@ -301,6 +329,7 @@ pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
     ];
     let limits = Arc::new(LimitsCache::new());
     let imports = ImportRegistry::new();
+    let claude_cmd = claude.cmd.clone();
     let manager_opts = ManagerOptions {
         repo_root: repo_root.clone(),
         data_root: data_root.clone(),
@@ -308,6 +337,8 @@ pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
         port,
         token,
         claude,
+        agy: agy.clone(),
+        opencode: opencode.clone(),
         add_dirs,
         events: events.clone(),
         limits: limits.clone(),
@@ -337,6 +368,11 @@ pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
         imports,
         graph: Arc::new(GraphStore::new(data_root)),
         sessions: sessions.clone(),
+        claude_bin: claude_cmd,
+        agy_bin: agy,
+        opencode_bin: opencode,
+        agy_models: OnceCell::new(),
+        opencode_models: OnceCell::new(),
         npm_bin: opts.bins.npm,
         installs: exercises::Installs::default(),
         touched: std::sync::Mutex::new(HashMap::new()),
@@ -392,6 +428,15 @@ fn router(state: Arc<AppState>, sync: SyncService) -> Router {
             get(get_settings).post(post_settings).fallback(not_found),
         )
         .route("/api/limits", get(get_limits).fallback(not_found))
+        .route("/api/agy/models", get(get_agy_models).fallback(not_found))
+        .route(
+            "/api/opencode/models",
+            get(get_opencode_models).fallback(not_found),
+        )
+        .route(
+            "/api/claude/status",
+            get(get_claude_status).fallback(not_found),
+        )
         .route("/api/events", get(events_handler).fallback(not_found))
         .route(
             "/api/transcribe",
@@ -650,6 +695,25 @@ async fn get_limits(State(state): State<Arc<AppState>>) -> Json<Value> {
     }
     // Mirror Node's cache (limits.ts:24-33): never read the file per request.
     Json(state.limits.get(&state.repo_root).unwrap_or(Value::Null))
+}
+
+/// Node caches the launch list for the process; a per-server cache keeps in-process Rust tests apart.
+async fn get_agy_models(State(state): State<Arc<AppState>>) -> Json<Vec<String>> {
+    Json(state.agy_models.get_or_init(|| agy::list_agy_models(&state.agy_bin)).await.clone())
+}
+
+async fn get_opencode_models(State(state): State<Arc<AppState>>) -> Json<Vec<String>> {
+    Json(
+        state
+            .opencode_models
+            .get_or_init(|| opencode::list_opencode_models(&state.opencode_bin))
+            .await
+            .clone(),
+    )
+}
+
+async fn get_claude_status(State(state): State<Arc<AppState>>) -> Json<ClaudeStatusResponse> {
+    Json(claude_status::probe_claude_cli(&state.claude_bin, Duration::from_secs(5)).await)
 }
 
 /// JSON parse then object check, with zod's texts on a bad body; `Err` is the 400 to send.
