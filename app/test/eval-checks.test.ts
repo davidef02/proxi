@@ -140,6 +140,23 @@ test("buildFixture: the graph carries one proposition per concept with its fixtu
   }
 });
 
+test("buildFixture: the graph carries the fixture's three chains over its own propositions", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "eval-checks-"));
+  dirs.push(root);
+  await buildFixture(root, { graph: true });
+
+  const snap = await readSnapshot(root);
+  assert.equal(snap.chains.length, 3);
+  const ids = new Set(snap.propositions.map((p) => p.id));
+  assert.equal(ids.size, 7);
+  for (const c of snap.chains) {
+    for (const id of [...c.premises, c.conclusion]) {
+      assert.ok(ids.has(id), `chain ${c.id}: ${id} is one of the fixture's propositions`);
+    }
+  }
+  assert.equal(snap.logicalEdges.length, 4);
+});
+
 test("buildFixture: no graph means nothing to reuse", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "eval-checks-"));
   dirs.push(root);

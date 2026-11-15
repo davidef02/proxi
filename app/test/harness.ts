@@ -1,8 +1,9 @@
 // One test server for both backends: the in-process Node server or the spawned `proxi` binary, chosen by PROXI_TEST_SERVER.
-import { spawn } from "node:child_process";
-import fs from "node:fs";
 import path from "node:path";
 import { createServer } from "../server/main.ts";
+import { proxiBinary, spawnProxi } from "./binary.ts";
+
+export { proxiBinary };
 
 export const MODE_ENV = "PROXI_TEST_SERVER";
 export type ServerMode = "node" | "binary";
@@ -60,18 +61,6 @@ export function fakeFetch(urls: FakeUrls, base: typeof fetch = fetch): typeof fe
     const target = fake.replace(/\/+$/, "") + url.pathname + url.search;
     return base(input instanceof Request ? new Request(target, input) : target, init);
   };
-}
-
-/** The built `proxi` executable: `PROXI_BIN`, else the newest of target/release and target/debug. */
-export function proxiBinary(root = REPO_ROOT, env: NodeJS.ProcessEnv = process.env): string {
-  const exe = process.platform === "win32" ? "proxi.exe" : "proxi";
-  if (env.PROXI_BIN) {
-    if (fs.existsSync(env.PROXI_BIN)) return env.PROXI_BIN;
-    throw new Error(`PROXI_BIN not found: ${env.PROXI_BIN}`);
-  }
-  const candidates = ["release", "debug"].map((profile) => path.join(root, "target", profile, exe)).filter((p) => fs.existsSync(p));
-  if (candidates.length === 0) throw new Error("proxi binary not found under target/: run cargo build --release --locked");
-  return candidates.reduce((newest, p) => (fs.statSync(p).mtimeMs > fs.statSync(newest).mtimeMs ? p : newest));
 }
 
 export interface StartOptions {
@@ -177,78 +166,6 @@ async function startBinary(
     args.push("--claude-bin", claude.cmd);
     for (const arg of claude.args ?? []) args.push("--claude-bin-arg", arg);
   }
-
-  // No shell (L15): a quoted path breaks under cmd.exe.
-  const child = spawn(proxiBinary(), args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
-  let stdout = "";
-  let stderr = "";
-  let exited = false;
-  const exitedOnce = new Promise<void>((resolve) => child.once("exit", () => { exited = true; resolve(); }));
-  const kill = () => {
-    try {
-      child.kill();
-    } catch {
-      /* already gone */
-    }
-  };
-  process.once("exit", kill);
-
-  const started = new Promise<{ url: string; port: number }>((resolve, reject) => {
-    let settled = false;
-    const finish = (fn: () => void) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      fn();
-    };
-    const timer = setTimeout(() => {
-      finish(() => {
-        kill();
-        reject(new Error(`proxi serve did not print its URL within 30 s: ${stderr}`));
-      });
-    }, 30_000);
-    const reported = () => {
-      const m = stdout.match(/^Proxi: (http:\/\/127\.0\.0\.1:(\d+))\s*$/m);
-      return m ? { url: m[1], port: Number(m[2]) } : undefined;
-    };
-    child.stdout!.setEncoding("utf8");
-    child.stdout!.on("data", (chunk: string) => {
-      stdout += chunk;
-      const found = reported();
-      if (found) finish(() => resolve(found));
-    });
-    child.stderr!.setEncoding("utf8");
-    child.stderr!.on("data", (chunk: string) => { stderr += chunk; });
-    child.once("error", (error) => finish(() => reject(error)));
-    child.once("exit", (code) => {
-      finish(() => {
-        const found = reported();
-        if (found) resolve(found);
-        else reject(new Error(`proxi serve exited with code ${code}: ${stderr}`));
-      });
-    });
-  });
-
-  let endpoint: { url: string; port: number };
-  try {
-    endpoint = await started;
-  } catch (error) {
-    process.removeListener("exit", kill);
-    throw error;
-  }
-
-  let closing: Promise<void> | undefined;
-  return {
-    mode: "binary",
-    url: endpoint.url,
-    port: endpoint.port,
-    exited: exitedOnce,
-    close: () =>
-      (closing ??= (async () => {
-        process.removeListener("exit", kill);
-        if (exited) return;
-        kill();
-        await exitedOnce;
-      })()),
-  };
+  const p = await spawnProxi(args);
+  return { mode: "binary", url: p.url, port: p.port, exited: p.exited, close: p.close };
 }

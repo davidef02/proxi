@@ -46,9 +46,14 @@ cargo test --locked # Rust backend (crates/proxi)
 npm run e2e         # app, Playwright (Chromium)
 ```
 
-`npm run eval -- [scenario] [--engine claude|agy|opencode]` drives the real configured engine on fixed
-scenarios (`app/eval/scenarios.ts`, fixture Vue graph in `app/eval/fixture.ts`). Never in CI; the agent
-runs it after changing teach/plan prompts.
+`npm run eval -- [scenario] [--engine claude|agy|opencode] [--settings <file>] [--timeout <min>]` drives
+the real configured engine on fixed scenarios (`app/eval/scenarios.ts`, fixture Vue graph in
+`app/eval/fixture.ts`) through the built `proxi` binary over HTTP/SSE only (build it first:
+`cargo build --release --locked`; `PROXI_BIN` overrides the path). Each scenario gets a temp repo and data
+folder; the temp settings copy drops `syncProvider` so the throwaway data never syncs.
+`EVAL_FAKE_ENGINE=<script.mjs>` runs a fake engine instead of Claude (`app/test/fake-claude.mjs`; until
+#18/#21 serve the MCP tools no scenario reaches its stop card), `EVAL_KEEP=1` keeps the temp folders. Only
+`claude` runs in the Rust backend for now. Never in CI; the agent runs it after changing teach/plan prompts.
 
 `npm run golden:capture` is manual, never in CI: it rewrites the HTTP goldens in
 `crates/proxi/tests/fixtures/golden/*.json` from the Node server, and `lesson-cli.json` / `anki-cli.json`
@@ -58,7 +63,8 @@ changes on purpose, before the cutover, and commit the fixtures with that change
 
 Server tests start servers through `startServer` in `app/test/harness.ts` (`PROXI_TEST_SERVER=node|binary`,
 default node) with the external services faked by `app/test/fake-servers.ts`; a test file that runs against
-the binary uses only HTTP/SSE and is listed in `RUST_PORTED` of `scripts/test-rust.mjs`.
+the binary uses only HTTP/SSE and is listed in `RUST_PORTED` of `scripts/test-rust.mjs`. `app/test/binary.ts`
+locates and spawns the binary with no server import; the eval uses it too.
 
 ## The `proxi` binary
 
