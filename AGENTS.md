@@ -18,11 +18,13 @@ Everything below is for teaching.
 ## Orient first
 
 ```bash
-npm run home -- chapters    # every course, its lessons, done vs to do; writes nothing
-npm run data -- where       # the data folder: courses/, graph/, decks/, curriculum.json
+proxi home chapters         # every course, its lessons, done vs to do; writes nothing
+proxi data where            # the data folder: courses/, graph/, decks/, curriculum.json
 ```
 
-Then read the target course's `<dataRoot>/courses/<course>/MISSION.md` (`<dataRoot>` from `npm run data -- where`):
+`proxi` is on PATH after `npm run desktop:install` (it builds the binary); in a shell opened before that, close and reopen it.
+
+Then read the target course's `<dataRoot>/courses/<course>/MISSION.md` (`<dataRoot>` from `proxi data where`):
 destination, constraints, out of scope.
 Use the vocabulary in [`CONTEXT.md`](CONTEXT.md) (chapter = course directory → lesson → node).
 

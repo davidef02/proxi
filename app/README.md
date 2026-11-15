@@ -8,13 +8,15 @@ read-only built-ins (claude: `Read`, `Glob`, `Grep`, `WebSearch`, `WebFetch`; ag
 
 ## Run
 
-Prerequisites: Node 24, `claude` (or `agy`) on PATH and logged in (once interactively), optionally
-Anki with AnkiConnect for card sync, and `npm install` in the repo root. The exercises' dependencies in
-`courses/<course>/exercises` are installed by the app itself on the first test run (it says so while it works).
+Prerequisites: Node 24, Rust stable (`cargo`) to build the `proxi` binary, `claude` (or `agy`) on PATH and
+logged in (once interactively), optionally Anki with AnkiConnect for card sync, and `npm install` in the repo
+root. The exercises' dependencies in `courses/<course>/exercises` are installed by the app itself on the first
+test run (it says so while it works).
 
-**Desktop app (normal use):** `npm run desktop:install` once creates the "Proxi" shortcuts (Start menu and
-Desktop). The window rebuilds the UI by itself when the sources changed, so after a `git pull` you just reopen it.
-Closing the window stops every engine process it started. Details: `docs/desktop.md`.
+**Desktop app (normal use):** `npm run desktop:install` once builds the `proxi` binary, puts it on your user
+PATH and creates the "Proxi" shortcuts (Start menu and Desktop). The window rebuilds the UI by itself when the
+sources changed, so after a `git pull` you just reopen it. Closing the window stops every engine process it
+started. Details: `docs/desktop.md`.
 
 Browser instead: `npm run app` (build + http://127.0.0.1:4317) or `npm run app:serve`; stop with Ctrl+C.
 Dev: `npm run app:serve` + `npm run app:web` (Vite on :5173 with proxy).
@@ -90,7 +92,7 @@ time budget: the app fetches the model in the background after the restart.
 
 Learner data (`courses/`, `graph/`, `decks/`, `curriculum.json`, the generated `index.html`) lives in the **data
 folder** `dataRoot`, outside the code repo. Resolution order (`extensions/data-root.ts`): env `LEARNER_DATA_ROOT`,
-then `<repo>/.learner/config.json` `{dataRoot}`, then `~/Documents/proxi-data`. `npm run data -- where` prints it.
+then `<repo>/.learner/config.json` `{dataRoot}`, then `~/Documents/proxi-data`. `proxi data where` prints it.
 Settings → Dati changes the folder; the server restarts to use it. `.learner/` (settings, sessions, jobs, manifests,
 secrets, conflicts, trash) stays under the repo and is never synced.
 

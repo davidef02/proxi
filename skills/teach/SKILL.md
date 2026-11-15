@@ -111,7 +111,7 @@ If, reading the finished set cold, you can still tell which is right without kno
 ### Phase 0 — Place the lesson in its course (one look, then move on)
 
 ```bash
-npm run home -- chapters
+proxi home chapters
 ```
 
 That prints every course and which of its lessons are done. Three cases, and only the third costs
@@ -151,7 +151,7 @@ Do not advance to Phase 2 until, for each goal-relevant strand, you can state co
 
 **1c. Anki Flashcard Opt-In — explicitly ask the user.** Ask:
 > *"Vuoi che vengano create e sincronizzate le flashcard Anki per questa sessione? (Sì / No)"*
-- **If Yes**: Activate Anki card formulation during Phase 3 Capture and Phase 4 Close (`npm run anki sync`).
+- **If Yes**: Activate Anki card formulation during Phase 3 Capture and Phase 4 Close (`proxi anki sync`).
 - **If No**: **DO NOT** generate or sync Anki cards. Only generate the standalone HTML lesson and reference sheet. Cards are NEVER created without explicit opt-in during Phase 1.
 
 ### Phase 2 — Plan (think hard here)
@@ -179,9 +179,9 @@ A good plan is what makes the teaching feel inevitable instead of arbitrary.
 
 **Then stop and wait for his go-ahead.** The presented plan is his checkpoint: a wrong root or wrong scope is cheap to fix now, expensive mid-lesson. Do not begin Phase 3 until he okays the plan.
 
-**Initialize the lesson artifact immediately upon approval, inside its course.** `courses/...` paths are relative to the data folder (`npm run data -- where`):
+**Initialize the lesson artifact immediately upon approval, inside its course.** `courses/...` paths are relative to the data folder (`proxi data where`):
 ```bash
-npm run lesson init -- --topic "<topic>" --title "<title>" --dag "<mermaid-dag>" --goal "<goal>" \
+proxi lesson init --topic "<topic>" --title "<title>" --dag "<mermaid-dag>" --goal "<goal>" \
   --out-dir courses/<course>/lessons
 ```
 Store the resulting lesson path (e.g. `courses/docker/lessons/0012-<slug>.html`) to append nodes
@@ -210,11 +210,11 @@ For **every node** (each unconditional truth *and* each non-trivial reasoning st
 5. **Capture.** Immediately persist the verified node into permanent learning artifacts in the background:
    - **Append to HTML lesson**:
      ```bash
-     npm run lesson append -- --lesson courses/<course>/lessons/000N-<slug>.html --node-json '<CognitiveNodePayload>'
+     proxi lesson append --lesson courses/<course>/lessons/000N-<slug>.html --node-json '<CognitiveNodePayload>'
      ```
    - **Synchronize Anki cards (ONLY if opted in during Phase 1c)**:
      ```bash
-     npm run anki sync -- --lesson courses/<course>/lessons/000N-<slug>.html
+     proxi anki sync --lesson courses/<course>/lessons/000N-<slug>.html
      ```
    - Capture operates non-blockingly without dumping raw payloads into the chat (see [`docs/agents/pedagogy.md`](../../docs/agents/pedagogy.md) and [`docs/agents/lessons-and-anki.md`](../../docs/agents/lessons-and-anki.md) for data schemas).
 
@@ -230,15 +230,15 @@ Once all nodes in the DAG have been completed:
 
 1. **Compile Reference Cheat Sheet** into the same course:
    ```bash
-   npm run lesson compile-ref -- --lesson courses/<course>/lessons/000N-<slug>.html \
+   proxi lesson compile-ref --lesson courses/<course>/lessons/000N-<slug>.html \
      --out-dir courses/<course>/reference
    ```
 2. **Final Deck Verification (ONLY if opted in during Phase 1c)**: Ensure `./decks/<topic-slug>.tsv` is exported and AnkiConnect sync is attempted.
-3. **Check the status board.** `lesson init`, `append` and `compile-ref` already regenerate
-   `index.html` (without card counts if Anki is closed), so the lesson is on it from `init`
-   onward. After `anki sync`, refresh once more so the card counts catch up:
+3. **Refresh the status board.** The lesson commands do not touch `index.html`, so regenerate it
+   now (after `anki sync` too, so the card counts are current):
    ```bash
-   npm run home                 # Anki is usually open at this point
+   proxi home                 # Anki is usually open at this point
+   proxi home --no-anki       # Anki closed: without card counts
    ```
    If the lesson reads as "Fuori dal piano" and you expected it inside a course, its title drifted
    from the plan — say so plainly rather than leaving a silent mismatch on the board.

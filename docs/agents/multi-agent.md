@@ -10,13 +10,13 @@ System rules bind automatically from `AGENTS.md` (Antigravity, OpenCode / Pi) an
 | **Probing & Quizzes** | `ask_question` / chat turns | `quiz` & `ask_user_question` TUI (`extensions/`) | Chat turns (symmetric bare claims) |
 | **Subagent Dispatch** | Native `invoke_subagent` | `subagent(agent="...", task="...")` / `pi-interactive-subagents` | Task delegation / `agents/*.md` |
 | **Visual Rendering** | Local CLI render + inspect | Legacy makers (render tools removed); else local CLI render + inspect | Local CLI render + inspect |
-| **Lessons, Anki, Board** | `npm run lesson` / `anki` / `home` | Programmatic TS or the same CLI | `npm run lesson` / `anki` / `home` |
+| **Lessons, Anki, Board** | `proxi lesson` / `anki` / `home` | Programmatic TS or the same CLI | `proxi lesson` / `anki` / `home` |
 | **Skills** | `skills/` or `.agents/skills/` | `skills/` | `skills/` as slash commands (`/teach`, `/plan`) |
 
 ## Data folder
 
 Learner data (`courses/`, `graph/`, `decks/`, `curriculum.json`) is not in the repo. Agents outside the app run
-`npm run data -- where` to get `<dataRoot>`, then read and write `<dataRoot>/...` with absolute paths. Set
+`proxi data where` to get `<dataRoot>`, then read and write `<dataRoot>/...` with absolute paths. Set
 `LEARNER_DATA_ROOT` to override the folder.
 
 ---
