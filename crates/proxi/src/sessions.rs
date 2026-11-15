@@ -1,0 +1,1792 @@
+//! Session manager: persistence, engine events to chat items, per-session events (port of `app/server/sessions.ts`).
+
+use std::collections::HashMap;
+use std::fs;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, Weak};
+use std::time::Duration;
+
+use axum::http::StatusCode;
+use indexmap::IndexMap;
+use serde::Serialize;
+use serde_json::{Map, Value, json};
+use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+
+use crate::anki_client::AnkiClient;
+use crate::anki_import::ImportRegistry;
+use crate::claude::{self, ClaudeBin, ClaudeLaunch, Grant, McpServer};
+use crate::context::{self, PromptInput};
+use crate::course_data::valid_course;
+use crate::courses::{self, CoursesError};
+use crate::engine::{self, EngineEvent, EngineHandle, EngineMsg};
+use crate::events::{self, EventBus};
+use crate::js;
+use crate::knowledge;
+use crate::lesson;
+use crate::limits::{self, LimitsCache};
+use crate::planstate;
+use crate::protocol::{
+    ANKI_OPT_IN_QUESTION, GlobalEvent, JsNumber, MODELS, ServerEvent, SessionState, SessionStatus,
+    Usage, session_summary,
+};
+use crate::settings;
+use crate::slug;
+use crate::turns::{LastTurn, TurnAction, TurnHost, Turns};
+
+/// A request error the routes turn into `{"error": …}` with this status.
+#[derive(Debug)]
+pub struct HttpError {
+    pub status: StatusCode,
+    pub message: String,
+}
+
+impl HttpError {
+    pub fn new(status: u16, message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::from_u16(status).expect("a known HTTP status"),
+            message: message.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for HttpError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for HttpError {}
+
+pub struct ManagerOptions {
+    pub repo_root: PathBuf,
+    pub data_root: PathBuf,
+    pub code_root: PathBuf,
+    pub port: u16,
+    pub token: String,
+    pub claude: ClaudeBin,
+    pub add_dirs: Vec<PathBuf>,
+    pub events: EventBus,
+    pub limits: Arc<LimitsCache>,
+    pub anki: AnkiClient,
+    pub imports: ImportRegistry,
+}
+
+/// Interactive tools: their card is the representation, no chip.
+const NO_CHIP: [&str; 4] = [
+    "mcp__app__quiz",
+    "mcp__app__ask",
+    "mcp__app__propose_plan",
+    "mcp__app__propose_curriculum",
+];
+
+#[derive(Clone)]
+struct PendingReq {
+    item_id: String,
+    #[allow(dead_code)]
+    kind: String,
+    anki_opt_in: bool,
+}
+
+struct Session {
+    data: SessionData,
+    turns: Turns,
+}
+
+struct SessionData {
+    state: SessionState,
+    /// Engine pinned at creation: a resume token only means something to the engine that issued it.
+    provider: String,
+    /// Title of a session whose opening turn was never sent (Anki question unanswered, start failed, app restarted).
+    pending_start: Option<String>,
+    pending: IndexMap<String, PendingReq>,
+    subs: Vec<UnboundedSender<String>>,
+    closing: bool,
+    /// Teacher items by message id: stream order (for text-block ordinals) and count of blocks finalised.
+    streamed: HashMap<String, Vec<String>>,
+    finalised: HashMap<String, usize>,
+    save_pending: bool,
+    manager: Weak<Shared>,
+}
+
+struct Shared {
+    opts: ManagerOptions,
+    sessions: Mutex<IndexMap<String, Arc<Mutex<Session>>>>,
+    sessions_touch_pending: AtomicBool,
+}
+
+#[derive(Clone)]
+pub struct SessionManager(Arc<Shared>);
+
+/// Runs `task` after `delay` on the runtime, or on a plain thread when there is none (the manager
+/// loads inside `spawn_blocking`, where a runtime may not be in scope).
+fn spawn_delayed(delay: Duration, task: impl FnOnce() + Send + 'static) {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            handle.spawn(async move {
+                tokio::time::sleep(delay).await;
+                task();
+            });
+        }
+        Err(_) => {
+            std::thread::spawn(move || {
+                std::thread::sleep(delay);
+                task();
+            });
+        }
+    }
+}
+
+/// JS `s.length` of the zod limits: UTF-16 units, not chars.
+fn utf16_len(text: &str) -> usize {
+    text.encode_utf16().count()
+}
+
+/// Node's `trunc`: slice to `n` UTF-16 units, then an ellipsis.
+fn trunc(text: &str, n: usize) -> String {
+    if utf16_len(text) <= n {
+        return text.to_string();
+    }
+    let mut out = String::new();
+    let mut units = 0;
+    for c in text.chars() {
+        let width = c.len_utf16();
+        if units + width > n {
+            break;
+        }
+        units += width;
+        out.push(c);
+    }
+    out.push('…');
+    out
+}
+
+/// One zod issue as Node joins it: `<path>: <message>`.
+fn issue(path: &str, message: &str) -> String {
+    if path.is_empty() {
+        message.to_string()
+    } else {
+        format!("{path}: {message}")
+    }
+}
+
+/// Node's `sessionConfigSchema`: known keys only, in schema order.
+pub fn validate_config(body: &Value) -> Result<Map<String, Value>, String> {
+    let Some(object) = body.as_object() else {
+        return Err("Invalid input: expected object".to_string());
+    };
+    let mut issues: Vec<String> = Vec::new();
+    let mut config = Map::new();
+
+    match object.get("kind") {
+        Some(Value::String(kind)) if matches!(kind.as_str(), "teach" | "plan" | "practice") => {
+            config.insert("kind".to_string(), Value::String(kind.clone()));
+        }
+        Some(_) => issues.push(issue(
+            "kind",
+            "Invalid option: expected one of \"teach\"|\"plan\"|\"practice\"",
+        )),
+        None => issues.push(issue(
+            "kind",
+            "Invalid input: expected string, received undefined",
+        )),
+    }
+
+    match object.get("course") {
+        Some(Value::String(course)) if valid_course(course) => {
+            config.insert("course".to_string(), Value::String(course.clone()));
+        }
+        Some(Value::String(_)) => issues.push(issue(
+            "course",
+            "course must be a kebab-case directory name",
+        )),
+        Some(_) => issues.push(issue(
+            "course",
+            "Invalid input: expected string, received non-string",
+        )),
+        None => issues.push(issue(
+            "course",
+            "Invalid input: expected string, received undefined",
+        )),
+    }
+
+    if let Some(value) = object.get("model") {
+        match value {
+            Value::String(model) if MODELS.contains(&model.as_str()) => {
+                config.insert("model".to_string(), value.clone());
+            }
+            _ => issues.push(issue(
+                "model",
+                "Invalid option: expected one of \"opus\"|\"sonnet\"|\"haiku\"",
+            )),
+        }
+    }
+
+    if let Some(value) = object.get("practicePropositions") {
+        validate_string_array("practicePropositions", value, &mut config, &mut issues);
+    }
+
+    if let Some(value) = object.get("target") {
+        match value.as_object() {
+            None => issues.push(issue("target", "Invalid input: expected object")),
+            Some(target) => match target.get("mode").and_then(Value::as_str) {
+                Some("planned") => {
+                    let mut out = Map::new();
+                    out.insert("mode".to_string(), Value::String("planned".to_string()));
+                    match target.get("title") {
+                        Some(Value::String(title)) if !title.is_empty() => {
+                            out.insert("title".to_string(), Value::String(title.clone()));
+                        }
+                        _ => issues.push(issue(
+                            "target.title",
+                            "Invalid input: expected a non-empty string",
+                        )),
+                    }
+                    config.insert("target".to_string(), Value::Object(out));
+                }
+                Some("existing") => {
+                    let mut out = Map::new();
+                    out.insert("mode".to_string(), Value::String("existing".to_string()));
+                    match target.get("lessonPath") {
+                        Some(Value::String(path)) if !path.is_empty() => {
+                            out.insert("lessonPath".to_string(), Value::String(path.clone()));
+                        }
+                        _ => issues.push(issue(
+                            "target.lessonPath",
+                            "Invalid input: expected a non-empty string",
+                        )),
+                    }
+                    config.insert("target".to_string(), Value::Object(out));
+                }
+                Some("free") => {
+                    let mut out = Map::new();
+                    out.insert("mode".to_string(), Value::String("free".to_string()));
+                    config.insert("target".to_string(), Value::Object(out));
+                }
+                _ => issues.push(issue(
+                    "target.mode",
+                    "Invalid option: expected one of \"planned\"|\"existing\"|\"free\"",
+                )),
+            },
+        }
+    }
+
+    if let Some(value) = object.get("ankiOptIn") {
+        match value {
+            Value::Bool(_) => {
+                config.insert("ankiOptIn".to_string(), value.clone());
+            }
+            _ => issues.push(issue("ankiOptIn", "Invalid input: expected boolean")),
+        }
+    }
+
+    if let Some(value) = object.get("chapterTitle") {
+        match value {
+            Value::String(title) if !title.is_empty() => {
+                config.insert("chapterTitle".to_string(), value.clone());
+            }
+            _ => issues.push(issue(
+                "chapterTitle",
+                "Invalid input: expected a non-empty string",
+            )),
+        }
+    }
+
+    if let Some(value) = object.get("practiceNodes") {
+        validate_string_array("practiceNodes", value, &mut config, &mut issues);
+    }
+
+    if let Some(value) = object.get("note") {
+        match value {
+            Value::String(note) if utf16_len(note) <= 5000 => {
+                config.insert("note".to_string(), value.clone());
+            }
+            _ => issues.push(issue(
+                "note",
+                "Too big: expected string to have <=5000 characters",
+            )),
+        }
+    }
+
+    if issues.is_empty() {
+        Ok(config)
+    } else {
+        Err(issues.join("; "))
+    }
+}
+
+fn validate_string_array(
+    key: &str,
+    value: &Value,
+    config: &mut Map<String, Value>,
+    issues: &mut Vec<String>,
+) {
+    match value.as_array() {
+        None => issues.push(issue(key, "Invalid input: expected array")),
+        Some(items) if items.iter().all(Value::is_string) => {
+            config.insert(key.to_string(), value.clone());
+        }
+        Some(_) => issues.push(issue(
+            key,
+            "Invalid input: expected string inside the array",
+        )),
+    }
+}
+
+/// `main.ts`'s `textBody`, before the id lookup.
+fn validate_message(body: &Value) -> Result<(String, Option<Value>), HttpError> {
+    let Some(object) = body.as_object() else {
+        return Err(HttpError::new(400, "Invalid input: expected object"));
+    };
+    let text = match object.get("text") {
+        Some(Value::String(text)) if (1..=20000).contains(&utf16_len(text)) => text.clone(),
+        Some(Value::String(_)) => {
+            return Err(HttpError::new(
+                400,
+                "text: Too small or too big: expected string to have >=1 and <=20000 characters",
+            ));
+        }
+        _ => {
+            return Err(HttpError::new(400, "text: Invalid input: expected string"));
+        }
+    };
+    let attachments = match object.get("attachments") {
+        None | Some(Value::Null) => None,
+        Some(Value::Array(items)) if items.is_empty() => Some(Value::Array(Vec::new())),
+        Some(Value::Array(_)) => {
+            return Err(HttpError::new(
+                400,
+                "Gli allegati non sono ancora supportati.",
+            ));
+        }
+        Some(_) => {
+            return Err(HttpError::new(
+                400,
+                "attachments: Invalid input: expected array",
+            ));
+        }
+    };
+    Ok((text, attachments))
+}
+
+/// The persisted wrapper, in Node's key order; absent optionals are omitted like `undefined`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StateFile<'a> {
+    state: &'a SessionState,
+    provider: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resume: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pending_start: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_turn: Option<&'a LastTurn>,
+    can_retry: bool,
+}
+
+impl SessionData {
+    fn item_index(&self, id: &str) -> Option<usize> {
+        self.state
+            .items
+            .iter()
+            .position(|item| item.get("id").and_then(Value::as_str) == Some(id))
+    }
+
+    /// Appends, or merges into the stored item so its key order survives (Node mutates one object).
+    fn upsert(&mut self, item: Value) {
+        let id = item.get("id").cloned().unwrap_or(Value::Null);
+        let index = self
+            .state
+            .items
+            .iter()
+            .position(|existing| existing.get("id") == Some(&id));
+        let stored = match index {
+            Some(index) => {
+                if let (Some(existing), Some(incoming)) =
+                    (self.state.items[index].as_object_mut(), item.as_object())
+                {
+                    for (key, value) in incoming {
+                        existing.insert(key.clone(), value.clone());
+                    }
+                } else {
+                    self.state.items[index] = item;
+                }
+                self.state.items[index].clone()
+            }
+            None => {
+                self.state.items.push(item.clone());
+                item
+            }
+        };
+        self.notify(ServerEvent::Item { item: stored });
+    }
+
+    fn notify(&mut self, event: ServerEvent) {
+        self.state.updated_at = events::iso_now();
+        self.schedule_save();
+        let Ok(payload) = serde_json::to_string(&event) else {
+            return;
+        };
+        self.subs
+            .retain(|sender| sender.send(payload.clone()).is_ok());
+    }
+
+    fn schedule_save(&mut self) {
+        if self.save_pending {
+            return;
+        }
+        self.save_pending = true;
+        let Some(shared) = self.manager.upgrade() else {
+            return;
+        };
+        let id = self.state.id.clone();
+        spawn_delayed(Duration::from_millis(300), move || {
+            shared.flush_if_pending(&id);
+        });
+    }
+
+    fn touch_sessions(&mut self) {
+        if let Some(shared) = self.manager.upgrade() {
+            shared.touch_sessions();
+        }
+    }
+
+    fn set_pending(&mut self) {
+        let last = self.pending.keys().last().cloned();
+        self.state.pending_request_id = last.clone();
+        self.notify(ServerEvent::Pending { request_id: last });
+    }
+
+    fn apply_status(&mut self, status: SessionStatus, error: Option<String>, retryable: bool) {
+        self.state.status = status;
+        self.state.last_error = if status == SessionStatus::Error {
+            error.clone()
+        } else {
+            None
+        };
+        self.state.retryable = retryable;
+        self.touch_sessions();
+        self.notify(ServerEvent::Status {
+            status,
+            error,
+            retryable,
+        });
+    }
+
+    fn cancel_pending(&mut self) {
+        let entries: Vec<(String, PendingReq)> = self
+            .pending
+            .iter()
+            .map(|(key, pending)| (key.clone(), pending.clone()))
+            .collect();
+        let mut cancelled_opt_in = false;
+        for (request_id, pending) in entries {
+            if let Some(index) = self.item_index(&pending.item_id) {
+                let item = &mut self.state.items[index];
+                if item.get("requestId").is_some() {
+                    item["cancelled"] = Value::Bool(true);
+                    let item = item.clone();
+                    self.notify(ServerEvent::Item { item });
+                }
+            }
+            self.pending.shift_remove(&request_id);
+            if pending.anki_opt_in && !self.closing {
+                cancelled_opt_in = true;
+            }
+        }
+        if self.state.pending_request_id.is_some() {
+            self.set_pending();
+        }
+        if self.state.status == SessionStatus::Waiting && self.pending.is_empty() {
+            let retryable = self.state.retryable;
+            self.apply_status(SessionStatus::Running, None, retryable);
+        }
+        // The rejected `askAnkiOptIn` promise lands here: nothing ran, so the session is idle again.
+        if cancelled_opt_in {
+            let retryable = self.state.retryable;
+            self.apply_status(SessionStatus::Idle, None, retryable);
+        }
+    }
+
+    fn notice(&mut self, level: &str, text: &str) {
+        self.upsert(json!({
+            "id": format!("n:{}", engine::uuid_v4()),
+            "at": events::iso_now(),
+            "kind": "notice",
+            "level": level,
+            "text": text,
+        }));
+    }
+
+    fn learner(&mut self, text: &str) {
+        self.upsert(json!({
+            "id": format!("l:{}", engine::uuid_v4()),
+            "at": events::iso_now(),
+            "kind": "learner",
+            "text": text,
+        }));
+    }
+
+    /// Node's `onEvent`: engine events to chat items and usage.
+    fn event(&mut self, event: &EngineEvent, late: bool) {
+        match event {
+            EngineEvent::Init { mcp_servers, .. } => {
+                self.schedule_save(); // a new resume token
+                let app = mcp_servers
+                    .iter()
+                    .find(|server| server.name == "app" && server.status != "connected");
+                if let Some(app) = app {
+                    let text = format!(
+                        "Il server degli strumenti non è connesso (stato: {}).",
+                        app.status
+                    );
+                    self.notice("error", &text);
+                }
+            }
+            EngineEvent::TextStart { message_id, index } => {
+                self.teacher_item(message_id, *index);
+            }
+            EngineEvent::TextDelta {
+                message_id,
+                index,
+                text,
+            } => {
+                let id = self.teacher_item(message_id, *index);
+                if let Some(index) = self.item_index(&id) {
+                    let item = &mut self.state.items[index];
+                    let current = item.get("text").and_then(Value::as_str).unwrap_or("");
+                    item["text"] = Value::String(format!("{current}{text}"));
+                }
+                self.notify(ServerEvent::Delta {
+                    item_id: id,
+                    text: text.clone(),
+                });
+            }
+            EngineEvent::Assistant {
+                message_id,
+                texts,
+                tool_uses,
+            } => {
+                for (_, text) in texts {
+                    self.finalise(message_id, text);
+                }
+                for tool in tool_uses {
+                    if NO_CHIP.contains(&tool.name.as_str()) {
+                        continue;
+                    }
+                    let mut item = Map::new();
+                    item.insert("id".to_string(), json!(format!("tool:{}", tool.id)));
+                    item.insert("at".to_string(), json!(events::iso_now()));
+                    item.insert("kind".to_string(), json!("tool"));
+                    item.insert("tool".to_string(), json!(tool.name));
+                    if let Some(input) = &tool.input {
+                        item.insert("input".to_string(), input.clone());
+                    }
+                    item.insert("status".to_string(), json!("running"));
+                    self.upsert(Value::Object(item));
+                }
+            }
+            EngineEvent::ToolResult {
+                tool_use_id,
+                is_error,
+                text,
+            } => {
+                let id = format!("tool:{tool_use_id}");
+                let tool_item = self.item_index(&id).filter(|index| {
+                    self.state.items[*index].get("kind").and_then(Value::as_str) == Some("tool")
+                });
+                if let Some(index) = tool_item {
+                    let item = &mut self.state.items[index];
+                    let status = if *is_error { "error" } else { "done" };
+                    item["status"] = Value::String(status.to_string());
+                    item["resultText"] = Value::String(trunc(text, 2000));
+                    let item = item.clone();
+                    self.upsert(item);
+                }
+            }
+            EngineEvent::Result {
+                input_tokens,
+                output_tokens,
+                cache_read_tokens,
+                cache_creation_tokens,
+                ..
+            } => {
+                {
+                    let usage = &mut self.state.usage;
+                    usage.input_tokens = JsNumber(usage.input_tokens.0 + input_tokens);
+                    usage.output_tokens = JsNumber(usage.output_tokens.0 + output_tokens);
+                    usage.cache_read_tokens =
+                        JsNumber(usage.cache_read_tokens.0 + cache_read_tokens);
+                    usage.cache_creation_tokens =
+                        JsNumber(usage.cache_creation_tokens.0 + cache_creation_tokens);
+                    usage.turns = JsNumber(usage.turns.0 + 1.0);
+                }
+                let usage = self.state.usage.clone();
+                self.notify(ServerEvent::Usage { usage });
+                // Late result of a given-up turn while a newer one runs: usage counted, state untouched.
+                if late {
+                    return;
+                }
+                self.streamed.clear();
+                self.finalised.clear();
+                let ids: Vec<String> = self
+                    .state
+                    .items
+                    .iter()
+                    .filter(|item| {
+                        item.get("kind").and_then(Value::as_str) == Some("teacher")
+                            && item.get("streaming").and_then(Value::as_bool) == Some(true)
+                    })
+                    .filter_map(|item| item.get("id").and_then(Value::as_str).map(str::to_string))
+                    .collect();
+                for id in ids {
+                    if let Some(index) = self.item_index(&id) {
+                        self.state.items[index]["streaming"] = Value::Bool(false);
+                        let item = self.state.items[index].clone();
+                        self.upsert(item);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn teacher_item(&mut self, message_id: &str, index: f64) -> String {
+        let id = format!("t:{message_id}:{}", js::js_number_string(index));
+        if self.item_index(&id).is_none() {
+            self.streamed
+                .entry(message_id.to_string())
+                .or_default()
+                .push(id.clone());
+            self.upsert(json!({
+                "id": id,
+                "at": events::iso_now(),
+                "kind": "teacher",
+                "text": "",
+                "streaming": true,
+            }));
+        }
+        id
+    }
+
+    fn finalise(&mut self, message_id: &str, text: &str) {
+        let k = self.finalised.get(message_id).copied().unwrap_or(0);
+        self.finalised.insert(message_id.to_string(), k + 1);
+        let id = self
+            .streamed
+            .get(message_id)
+            .and_then(|ids| ids.get(k))
+            .cloned()
+            .unwrap_or_else(|| format!("t:{message_id}:f{k}"));
+        let item = match self.item_index(&id) {
+            Some(index) => {
+                let item = &mut self.state.items[index];
+                item["text"] = Value::String(text.to_string());
+                item["streaming"] = Value::Bool(false);
+                item.clone()
+            }
+            None => json!({
+                "id": id,
+                "at": events::iso_now(),
+                "kind": "teacher",
+                "text": text,
+                "streaming": false,
+            }),
+        };
+        self.upsert(item);
+    }
+}
+
+impl TurnHost for SessionData {
+    fn status(&self) -> SessionStatus {
+        self.state.status
+    }
+
+    fn set_status(&mut self, status: SessionStatus, error: Option<String>, retryable: bool) {
+        self.apply_status(status, error, retryable);
+    }
+
+    fn notice(&mut self, level: &str, text: &str) {
+        SessionData::notice(self, level, text);
+    }
+
+    fn learner(&mut self, text: &str) {
+        SessionData::learner(self, text);
+    }
+
+    fn event(&mut self, event: &EngineEvent, late: bool) {
+        SessionData::event(self, event, late);
+    }
+
+    fn pending(&self) -> usize {
+        self.pending.len()
+    }
+
+    fn cancel_pending(&mut self) {
+        SessionData::cancel_pending(self);
+    }
+}
+
+impl Shared {
+    fn sessions_root(&self) -> PathBuf {
+        self.opts.repo_root.join(".learner").join("sessions")
+    }
+
+    fn session_dir(&self, id: &str) -> PathBuf {
+        self.sessions_root().join(id)
+    }
+
+    /// Debounced (300 ms) app-wide hint: the sessions list moved.
+    fn touch_sessions(self: &Arc<Self>) {
+        if self.sessions_touch_pending.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let weak = Arc::downgrade(self);
+        spawn_delayed(Duration::from_millis(300), move || {
+            let Some(shared) = weak.upgrade() else {
+                return;
+            };
+            shared.sessions_touch_pending.store(false, Ordering::SeqCst);
+            shared.opts.events.emit(&GlobalEvent::Sessions);
+        });
+    }
+
+    fn flush_if_pending(&self, id: &str) {
+        let Some(session) = self
+            .sessions
+            .lock()
+            .expect("sessions lock")
+            .get(id)
+            .cloned()
+        else {
+            return;
+        };
+        let mut guard = session.lock().expect("session lock");
+        if !guard.data.save_pending {
+            return; // an explicit flush already wrote this round
+        }
+        let Session { data, turns } = &mut *guard;
+        flush(self, data, turns);
+    }
+
+    fn session(&self, id: &str) -> Option<Arc<Mutex<Session>>> {
+        self.sessions
+            .lock()
+            .expect("sessions lock")
+            .get(id)
+            .cloned()
+    }
+}
+
+fn flush(shared: &Shared, data: &mut SessionData, turns: &Turns) {
+    data.save_pending = false;
+    let dir = shared.session_dir(&data.state.id);
+    if let Err(error) = fs::create_dir_all(&dir) {
+        eprintln!("[sessions] save failed: {error}");
+        return;
+    }
+    let file = StateFile {
+        state: &data.state,
+        provider: &data.provider,
+        resume: turns.resume.as_deref(),
+        pending_start: data.pending_start.as_deref(),
+        last_turn: turns.saved_last_turn(),
+        can_retry: turns.can_retry(),
+    };
+    let body = match serde_json::to_string(&file) {
+        Ok(body) => body,
+        Err(error) => {
+            eprintln!("[sessions] save failed: {error}");
+            return;
+        }
+    };
+    if let Err(error) = js::write_atomic(&dir.join("state.json"), body.as_bytes()) {
+        eprintln!("[sessions] save failed: {error}");
+    }
+}
+
+fn make_session(
+    shared: &Arc<Shared>,
+    mut state: SessionState,
+    provider: String,
+    resume: Option<String>,
+    last_turn: Option<LastTurn>,
+    can_retry: bool,
+) -> Arc<Mutex<Session>> {
+    let turns = Turns::new(resume, last_turn, can_retry);
+    state.retryable = turns.can_retry();
+    let data = SessionData {
+        state,
+        provider,
+        pending_start: None,
+        pending: IndexMap::new(),
+        subs: Vec::new(),
+        closing: false,
+        streamed: HashMap::new(),
+        finalised: HashMap::new(),
+        save_pending: false,
+        manager: Arc::downgrade(shared),
+    };
+    Arc::new(Mutex::new(Session { data, turns }))
+}
+
+/// A `progress.jsonl` record belongs to this lesson when its slug matches.
+fn lesson_progress(records: Vec<Value>, lesson_slug: &str) -> Vec<Value> {
+    records
+        .into_iter()
+        .filter(|record| record.get("lessonSlug").and_then(Value::as_str) == Some(lesson_slug))
+        .collect()
+}
+
+impl SessionManager {
+    /// Runs `load`: blocking, so callers with a runtime use `spawn_blocking`.
+    pub fn new(opts: ManagerOptions) -> Self {
+        let shared = Arc::new(Shared {
+            opts,
+            sessions: Mutex::new(IndexMap::new()),
+            sessions_touch_pending: AtomicBool::new(false),
+        });
+        let manager = Self(shared);
+        manager.load();
+        manager
+    }
+
+    // ───────────── persistence ─────────────
+
+    fn load(&self) {
+        let root = self.0.sessions_root();
+        let Ok(entries) = fs::read_dir(&root) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let dir_id = entry.file_name().to_string_lossy().into_owned();
+            let Ok(raw_text) = fs::read_to_string(entry.path().join("state.json")) else {
+                continue;
+            };
+            let Ok(raw) = serde_json::from_str::<Value>(&raw_text) else {
+                continue;
+            };
+            let Some(state_value) = raw.get("state") else {
+                continue;
+            };
+            let Ok(mut state) = serde_json::from_value::<SessionState>(state_value.clone()) else {
+                continue;
+            };
+            let mut can_retry = raw
+                .get("canRetry")
+                .and_then(Value::as_bool)
+                .unwrap_or(state.retryable);
+            let last_turn = raw
+                .get("lastTurn")
+                .and_then(|value| serde_json::from_value::<LastTurn>(value.clone()).ok());
+            let had_last_turn = raw.get("lastTurn").is_some_and(|value| !value.is_null());
+            if state.status.is_busy() {
+                if had_last_turn {
+                    state.status = SessionStatus::Error;
+                    state.last_error =
+                        Some("Sessione interrotta prima del completamento del turno".to_string());
+                    can_retry = true;
+                } else {
+                    state.status = SessionStatus::Idle;
+                }
+            }
+            state.pending_request_id = None;
+            for item in &mut state.items {
+                if item.get("kind").and_then(Value::as_str) == Some("job") {
+                    // No job manager: a card left "running" by a previous run is an interrupted job.
+                    let job = item
+                        .get_mut("job")
+                        .filter(|job| job.get("status").and_then(Value::as_str) == Some("running"))
+                        .and_then(Value::as_object_mut);
+                    if let Some(job) = job {
+                        job.insert("status".to_string(), json!("error"));
+                        job.insert(
+                            "error".to_string(),
+                            json!("interrotto alla chiusura dell'app"),
+                        );
+                        job.insert("activity".to_string(), json!(""));
+                    }
+                }
+                if item.get("kind").and_then(Value::as_str) == Some("teacher") {
+                    item["streaming"] = Value::Bool(false);
+                }
+                let interactive = item.get("requestId").is_some();
+                let settled = ["result", "answer", "decision"]
+                    .iter()
+                    .any(|key| item.get(key).is_some_and(|value| js::truthy(Some(value))));
+                if interactive && !settled {
+                    item["cancelled"] = Value::Bool(true);
+                }
+            }
+            // Files written before the engine was pinned / the token was adapter-owned: claude, claudeSessionId once it ran.
+            let provider = raw
+                .get("provider")
+                .and_then(Value::as_str)
+                .unwrap_or("claude")
+                .to_string();
+            let resume = raw
+                .get("resume")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .or_else(|| {
+                    if js::truthy(raw.get("hasRun")) {
+                        raw.get("claudeSessionId")
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                    } else {
+                        None
+                    }
+                });
+            let pending_start = raw
+                .get("pendingStart")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let session = make_session(&self.0, state, provider, resume, last_turn, can_retry);
+            let reask = {
+                let mut guard = session.lock().expect("session lock");
+                let data = &mut guard.data;
+                if data.state.status != SessionStatus::Closed {
+                    data.pending_start = pending_start.clone();
+                }
+                let teach = data.state.config.get("kind").and_then(Value::as_str) == Some("teach");
+                let anki_decided =
+                    matches!(data.state.config.get("ankiOptIn"), Some(Value::Bool(_)));
+                if data.state.status != SessionStatus::Closed
+                    && pending_start.is_some()
+                    && teach
+                    && !anki_decided
+                {
+                    // The card was cancelled by the reload: ask again instead of leaving a session that can never start well.
+                    data.state.items.retain(|item| {
+                        !(item.get("kind").and_then(Value::as_str) == Some("ask")
+                            && item
+                                .get("input")
+                                .and_then(|input| input.get("question"))
+                                .and_then(Value::as_str)
+                                == Some(ANKI_OPT_IN_QUESTION)
+                            && item.get("cancelled").and_then(Value::as_bool) == Some(true))
+                    });
+                    true
+                } else {
+                    false
+                }
+            };
+            self.0
+                .sessions
+                .lock()
+                .expect("sessions lock")
+                .insert(dir_id, session.clone());
+            if reask {
+                self.ask_anki_opt_in(&session);
+            }
+        }
+    }
+
+    // ───────────── public API ─────────────
+
+    pub fn list(&self) -> Value {
+        let sessions: Vec<Arc<Mutex<Session>>> = self
+            .0
+            .sessions
+            .lock()
+            .expect("sessions lock")
+            .values()
+            .cloned()
+            .collect();
+        let mut rows: Vec<Value> = sessions
+            .iter()
+            .map(|session| {
+                let guard = session.lock().expect("session lock");
+                session_summary(&guard.data.state)
+            })
+            .collect();
+        rows.sort_by(|a, b| {
+            let left = b.get("createdAt").and_then(Value::as_str).unwrap_or("");
+            let right = a.get("createdAt").and_then(Value::as_str).unwrap_or("");
+            left.cmp(right)
+        });
+        Value::Array(rows)
+    }
+
+    pub fn get(&self, id: &str) -> Option<Value> {
+        let session = self.0.session(id)?;
+        let guard = session.lock().expect("session lock");
+        serde_json::to_value(&guard.data.state).ok()
+    }
+
+    /// Sends the full state first, then every live event; the channel is the SSE stream.
+    pub fn subscribe(&self, id: &str) -> Option<UnboundedReceiver<String>> {
+        let session = self.0.session(id)?;
+        let mut guard = session.lock().expect("session lock");
+        let (sender, receiver) = mpsc::unbounded_channel();
+        let snapshot = ServerEvent::Snapshot {
+            state: guard.data.state.clone(),
+        };
+        let payload = serde_json::to_string(&snapshot).ok()?;
+        let _ = sender.send(payload);
+        guard.data.subs.push(sender);
+        Some(receiver)
+    }
+
+    pub async fn create(&self, body: Value) -> Result<String, HttpError> {
+        let mut config = validate_config(&body).map_err(|message| HttpError::new(400, message))?;
+        let settings = settings::read_settings(&self.0.opts.repo_root);
+        if !config.contains_key("model") {
+            // `config.model ??= settings.teacherModel`: a new key appends, like the JS assignment.
+            config.insert(
+                "model".to_string(),
+                Value::String(settings.teacher_model.clone()),
+            );
+        }
+        let root = self.0.opts.data_root.clone();
+        let course = config
+            .get("course")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let kind = config
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let course_dir = root.join("courses").join(&course);
+
+        if course == courses::STANDALONE_COURSE_SLUG {
+            courses::ensure_standalone_course(&root, true)
+                .map_err(|error| HttpError::new(500, error.to_string()))?;
+        }
+        if kind != "plan" && !course_dir.exists() {
+            return Err(HttpError::new(
+                400,
+                format!("Course \"{course}\" does not exist"),
+            ));
+        }
+        if kind == "teach" {
+            let imports = self.0.opts.imports.clone();
+            let anki = self.0.opts.anki.clone();
+            let data_root = root.clone();
+            let import_course = course.clone();
+            tokio::spawn(async move {
+                // Best effort: an offline Anki never blocks a lesson.
+                let _ = imports.import(anki, data_root, import_course).await;
+            });
+        }
+
+        let mut lesson_path: Option<String> = None;
+        let mut restored: Option<(String, String, String, usize)> = None;
+        let title: String;
+        if kind == "plan" {
+            let Some(chapter_title) = config.get("chapterTitle").and_then(Value::as_str) else {
+                return Err(HttpError::new(
+                    400,
+                    "chapterTitle is required for plan sessions",
+                ));
+            };
+            title = format!("Piano · {chapter_title}");
+        } else if kind == "practice" {
+            title = format!("Esercizi · {course}");
+        } else {
+            let Some(target) = config.get("target").and_then(Value::as_object) else {
+                return Err(HttpError::new(400, "target is required for teach sessions"));
+            };
+            match target.get("mode").and_then(Value::as_str) {
+                Some("planned") => {
+                    let planned_title = target
+                        .get("title")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
+                    let chapters =
+                        courses::read_curriculum(&root).map_err(|error| match error {
+                            CoursesError::Syntax => HttpError::new(400, "Invalid JSON body"),
+                            CoursesError::Other(message) => HttpError::new(500, message),
+                        })?;
+                    let planned = chapters
+                        .iter()
+                        .find(|chapter| js::js_string(chapter.slug.as_ref()) == course)
+                        .is_some_and(|chapter| {
+                            chapter.lessons.iter().any(|lesson| {
+                                lesson.get("title").and_then(Value::as_str)
+                                    == Some(planned_title.as_str())
+                            })
+                        });
+                    if !planned {
+                        return Err(HttpError::new(
+                            400,
+                            format!("\"{planned_title}\" is not a planned lesson of {course}"),
+                        ));
+                    }
+                    let slug = slug::slugify(&planned_title);
+                    let lessons_dir = course_dir.join("lessons");
+                    let already_taught = fs::read_dir(&lessons_dir)
+                        .map(|entries| {
+                            entries.flatten().any(|entry| {
+                                let name = entry.file_name().to_string_lossy().into_owned();
+                                name.ends_with(".html") && lesson::slug_of_lesson(&name) == slug
+                            })
+                        })
+                        .unwrap_or(false);
+                    if already_taught {
+                        return Err(HttpError::new(
+                            400,
+                            format!(
+                                "\"{planned_title}\" è già stata svolta: usa \"Continua\" sulla lezione esistente."
+                            ),
+                        ));
+                    }
+                    title = planned_title;
+                }
+                Some("existing") => {
+                    let raw_path = target
+                        .get("lessonPath")
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    let prefix = format!("courses/{course}/lessons/");
+                    let rel = lesson::lesson_rel(raw_path)
+                        .filter(|rel| rel.starts_with(&prefix) && root.join(rel).exists());
+                    let Some(rel) = rel else {
+                        return Err(HttpError::new(
+                            400,
+                            format!("lessonPath must be an existing file under {prefix}"),
+                        ));
+                    };
+                    let lesson = lesson::read_lesson(&root, &rel)
+                        .map_err(|message| HttpError::new(400, message))?
+                        .ok_or_else(|| {
+                            HttpError::new(
+                                400,
+                                "That lesson has no data island and cannot be continued",
+                            )
+                        })?;
+                    let doc = &lesson.doc;
+                    let nodes = doc
+                        .get("nodes")
+                        .and_then(Value::as_array)
+                        .map_or(0, Vec::len);
+                    let metadata = doc.get("metadata");
+                    let initial_dag = metadata
+                        .and_then(|metadata| metadata.get("initialDag"))
+                        .and_then(Value::as_str);
+                    if nodes == 0 && initial_dag.is_none() {
+                        return Err(HttpError::new(
+                            400,
+                            "Questa lezione è in prosa (scritta prima del motore, senza nodi né piano): non si può continuare. Scegli una lezione del piano o una lezione libera.",
+                        ));
+                    }
+                    title = metadata
+                        .and_then(|metadata| metadata.get("title"))
+                        .map(|title| js::js_string(Some(title)))
+                        .unwrap_or_default();
+                    lesson_path = Some(rel);
+                    if let Some(dag) = initial_dag {
+                        // The plan is already approved in the artifact: restore it so the Piano tab and quiz nodeId checks work.
+                        let topic = metadata
+                            .and_then(|metadata| metadata.get("topic"))
+                            .map(|topic| js::js_string(Some(topic)))
+                            .unwrap_or_default();
+                        let goal = metadata
+                            .and_then(|metadata| metadata.get("targetGoal"))
+                            .map(|goal| js::js_string(Some(goal)))
+                            .unwrap_or_default();
+                        restored = Some((topic, goal, dag.to_string(), nodes));
+                    }
+                }
+                _ => {
+                    title = if course == courses::STANDALONE_COURSE_SLUG {
+                        let note = config
+                            .get("note")
+                            .and_then(Value::as_str)
+                            .map(js::js_trim)
+                            .unwrap_or("");
+                        if note.is_empty() {
+                            "Lezione singola".to_string()
+                        } else {
+                            format!("Lezione singola · {}", trunc(note, 60))
+                        }
+                    } else {
+                        format!("Lezione libera · {course}")
+                    };
+                }
+            }
+        }
+
+        let id = engine::uuid_v4();
+        let now = events::iso_now();
+        let plan = match &restored {
+            Some((topic, goal, dag, node_count)) => {
+                let slug = lesson::slug_of_lesson(lesson_path.as_deref().unwrap_or(""));
+                let progress = lesson_progress(knowledge::read_progress(&root, &course), &slug);
+                planstate::derive_plan_state(topic, goal, dag, true, *node_count, &progress)
+            }
+            None => Value::Null,
+        };
+        let state = SessionState {
+            id: id.clone(),
+            config,
+            title: title.clone(),
+            created_at: now.clone(),
+            updated_at: now,
+            status: SessionStatus::Starting,
+            lesson_path: lesson_path.clone(),
+            usage: Usage::default(),
+            items: Vec::new(),
+            pending_request_id: None,
+            plan,
+            exercises: Vec::new(),
+            retryable: false,
+            last_error: None,
+        };
+        let session = make_session(&self.0, state, settings.provider.clone(), None, None, false);
+        self.0
+            .sessions
+            .lock()
+            .expect("sessions lock")
+            .insert(id.clone(), session.clone());
+        self.0.touch_sessions();
+        {
+            let mut guard = session.lock().expect("session lock");
+            guard.data.pending_start = Some(title.clone());
+            let Session { data, turns } = &mut *guard;
+            flush(&self.0, data, turns);
+        }
+        let teach = kind == "teach";
+        let anki_decided = {
+            let guard = session.lock().expect("session lock");
+            matches!(
+                guard.data.state.config.get("ankiOptIn"),
+                Some(Value::Bool(_))
+            )
+        };
+        if teach && !anki_decided {
+            self.ask_anki_opt_in(&session);
+            return Ok(id);
+        }
+        self.start(&session, &title, None, None)
+            .await
+            .map_err(|message| HttpError::new(500, message))?;
+        Ok(id)
+    }
+
+    /// Teach session without an explicit opt-in: ask first, with no claude process until the answer arrives.
+    fn ask_anki_opt_in(&self, session: &Arc<Mutex<Session>>) {
+        let request_id = engine::uuid_v4();
+        let item = json!({
+            "id": format!("req:{request_id}"),
+            "at": events::iso_now(),
+            "kind": "ask",
+            "requestId": request_id,
+            "input": {
+                "question": ANKI_OPT_IN_QUESTION,
+                "options": [
+                    {"label": "Sì", "value": "si"},
+                    {"label": "No", "value": "no"},
+                ],
+            },
+        });
+        let item_id = item
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let mut guard = session.lock().expect("session lock");
+        let Session { data, turns } = &mut *guard;
+        data.pending.insert(
+            request_id.clone(),
+            PendingReq {
+                item_id,
+                kind: "ask".to_string(),
+                anki_opt_in: true,
+            },
+        );
+        data.upsert(item);
+        data.set_pending();
+        let retryable = turns.can_retry();
+        data.apply_status(SessionStatus::Waiting, None, retryable);
+    }
+
+    /// The opening turn (launches the engine). Failure: status "error", pendingStart kept, the error out.
+    async fn start(
+        &self,
+        session: &Arc<Mutex<Session>>,
+        title: &str,
+        learner_text: Option<String>,
+        attachments: Option<Value>,
+    ) -> Result<(), String> {
+        let needs_launch = {
+            let mut guard = session.lock().expect("session lock");
+            let Session { data, turns } = &mut *guard;
+            let opening = context::opening_message(&data.state.config, Some(title));
+            // One turn: the opening, then what the learner typed (the process has to see both, in this order).
+            let (text, show) = match learner_text {
+                Some(learner_text) => (
+                    format!("{opening}\n\nMessaggio dello studente:\n\n{learner_text}"),
+                    vec![opening, learner_text],
+                ),
+                None => (opening.clone(), vec![opening]),
+            };
+            let needs_launch = turns.begin_send(data, Some(text), show, attachments);
+            if !needs_launch {
+                turns.finish_send(data);
+            }
+            needs_launch
+        };
+        if needs_launch {
+            self.launch_turn(session).await?;
+        }
+        let mut guard = session.lock().expect("session lock");
+        let Session { data, turns } = &mut *guard;
+        data.pending_start = None;
+        flush(&self.0, data, turns);
+        Ok(())
+    }
+
+    /// Message body checks first, then the id lookup (Node's `textBody` runs before `manager.message`).
+    pub async fn message(&self, id: &str, body: Value) -> Result<(), HttpError> {
+        let (text, attachments) = validate_message(&body)?;
+        let Some(session) = self.0.session(id) else {
+            return Err(HttpError::new(404, "Session not found"));
+        };
+        let (needs_launch, opening) = self.begin_message(&session, text, attachments)?;
+        if needs_launch {
+            self.launch_turn(&session)
+                .await
+                .map_err(|message| HttpError::new(500, message))?;
+        }
+        if opening {
+            let mut guard = session.lock().expect("session lock");
+            let Session { data, turns } = &mut *guard;
+            data.pending_start = None;
+            flush(&self.0, data, turns);
+        }
+        Ok(())
+    }
+
+    /// The closed/busy checks, the `pendingStart` decision and the turn under one lock: Node checks
+    /// the status and marks the session busy in the same synchronous tick, so a second concurrent
+    /// message gets 409. Returns `(needs_launch, opening)`.
+    fn begin_message(
+        &self,
+        session: &Arc<Mutex<Session>>,
+        text: String,
+        attachments: Option<Value>,
+    ) -> Result<(bool, bool), HttpError> {
+        let mut guard = session.lock().expect("session lock");
+        let Session { data, turns } = &mut *guard;
+        if data.state.status == SessionStatus::Closed {
+            return Err(HttpError::new(409, "Session is closed"));
+        }
+        if data.state.status.is_busy() {
+            return Err(HttpError::new(
+                409,
+                "The teacher is busy: wait for the current turn to finish",
+            ));
+        }
+        let opening = data.pending_start.clone().map(|title| {
+            // Never ran (Anki card dismissed, start failed, app restarted): open the lesson, with his message in the same turn.
+            let opening = context::opening_message(&data.state.config, Some(&title));
+            // No answer to the Anki question means no opt-in: cards are never created by default.
+            if data.state.config.get("kind").and_then(Value::as_str) == Some("teach")
+                && !matches!(data.state.config.get("ankiOptIn"), Some(Value::Bool(_)))
+            {
+                data.state
+                    .config
+                    .insert("ankiOptIn".to_string(), Value::Bool(false));
+            }
+            opening
+        });
+        let (turn_text, show) = match &opening {
+            Some(opening) => (
+                format!("{opening}\n\nMessaggio dello studente:\n\n{text}"),
+                vec![opening.clone(), text],
+            ),
+            None => (text.clone(), vec![text]),
+        };
+        let needs_launch = turns.begin_send(data, Some(turn_text), show, attachments);
+        if !needs_launch {
+            turns.finish_send(data);
+        }
+        Ok((needs_launch, opening.is_some()))
+    }
+
+    /// The async half of a turn: start the engine, attach it, push the learner bubbles, mark running.
+    async fn launch_turn(&self, session: &Arc<Mutex<Session>>) -> Result<(), String> {
+        let id = session.lock().expect("session lock").data.state.id.clone();
+        let (handle, receiver) = match self.launch(session).await {
+            Ok(started) => started,
+            Err(message) => {
+                let mut guard = session.lock().expect("session lock");
+                let Session { data, turns } = &mut *guard;
+                turns.launch_failed(data, &message);
+                return Err(message);
+            }
+        };
+        let mut stop_after = None;
+        {
+            let mut guard = session.lock().expect("session lock");
+            let Session { data, turns } = &mut *guard;
+            match turns.attach(handle) {
+                Ok(generation) => {
+                    tokio::spawn(self.clone().pump(id, generation, receiver));
+                    turns.finish_send(data);
+                }
+                Err(handle) => stop_after = Some(handle),
+            }
+        }
+        if let Some(mut handle) = stop_after {
+            // The session closed while the engine was starting: the turn never goes out.
+            let message = "Session is closed".to_string();
+            tokio::spawn(async move { handle.stop().await });
+            let mut guard = session.lock().expect("session lock");
+            let Session { data, turns } = &mut *guard;
+            turns.launch_failed(data, &message);
+            return Err(message);
+        }
+        Ok(())
+    }
+
+    /// Starts this session's pinned engine (TurnHost.spawn).
+    async fn launch(
+        &self,
+        session: &Arc<Mutex<Session>>,
+    ) -> Result<(Box<dyn EngineHandle>, UnboundedReceiver<EngineMsg>), String> {
+        let opts = &self.0.opts;
+        let (id, config, lesson_path, provider, resume) = {
+            let guard = session.lock().expect("session lock");
+            let data = &guard.data;
+            (
+                data.state.id.clone(),
+                data.state.config.clone(),
+                data.state.lesson_path.clone(),
+                data.provider.clone(),
+                guard.turns.resume.clone(),
+            )
+        };
+        let today = events::iso_now();
+        let today = today[..10].to_string();
+        let prompt_config = config.clone();
+        let prompt = {
+            let code_root = opts.code_root.clone();
+            let repo_root = opts.repo_root.clone();
+            let data_root = opts.data_root.clone();
+            tokio::task::spawn_blocking(move || {
+                context::build_system_prompt(&PromptInput {
+                    config: &prompt_config,
+                    code_root: &code_root,
+                    repo_root: &repo_root,
+                    data_root: Some(&data_root),
+                    lesson_path: lesson_path.as_deref(),
+                    today: &today,
+                })
+            })
+            .await
+            .map_err(|error| error.to_string())?
+        };
+        if session.lock().expect("session lock").data.closing {
+            return Err("Session is closed".to_string());
+        }
+        if provider != "claude" {
+            return Err(format!(
+                "Il motore {provider} non è ancora disponibile nel backend Rust."
+            ));
+        }
+        let settings = settings::read_settings(&opts.repo_root);
+        let model = config
+            .get("model")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| settings.teacher_model.clone());
+        let effort =
+            (settings.effort.teacher != "default").then(|| settings.effort.teacher.clone());
+        let on_limits = {
+            let repo_root = opts.repo_root.clone();
+            let cache = opts.limits.clone();
+            let events = opts.events.clone();
+            Arc::new(move |value: Value| {
+                limits::record_limits(&repo_root, &cache, &events, &value);
+            })
+        };
+        let launch = ClaudeLaunch {
+            bin: opts.claude.clone(),
+            repo_root: opts.repo_root.clone(),
+            data_root: Some(opts.data_root.clone()),
+            scratch_dir: self.0.session_dir(&id),
+            model,
+            effort,
+            system_prompt: prompt,
+            grant: vec![Grant::Read, Grant::Web],
+            mcp: McpServer {
+                name: "app".to_string(),
+                url: format!("http://127.0.0.1:{}/mcp/{}", opts.port, id),
+                token: opts.token.clone(),
+            },
+            add_dirs: opts.add_dirs.clone(),
+            max_turns: None,
+            resume,
+            settings,
+            on_limits,
+        };
+        Ok(claude::spawn_claude(launch))
+    }
+
+    async fn pump(
+        self,
+        id: String,
+        mut generation: u64,
+        mut receiver: UnboundedReceiver<EngineMsg>,
+    ) {
+        loop {
+            let mut relaunched = None;
+            while let Some(message) = receiver.recv().await {
+                let Some(session) = self.0.session(&id) else {
+                    return;
+                };
+                let action = {
+                    let mut guard = session.lock().expect("session lock");
+                    let Session { data, turns } = &mut *guard;
+                    match message {
+                        EngineMsg::Event(event) => turns.on_event(data, generation, &event),
+                        EngineMsg::Stderr(line) => {
+                            turns.on_stderr(generation, &line);
+                            TurnAction::None
+                        }
+                        EngineMsg::Exit { code, signal } => {
+                            turns.on_exit(data, generation, code, signal)
+                        }
+                    }
+                };
+                match action {
+                    TurnAction::None => {}
+                    TurnAction::Stop(mut handle) => {
+                        tokio::spawn(async move { handle.stop().await });
+                    }
+                    TurnAction::RelaunchFresh(text) => {
+                        relaunched = self.relaunch_fresh(&id, &text).await;
+                        break;
+                    }
+                }
+            }
+            match relaunched {
+                Some((next_generation, next_receiver)) => {
+                    generation = next_generation;
+                    receiver = next_receiver;
+                }
+                None => return,
+            }
+        }
+    }
+
+    /// A fresh engine after a refused resume: the caller continues pumping the returned channel.
+    async fn relaunch_fresh(
+        &self,
+        id: &str,
+        text: &str,
+    ) -> Option<(u64, UnboundedReceiver<EngineMsg>)> {
+        let session = self.0.session(id)?;
+        let (handle, receiver) = match self.launch(&session).await {
+            Ok(started) => started,
+            Err(message) => {
+                let mut guard = session.lock().expect("session lock");
+                let Session { data, turns } = &mut *guard;
+                turns.relaunch_failed(data, &message);
+                return None;
+            }
+        };
+        let mut stopped_handle = None;
+        let attached = {
+            let mut guard = session.lock().expect("session lock");
+            let Session { data, turns } = &mut *guard;
+            match turns.attach(handle) {
+                Ok(generation) => {
+                    turns.resend(data, text);
+                    Some(generation)
+                }
+                Err(handle) => {
+                    stopped_handle = Some(handle);
+                    None
+                }
+            }
+        };
+        if let Some(mut handle) = stopped_handle {
+            tokio::spawn(async move { handle.stop().await });
+            let mut guard = session.lock().expect("session lock");
+            let Session { data, turns } = &mut *guard;
+            turns.relaunch_failed(data, "Session is closed");
+            return None;
+        }
+        attached.map(|generation| (generation, receiver))
+    }
+
+    /// Server shutdown: stop every process and persist. The retry flag is written before `stop`
+    /// clears it, so a crashed turn stays retryable across a graceful quit (Node writes false here;
+    /// its `state.retryable` covers the reload either way).
+    pub async fn shutdown(&self) {
+        let sessions: Vec<Arc<Mutex<Session>>> = self
+            .0
+            .sessions
+            .lock()
+            .expect("sessions lock")
+            .values()
+            .cloned()
+            .collect();
+        for session in sessions {
+            let handle = {
+                let mut guard = session.lock().expect("session lock");
+                let Session { data, turns } = &mut *guard;
+                data.closing = true;
+                data.cancel_pending();
+                flush(&self.0, data, turns);
+                turns.stop()
+            };
+            if let Some(mut handle) = handle {
+                handle.stop().await;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn config_validation_keeps_schema_order_and_drops_unknown_keys() {
+        let config = validate_config(&json!({
+            "note": "n",
+            "unknown": true,
+            "target": {"mode": "planned", "title": "Prima lezione", "extra": 1},
+            "ankiOptIn": false,
+            "course": "demo",
+            "kind": "teach",
+        }))
+        .unwrap();
+        let keys: Vec<&str> = config.keys().map(String::as_str).collect();
+        assert_eq!(keys, ["kind", "course", "target", "ankiOptIn", "note"]);
+        assert_eq!(
+            serde_json::to_string(&config["target"]).unwrap(),
+            r#"{"mode":"planned","title":"Prima lezione"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&config["kind"]).unwrap(),
+            r#""teach""#
+        );
+    }
+
+    #[test]
+    fn config_validation_rejects_null_and_bad_values() {
+        let error = validate_config(&json!({"kind": null, "course": "demo"})).unwrap_err();
+        assert!(error.contains("kind"), "{error}");
+        assert!(validate_config(&json!({"kind": "teach", "course": "Demo"})).is_err());
+        let error = validate_config(&json!({"kind": "teach", "course": "demo", "model": "gpt"}))
+            .unwrap_err();
+        assert!(error.starts_with("model: "), "{error}");
+        let error = validate_config(
+            &json!({"kind": "teach", "course": "demo", "target": {"mode": "planned"}}),
+        )
+        .unwrap_err();
+        assert!(error.starts_with("target.title: "), "{error}");
+        let note = "x".repeat(5001);
+        let error =
+            validate_config(&json!({"kind": "teach", "course": "demo", "note": note})).unwrap_err();
+        assert!(error.starts_with("note: "), "{error}");
+        let error = validate_config(&json!([])).unwrap_err();
+        assert!(error.contains("expected object"), "{error}");
+    }
+
+    #[test]
+    fn message_validation_matches_text_body() {
+        for body in [
+            json!({}),
+            json!({"text": ""}),
+            json!({"text": "x".repeat(20001)}),
+            json!({"text": "x", "attachments": [{"name": "a"}]}),
+            json!({"text": "x", "attachments": "nope"}),
+        ] {
+            let error = validate_message(&body).unwrap_err();
+            assert_eq!(error.status, StatusCode::BAD_REQUEST, "{body}");
+            assert!(!error.message.is_empty());
+        }
+
+        let (text, attachments) = validate_message(&json!({"text": "x".repeat(20000)})).unwrap();
+        assert_eq!(text.len(), 20000);
+        assert!(attachments.is_none());
+
+        let (text, attachments) =
+            validate_message(&json!({"text": "x", "attachments": []})).unwrap();
+        assert_eq!(text, "x");
+        assert_eq!(attachments, Some(json!([])));
+
+        assert_eq!(
+            validate_message(&json!({"text": "x", "attachments": null}))
+                .unwrap()
+                .1,
+            None
+        );
+    }
+
+    #[test]
+    fn trunc_counts_utf16_units() {
+        assert_eq!(trunc("abcdef", 3), "abc…");
+        assert_eq!(trunc("abc", 3), "abc");
+        // An emoji is two UTF-16 units, like JS's `length`.
+        assert_eq!(trunc("😀😀😀", 2), "😀…");
+        assert_eq!(trunc("😀😀", 4), "😀😀");
+    }
+
+    fn saved_state() -> SessionState {
+        SessionState {
+            id: "s".to_string(),
+            config: Map::new(),
+            title: "T".to_string(),
+            created_at: "C".to_string(),
+            updated_at: "U".to_string(),
+            status: SessionStatus::Idle,
+            lesson_path: None,
+            usage: Usage::default(),
+            items: Vec::new(),
+            pending_request_id: None,
+            plan: Value::Null,
+            exercises: Vec::new(),
+            retryable: false,
+            last_error: None,
+        }
+    }
+
+    #[test]
+    fn state_file_keeps_node_key_order() {
+        let state = saved_state();
+        let file = StateFile {
+            state: &state,
+            provider: "claude",
+            resume: Some("tok"),
+            pending_start: None,
+            last_turn: None,
+            can_retry: false,
+        };
+        let json = serde_json::to_string(&file).unwrap();
+        assert!(
+            json.ends_with(r#""provider":"claude","resume":"tok","canRetry":false}"#),
+            "{json}"
+        );
+
+        let last = LastTurn {
+            text: Some("x".to_string()),
+            show: vec!["x".to_string()],
+            attachments: Some(json!([])),
+            turn_text: "x".to_string(),
+            pushed_learner: true,
+        };
+        let file = StateFile {
+            state: &state,
+            provider: "claude",
+            resume: None,
+            pending_start: Some("Piano · Demo"),
+            last_turn: Some(&last),
+            can_retry: true,
+        };
+        let json = serde_json::to_string(&file).unwrap();
+        assert!(
+            json.ends_with(r#""provider":"claude","pendingStart":"Piano · Demo","lastTurn":{"text":"x","show":["x"],"attachments":[],"turnText":"x","pushedLearner":true},"canRetry":true}"#),
+            "{json}"
+        );
+    }
+}

@@ -38,6 +38,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn slugify_folds_accents_and_separators() {
+        assert_eq!(slugify("Probabilità"), "probabilita");
+        assert_eq!(slugify("Il primo passo"), "il-primo-passo");
+        assert_eq!(slugify("A & B"), "a-and-b");
+        assert_eq!(slugify("  Perché_così--bene  "), "perche-cosi-bene");
+        assert_eq!(slugify("Straße"), "strae");
+        assert_eq!(slugify("--x--"), "x");
+        assert_eq!(slugify("Prima lezione"), "prima-lezione");
+    }
+
+    #[test]
+    fn slugify_covers_latin_extended_additional() {
+        assert_eq!(slugify("ȳ"), "y");
+        assert_eq!(slugify("ǭ"), "o");
+        assert_eq!(slugify("Ȳ ǬṀ"), "y-om");
+        assert_eq!(slugify("ỳ đ"), "y");
+    }
+
+    #[test]
     fn slugify_matches_node_vectors() {
         assert_eq!(
             slugify("Probabilità & Statistica"),

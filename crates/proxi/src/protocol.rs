@@ -1,4 +1,4 @@
-//! Wire protocol shared with the web UI: settings, limits, updates, graph and events.
+//! Wire protocol shared with the web UI: settings, limits, updates, graph, sessions and events.
 
 use serde::{Deserialize, Serialize};
 
@@ -10,6 +10,9 @@ pub const MODELS: &[&str] = &["opus", "sonnet", "haiku"];
 pub const EFFORT_SETTINGS: &[&str] = &["default", "low", "medium", "high", "xhigh", "max"];
 pub const STT_PROVIDERS: &[&str] = &["groq", "deepgram"];
 pub const SYNC_PROVIDERS: &[&str] = &["local", "github", "gdrive"];
+/// The exact Phase 1c question (skills/teach), asked as the session's first `ask` card.
+pub const ANKI_OPT_IN_QUESTION: &str =
+    "Vuoi che vengano create e sincronizzate le flashcard Anki per questa sessione? (Sì / No)";
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -161,12 +164,132 @@ pub enum GlobalEvent {
     Settings { settings: SettingsResponse },
     Update { status: UpdateStatus },
     Graph { revision: u64 },
+    Sessions,
     Sync { status: SyncStatus },
+}
+
+// ───────────────────────────── sessions ─────────────────────────────
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SessionStatus {
+    Starting,
+    Running,
+    Waiting,
+    Idle,
+    Error,
+    Closed,
+}
+
+impl SessionStatus {
+    /// The teacher is busy: a message would be refused with a 409.
+    pub fn is_busy(self) -> bool {
+        matches!(self, Self::Starting | Self::Running | Self::Waiting)
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Usage {
+    pub input_tokens: JsNumber,
+    pub output_tokens: JsNumber,
+    pub cache_read_tokens: JsNumber,
+    pub cache_creation_tokens: JsNumber,
+    pub turns: JsNumber,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionState {
+    pub id: String,
+    pub config: serde_json::Map<String, serde_json::Value>,
+    pub title: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub status: SessionStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lesson_path: Option<String>,
+    pub usage: Usage,
+    #[serde(default)]
+    pub items: Vec<serde_json::Value>,
+    // Node writes the key as null until the first question, so it must never be skipped.
+    #[serde(default)]
+    pub pending_request_id: Option<String>,
+    #[serde(default)]
+    pub plan: serde_json::Value,
+    #[serde(default)]
+    pub exercises: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub retryable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+}
+
+/// A `SessionState` minus the heavy fields, key order preserved (`sessions.ts` list's rest spread).
+pub fn session_summary(state: &SessionState) -> serde_json::Value {
+    let serde_json::Value::Object(state) =
+        serde_json::to_value(state).expect("SessionState serialises to an object")
+    else {
+        unreachable!("a struct serialises to a JSON object")
+    };
+    let mut summary = serde_json::Map::new();
+    for (key, value) in state {
+        if matches!(
+            key.as_str(),
+            "items" | "pendingRequestId" | "plan" | "exercises" | "lastError"
+        ) {
+            continue;
+        }
+        summary.insert(key, value);
+    }
+    serde_json::Value::Object(summary)
+}
+
+// The snapshot carries the whole state by design, so the variant is large.
+#[allow(clippy::large_enum_variant)]
+#[derive(Serialize, Clone, Debug)]
+#[serde(
+    tag = "type",
+    rename_all = "lowercase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ServerEvent {
+    Snapshot {
+        state: SessionState,
+    },
+    Item {
+        item: serde_json::Value,
+    },
+    Delta {
+        item_id: String,
+        text: String,
+    },
+    Status {
+        status: SessionStatus,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+        retryable: bool,
+    },
+    Pending {
+        request_id: Option<String>,
+    },
+    Usage {
+        usage: Usage,
+    },
 }
 
 /// A number as JS prints it: `JSON.stringify(4)` is `4`, serde prints `4.0` for an f64.
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct JsNumber(pub f64);
+
+impl<'de> Deserialize<'de> for JsNumber {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        f64::deserialize(deserializer).map(Self)
+    }
+}
 
 impl Serialize for JsNumber {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -584,11 +707,99 @@ mod tests {
         );
     }
 
+    fn fresh_state() -> SessionState {
+        SessionState {
+            id: "s".to_string(),
+            config: serde_json::Map::new(),
+            title: "T".to_string(),
+            created_at: "C".to_string(),
+            updated_at: "U".to_string(),
+            status: SessionStatus::Starting,
+            lesson_path: None,
+            usage: Usage::default(),
+            items: Vec::new(),
+            pending_request_id: None,
+            plan: serde_json::Value::Null,
+            exercises: Vec::new(),
+            retryable: false,
+            last_error: None,
+        }
+    }
+
+    #[test]
+    fn session_state_json_matches_node_order() {
+        assert_eq!(
+            serde_json::to_string(&fresh_state()).unwrap(),
+            r#"{"id":"s","config":{},"title":"T","createdAt":"C","updatedAt":"U","status":"starting","usage":{"inputTokens":0,"outputTokens":0,"cacheReadTokens":0,"cacheCreationTokens":0,"turns":0},"items":[],"pendingRequestId":null,"plan":null,"exercises":[],"retryable":false}"#
+        );
+    }
+
     #[test]
     fn update_status_default_is_idle() {
         assert_eq!(
             serde_json::to_string(&UpdateStatus::default()).unwrap(),
             r#"{"state":"idle","behind":0}"#
+        );
+    }
+
+    #[test]
+    fn lesson_path_sits_before_usage_and_last_error_last() {
+        let state = SessionState {
+            lesson_path: Some("courses/demo/lessons/x.html".to_string()),
+            status: SessionStatus::Error,
+            retryable: true,
+            last_error: Some("E".to_string()),
+            ..fresh_state()
+        };
+        let json = serde_json::to_string(&state).unwrap();
+        assert!(
+            json.contains(
+                r#""status":"error","lessonPath":"courses/demo/lessons/x.html","usage":{"#
+            ),
+            "{json}"
+        );
+        assert!(
+            json.ends_with(r#""exercises":[],"retryable":true,"lastError":"E"}"#),
+            "{json}"
+        );
+    }
+
+    #[test]
+    fn deserialises_a_node_file_without_newer_fields() {
+        let state: SessionState = serde_json::from_value(json!({
+            "id": "s",
+            "config": {"kind": "teach", "course": "demo"},
+            "title": "T",
+            "createdAt": "C",
+            "updatedAt": "U",
+            "status": "idle",
+            "usage": {"inputTokens": 1.5, "outputTokens": 0, "cacheReadTokens": 0, "cacheCreationTokens": 0, "turns": 1},
+            "items": [],
+            "pendingRequestId": null,
+            "plan": null
+        }))
+        .unwrap();
+        assert_eq!(state.status, SessionStatus::Idle);
+        assert_eq!(state.usage.input_tokens, JsNumber(1.5));
+        assert_eq!(state.retryable, false);
+        assert_eq!(state.last_error, None);
+        assert!(state.exercises.is_empty());
+    }
+
+    #[test]
+    fn session_summary_drops_heavy_fields_and_keeps_order() {
+        let state = SessionState {
+            status: SessionStatus::Idle,
+            items: vec![json!({"id": "i"})],
+            plan: json!({"topic": "t"}),
+            exercises: vec![json!({"name": "e"})],
+            pending_request_id: Some("r".to_string()),
+            last_error: Some("E".to_string()),
+            ..fresh_state()
+        };
+        assert_eq!(
+            serde_json::to_string(&session_summary(&state)).unwrap(),
+            r#"{"id":"s","config":{},"title":"T","createdAt":"C","updatedAt":"U","status":"idle","usage":{"inputTokens":0,"outputTokens":0,"cacheReadTokens":0,"cacheCreationTokens":0,"turns":0},"retryable":false}"#
         );
     }
 
@@ -608,6 +819,19 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&status).unwrap(),
             r#"{"state":"error","behind":2,"commits":[{"hash":"h","subject":"s","relativeTime":"r"}],"checkedAt":"t","error":"e"}"#
+        );
+    }
+
+    #[test]
+    fn session_summary_keeps_lesson_path_between_status_and_usage() {
+        let state = SessionState {
+            status: SessionStatus::Idle,
+            lesson_path: Some("p".to_string()),
+            ..fresh_state()
+        };
+        assert_eq!(
+            serde_json::to_string(&session_summary(&state)).unwrap(),
+            r#"{"id":"s","config":{},"title":"T","createdAt":"C","updatedAt":"U","status":"idle","lessonPath":"p","usage":{"inputTokens":0,"outputTokens":0,"cacheReadTokens":0,"cacheCreationTokens":0,"turns":0},"retryable":false}"#
         );
     }
 
@@ -640,6 +864,80 @@ mod tests {
     }
 
     #[test]
+    fn server_events_serialise_with_node_shapes() {
+        assert_eq!(
+            serde_json::to_string(&ServerEvent::Status {
+                status: SessionStatus::Idle,
+                error: None,
+                retryable: false,
+            })
+            .unwrap(),
+            r#"{"type":"status","status":"idle","retryable":false}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&ServerEvent::Status {
+                status: SessionStatus::Error,
+                error: Some("E".to_string()),
+                retryable: true,
+            })
+            .unwrap(),
+            r#"{"type":"status","status":"error","error":"E","retryable":true}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&ServerEvent::Pending { request_id: None }).unwrap(),
+            r#"{"type":"pending","requestId":null}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&ServerEvent::Delta {
+                item_id: "t:m:1".to_string(),
+                text: "x".to_string(),
+            })
+            .unwrap(),
+            r#"{"type":"delta","itemId":"t:m:1","text":"x"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&ServerEvent::Item {
+                item: json!({"id": "i"})
+            })
+            .unwrap(),
+            r#"{"type":"item","item":{"id":"i"}}"#
+        );
+    }
+
+    #[test]
+    fn snapshot_event_wraps_the_state() {
+        let event = ServerEvent::Snapshot {
+            state: fresh_state(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(
+            json.starts_with(r#"{"type":"snapshot","state":{"id":"s","config":{},"#),
+            "{json}"
+        );
+    }
+
+    #[test]
+    fn sessions_global_event_has_no_payload() {
+        assert_eq!(
+            serde_json::to_string(&GlobalEvent::Sessions).unwrap(),
+            r#"{"type":"sessions"}"#
+        );
+    }
+
+    #[test]
+    fn usage_numbers_print_like_js() {
+        let usage = Usage {
+            input_tokens: JsNumber(1.5),
+            turns: JsNumber(2.0),
+            ..Usage::default()
+        };
+        assert_eq!(
+            serde_json::to_string(&usage).unwrap(),
+            r#"{"inputTokens":1.5,"outputTokens":0,"cacheReadTokens":0,"cacheCreationTokens":0,"turns":2}"#
+        );
+    }
+
+    #[test]
     fn update_status_response_puts_active_sessions_last() {
         let response = UpdateStatusResponse {
             status: UpdateStatus {
@@ -655,6 +953,24 @@ mod tests {
             serde_json::to_string(&response).unwrap(),
             r#"{"state":"up_to_date","behind":0,"checkedAt":"t","activeSessions":0}"#
         );
+    }
+
+    #[test]
+    fn busy_statuses_are_starting_running_waiting() {
+        for status in [
+            SessionStatus::Starting,
+            SessionStatus::Running,
+            SessionStatus::Waiting,
+        ] {
+            assert!(status.is_busy());
+        }
+        for status in [
+            SessionStatus::Idle,
+            SessionStatus::Error,
+            SessionStatus::Closed,
+        ] {
+            assert!(!status.is_busy());
+        }
     }
 
     #[test]

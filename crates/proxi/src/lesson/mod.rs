@@ -11,8 +11,8 @@ pub mod refresh;
 pub mod render;
 
 pub use artifact::{
-    Lesson, LessonDoc, LessonStatus, doc_rel, lesson_rel, list_lessons, read_doc_body, read_lesson,
-    read_lesson_html, read_reference_document, scan_lesson_docs,
+    Lesson, LessonDoc, LessonStatus, doc_rel, lesson_rel, list_lessons, parse_dag_ids, read_doc_body,
+    read_lesson, read_lesson_html, read_reference_document, scan_lesson_docs, slug_of_lesson,
 };
 
 pub const APP_NAME: &str = "Proxi";

@@ -9,7 +9,7 @@ import { driveBody, installFakeDrive, type FakeDriveSeed } from "./fake-drive.ts
 import type { FakeGithubSeed } from "./fake-github.ts";
 import { installFakeGithub } from "./fake-github.ts";
 import { FakeHttpServer, type RecordedRequest } from "./fake-servers.ts";
-import { REPO_ROOT, startServer, type ServerMode } from "./harness.ts";
+import { fakeClaude, REPO_ROOT, startServer, type ServerMode } from "./harness.ts";
 
 export interface GoldenRequest {
   method: "GET" | "POST";
@@ -23,6 +23,8 @@ export interface GoldenCase {
   request: GoldenRequest;
   response: { status: number; body: unknown };
   firstEvent?: unknown;
+  /** Present on the sessions `message` case: the snapshot first, then every live event of the turn. */
+  events?: unknown[];
   /** Present on a `remote` case: the non-GET requests the fake GitHub received while it ran. */
   remote?: { method: string; path: string; body: unknown }[];
 }
@@ -35,6 +37,11 @@ export interface GoldenFile {
   github?: FakeGithubSeed;
   drive?: FakeDriveSeed;
   cases: GoldenCase[];
+}
+
+/** The sessions golden adds the saved state file, compared key for key against the Rust one (AC4). */
+export interface SessionGolden extends GoldenFile {
+  stateFile: unknown;
 }
 
 export const GOLDEN_DIR = path.join(REPO_ROOT, "crates", "proxi", "tests", "fixtures", "golden");
@@ -66,6 +73,34 @@ export function normalise(value: unknown, roots: Roots): unknown {
   if (value && typeof value === "object") {
     const out: Record<string, unknown> = {};
     for (const [key, v] of Object.entries(value)) out[key] = normalise(v, roots);
+    return out;
+  }
+  return value;
+}
+
+const SESSION_UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g;
+
+/**
+ * Like `normalise`, plus the session ids a run invents. In every string, in this order: the captured
+ * session id becomes `<session>`, every other UUID `<uuid>`, the fake engine's `msg_<pid>_` /
+ * `toolu_fake_<pid>_` counters lose the pid, then the whole-string root and ISO rules of `normalise`.
+ * The Rust replay mirrors these rules.
+ */
+export function normaliseSession(value: unknown, roots: Roots, sessionId: string): unknown {
+  if (typeof value === "string") {
+    const replaced = value
+      .split(sessionId).join("<session>")
+      .replace(SESSION_UUID_RE, "<uuid>")
+      .replace(/msg_\d+_/g, "msg_<pid>_")
+      .replace(/toolu_fake_\d+_/g, "toolu_fake_<pid>_");
+    if (roots.repoRoot.includes(replaced)) return "<repoRoot>";
+    if (roots.dataRoot.includes(replaced)) return "<dataRoot>";
+    return ISO_RE.test(replaced) ? "<iso>" : replaced;
+  }
+  if (Array.isArray(value)) return value.map((v) => normaliseSession(v, roots, sessionId));
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, v] of Object.entries(value)) out[key] = normaliseSession(v, roots, sessionId);
     return out;
   }
   return value;
@@ -563,6 +598,130 @@ export const SCRIPTS: Script[] = [
   },
 ];
 
+/** The one session the golden captures: teach, planned, no Anki question. */
+const SESSIONS_CREATE = {
+  kind: "teach",
+  course: "demo",
+  model: "haiku",
+  ankiOptIn: false,
+  target: { mode: "planned", title: "Prima lezione" },
+} as const;
+
+/** One course with one planned lesson, and nothing else: the prompt and the turn stay small and stable. */
+const SESSIONS_DATA_SEED: Record<string, string> = {
+  "curriculum.json": JSON.stringify({
+    chapters: [{ title: "Demo", slug: "demo", lessons: [{ title: "Prima lezione", slug: "prima-lezione", plannedNodes: 2 }] }],
+  }),
+  "courses/demo/MISSION.md": "# Mission\n",
+  "courses/demo/NOTES.md": "# Notes\n",
+  "courses/demo/lessons/.keep": "",
+};
+
+/**
+ * Captures the session core (AC1/AC4): the opening turn, a message turn with its whole SSE stream,
+ * get, list and the saved `state.json`. Seeds are raw; only the output is normalised.
+ */
+export async function captureSessions(mode: ServerMode = "node"): Promise<SessionGolden> {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "golden-sessions-"));
+  const repo = path.join(dir, "repo");
+  const data = path.join(dir, "data");
+  fs.mkdirSync(repo);
+  fs.mkdirSync(data);
+  for (const [rel, text] of Object.entries(SESSIONS_DATA_SEED)) {
+    const file = path.join(data, rel);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, text);
+  }
+  const roots = { repoRoot: rootVariants(repo), dataRoot: rootVariants(data) };
+  const server = await startServer({ repoRoot: repo, dataRoot: data, mode, claude: fakeClaude() });
+  try {
+    const created = await send(server.url, { method: "POST", path: "/api/sessions", body: SESSIONS_CREATE });
+    const createBody = JSON.parse(await created.text()) as { id: string };
+    if (!created.ok) throw new Error(`POST /api/sessions: ${created.status} ${JSON.stringify(createBody)}`);
+    const sessionId = createBody.id;
+    await waitForStatus(server.url, sessionId, "idle");
+
+    const stream = openEvents(server.url, `/api/sessions/${sessionId}/events`);
+    let message: GoldenCase;
+    try {
+      await stream.ready;
+      await stream.first(5000);
+      const snapshotEnd = stream.events.length;
+      const sent = await send(server.url, {
+        method: "POST",
+        path: `/api/sessions/${sessionId}/message`,
+        body: { text: "Ciao" },
+      });
+      const sentBody = JSON.parse(await sent.text());
+      if (!sent.ok) throw new Error(`POST /api/sessions/${sessionId}/message: ${sent.status} ${JSON.stringify(sentBody)}`);
+      await stream.until((events) => events.slice(snapshotEnd).some(isIdleStatus), 15_000);
+      message = {
+        name: "message",
+        request: { method: "POST", path: "/api/sessions/<session>/message", body: { text: "Ciao" } },
+        response: { status: sent.status, body: normaliseSession(sentBody, roots, sessionId) },
+        events: normaliseSession(stream.events, roots, sessionId) as unknown[],
+      };
+    } finally {
+      stream.close();
+    }
+
+    const got = await send(server.url, { method: "GET", path: `/api/sessions/${sessionId}` });
+    const gotBody = JSON.parse(await got.text());
+    const listed = await send(server.url, { method: "GET", path: "/api/sessions" });
+    const listBody = JSON.parse(await listed.text());
+    await server.close();
+    const stateFile = JSON.parse(
+      fs.readFileSync(path.join(repo, ".learner", "sessions", sessionId, "state.json"), "utf-8"),
+    );
+    return {
+      route: "sessions",
+      seed: {},
+      dataSeed: SESSIONS_DATA_SEED,
+      cases: [
+        {
+          name: "create",
+          request: { method: "POST", path: "/api/sessions", body: SESSIONS_CREATE },
+          response: { status: created.status, body: normaliseSession(createBody, roots, sessionId) },
+        },
+        message,
+        {
+          name: "get",
+          request: { method: "GET", path: "/api/sessions/<session>" },
+          response: { status: got.status, body: normaliseSession(gotBody, roots, sessionId) },
+        },
+        {
+          name: "list",
+          request: { method: "GET", path: "/api/sessions" },
+          response: { status: listed.status, body: normaliseSession(listBody, roots, sessionId) },
+        },
+      ],
+      stateFile: normaliseSession(stateFile, roots, sessionId),
+    };
+  } finally {
+    await server.close();
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
+  }
+}
+
+const isIdleStatus = (event: unknown): boolean => {
+  const e = event as { type?: string; status?: string };
+  return e.type === "status" && e.status === "idle";
+};
+
+/** Polls `GET /api/sessions/:id` until it reaches `status` (the opening turn runs after the create response). */
+async function waitForStatus(base: string, id: string, status: string, ms = 15_000): Promise<void> {
+  const end = Date.now() + ms;
+  for (;;) {
+    const res = await fetch(`${base}/api/sessions/${id}`);
+    if (res.ok) {
+      const state = (await res.json()) as { status?: string };
+      if (state.status === status) return;
+    }
+    if (Date.now() > end) throw new Error(`session ${id} not ${status} within ${ms} ms`);
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
+
 /** Writes `<outDir>/<route>.json` for every scripted route and returns the file paths. Always Node mode. */
 export async function captureGolden(outDir: string = GOLDEN_DIR): Promise<string[]> {
   fs.mkdirSync(outDir, { recursive: true });
@@ -573,6 +732,9 @@ export async function captureGolden(outDir: string = GOLDEN_DIR): Promise<string
     fs.writeFileSync(target, JSON.stringify(file, null, 2) + "\n"); // always LF, never os.EOL
     written.push(target);
   }
+  const sessions = path.join(outDir, "sessions.json");
+  fs.writeFileSync(sessions, JSON.stringify(await captureSessions("node"), null, 2) + "\n");
+  written.push(sessions);
   written.push(await captureHome(outDir));
   return written;
 }
@@ -661,8 +823,8 @@ function send(base: string, request: GoldenRequest): Promise<Response> {
   });
 }
 
-/** SSE client on /api/events: `ready` resolves once the headers arrive, `first` waits for the first data event. */
-function openEvents(base: string) {
+/** SSE client on `/api/events` (or `path`): `ready` resolves once the headers arrive, `first` waits for the first data event. */
+function openEvents(base: string, path = "/api/events") {
   const events: unknown[] = [];
   const ac = new AbortController();
   let started!: () => void;
@@ -672,8 +834,8 @@ function openEvents(base: string) {
     failed = reject;
   });
   void (async () => {
-    const res = await fetch(`${base}/api/events`, { signal: ac.signal });
-    if (!res.ok) throw new Error(`GET /api/events: ${res.status}`);
+    const res = await fetch(`${base}${path}`, { signal: ac.signal });
+    if (!res.ok) throw new Error(`GET ${path}: ${res.status}`);
     started();
     const dec = new TextDecoder();
     let buf = "";
@@ -690,11 +852,21 @@ function openEvents(base: string) {
   })().catch(failed);
   return {
     ready,
+    events,
     async first(ms: number): Promise<unknown> {
       const end = Date.now() + ms;
       for (;;) {
         if (events.length > 0) return events[0];
-        if (Date.now() > end) throw new Error(`no event on /api/events within ${ms} ms`);
+        if (Date.now() > end) throw new Error(`no event on ${path} within ${ms} ms`);
+        await new Promise((r) => setTimeout(r, 25));
+      }
+    },
+    /** Polls until `predicate(events)` holds; used to wait for a turn to end without guessing its length. */
+    async until(predicate: (events: unknown[]) => boolean, ms: number): Promise<void> {
+      const end = Date.now() + ms;
+      for (;;) {
+        if (predicate(events)) return;
+        if (Date.now() > end) throw new Error(`no matching event on ${path} within ${ms} ms`);
         await new Promise((r) => setTimeout(r, 25));
       }
     },

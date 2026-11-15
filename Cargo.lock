@@ -2155,6 +2155,7 @@ dependencies = [
  "tokenizers",
  "tokio",
  "tower-http 0.7.1",
+ "windows",
  "windows-sys 0.61.2",
 ]
 

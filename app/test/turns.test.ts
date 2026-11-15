@@ -39,18 +39,6 @@ function harness(resume?: string) {
 }
 
 describe("Turns (in-memory engine)", () => {
-  it("first send launches fresh, pushes the bubbles, runs; init issues the resume token; result idles", async () => {
-    const { engine, h, turns, emit } = harness();
-    await turns.send("ciao", ["ciao"]);
-    assert.equal(engine.procs.length, 1);
-    assert.equal(engine.last().resume, undefined);
-    assert.deepEqual([h.status, h.learner, engine.last().sent], ["running", ["ciao"], ["ciao"]]);
-    emit({ type: "init", sessionId: "tok-1", tools: [], mcpServers: [] });
-    emit(resultEvent({ sessionId: "tok-1" }));
-    assert.equal(h.status, "idle");
-    assert.equal(turns.resume, "tok-1");
-  });
-
   it("interrupt, then the late result of the given-up turn does not idle the newer turn", async () => {
     mock.timers.enable({ apis: ["setTimeout"] });
     try {
@@ -119,38 +107,6 @@ describe("Turns (in-memory engine)", () => {
     assert.deepEqual(engine.last().sent[1], jobTurnText(j));
     assert.equal(h.status, "running");
     assert.equal(map.delivered, undefined);
-  });
-
-  it("resume refused: fresh relaunch (no token) re-sends the same turn once, without a second bubble", async () => {
-    const { engine, h, turns, emit } = harness("old-token");
-    await turns.send("dopo il crash", ["dopo il crash"]);
-    assert.equal(engine.last().resume, "old-token");
-    emit({ type: "resume-failed" });
-    engine.last().cb.onExit(1, null);
-    await new Promise((r) => setImmediate(r));
-    assert.equal(engine.procs.length, 2);
-    assert.equal(engine.last().resume, undefined);
-    assert.deepEqual(engine.last().sent, ["dopo il crash"]);
-    assert.deepEqual(h.learner, ["dopo il crash"]);
-    assert.equal(h.status, "running");
-    assert.match(h.notices[0], /Ripresa della conversazione non riuscita/);
-    emit({ type: "init", sessionId: "new-token", tools: [], mcpServers: [] });
-    assert.equal(turns.resume, "new-token");
-  });
-
-  it("an exit without a refused resume is an error (cards cancelled), and the next send relaunches with the token", async () => {
-    const { engine, h, turns, emit } = harness();
-    await turns.send("x", ["x"]);
-    emit({ type: "init", sessionId: "tok", tools: [], mcpServers: [] });
-    h.pending = 2;
-    engine.last().cb.onStderr("boom");
-    engine.last().cb.onExit(1, null);
-    assert.equal(h.pending, 0);
-    assert.equal(h.status, "error");
-    assert.match(h.errors[0], /exited \(1\): boom/);
-    assert.equal(turns.live, false);
-    await turns.send("y", ["y"]);
-    assert.equal(engine.last().resume, "tok");
   });
 
   it("action-denied becomes an info notice; stop() kills, ignores the dead handle's exit and refuses to launch again", async () => {

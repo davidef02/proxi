@@ -1,4 +1,4 @@
-//! Claude usage limits read from `.learner/limits.json`, with the server cache.
+//! Claude usage limits read from `.learner/limits.json`, with the server cache and recorder.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -6,7 +6,8 @@ use std::sync::Mutex;
 
 use serde_json::Value;
 
-use crate::protocol::LearnerSettings;
+use crate::events::EventBus;
+use crate::protocol::{GlobalEvent, LearnerSettings};
 
 pub fn limits_file(repo_root: &Path) -> PathBuf {
     repo_root.join(".learner").join("limits.json")
@@ -21,7 +22,7 @@ pub fn limits_disabled(s: &LearnerSettings) -> bool {
     s.provider == "agy" || s.provider == "opencode" || s.claude_auth == "apiKey"
 }
 
-/// Mirrors Node's in-memory limits cache: the first successful read wins until restart (no recorder in Rust yet).
+/// Mirrors Node's in-memory limits cache: the first successful read wins until a report replaces it.
 #[derive(Default)]
 pub struct LimitsCache {
     last: Mutex<Option<Value>>,
@@ -41,6 +42,40 @@ impl LimitsCache {
         *last = Some(value.clone());
         Some(value)
     }
+
+    pub fn set(&self, value: Value) {
+        *self.last.lock().expect("limits cache poisoned") = Some(value);
+    }
+}
+
+/// Merge one `rate_limit_event` report into the cache and `.learner/limits.json`, then tell the tabs.
+pub fn record_limits(
+    repo_root: &Path,
+    cache: &LimitsCache,
+    events: &EventBus,
+    limits: &Value,
+) -> Value {
+    let next = match cache.get(repo_root) {
+        Some(Value::Object(mut base)) => {
+            // A report without unifiedWindows covers one window only: keep the other one's last value.
+            if let Some(patch) = limits.as_object() {
+                for (key, value) in patch {
+                    base.insert(key.clone(), value.clone());
+                }
+            }
+            Value::Object(base)
+        }
+        _ => limits.clone(),
+    };
+    cache.set(next.clone());
+    // Best effort: the meter still has the in-memory value when the folder is not writable.
+    if fs::create_dir_all(repo_root.join(".learner")).is_ok() {
+        let _ = fs::write(limits_file(repo_root), next.to_string());
+    }
+    events.emit(&GlobalEvent::Limits {
+        limits: next.clone(),
+    });
+    next
 }
 
 #[cfg(test)]
@@ -121,5 +156,77 @@ mod tests {
 
         write_limits(&repo, r#"{"at":"ok"}"#);
         assert_eq!(cache.get(&repo), Some(json!({"at": "ok"})));
+    }
+
+    #[test]
+    fn set_replaces_the_cached_value() {
+        let repo = temp_dir("set");
+        let cache = LimitsCache::new();
+        cache.set(json!({"at": "new"}));
+        assert_eq!(cache.get(&repo), Some(json!({"at": "new"})));
+    }
+
+    #[test]
+    fn record_without_a_base_returns_and_writes_the_report() {
+        let repo = temp_dir("record-fresh");
+        let cache = LimitsCache::new();
+        let limits = json!({"fiveHour": {"utilization": 0.5}, "at": "a"});
+
+        let next = record_limits(&repo, &cache, &EventBus::new(), &limits);
+
+        assert_eq!(next, limits);
+        assert_eq!(read_limits(&repo), Some(limits));
+    }
+
+    #[test]
+    fn record_merges_reports_keeping_the_other_window_in_place() {
+        let repo = temp_dir("record-merge");
+        write_limits(
+            &repo,
+            r#"{"fiveHour":{"utilization":0.1},"sevenDay":{"utilization":0.2},"at":"a"}"#,
+        );
+        let cache = LimitsCache::new();
+
+        let next = record_limits(
+            &repo,
+            &cache,
+            &EventBus::new(),
+            &json!({"fiveHour": {"utilization": 0.9}, "at": "b"}),
+        );
+
+        assert_eq!(
+            serde_json::to_string(&next).unwrap(),
+            r#"{"fiveHour":{"utilization":0.9},"sevenDay":{"utilization":0.2},"at":"b"}"#
+        );
+        assert_eq!(cache.get(&repo), Some(next));
+    }
+
+    #[test]
+    fn record_emits_the_limits_event() {
+        let repo = temp_dir("record-bus");
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+
+        record_limits(&repo, &LimitsCache::new(), &bus, &json!({"at": "a"}));
+
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            r#"{"type":"limits","limits":{"at":"a"}}"#
+        );
+    }
+
+    #[test]
+    fn record_survives_an_unwritable_data_dir() {
+        let repo = temp_dir("record-unwritable");
+        fs::write(repo.join(".learner"), "not a directory").unwrap();
+        let cache = LimitsCache::new();
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+
+        let next = record_limits(&repo, &cache, &bus, &json!({"at": "a"}));
+
+        assert_eq!(next, json!({"at": "a"}));
+        assert_eq!(cache.get(&repo), Some(json!({"at": "a"})));
+        assert!(rx.try_recv().is_ok());
     }
 }
