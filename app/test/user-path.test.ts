@@ -13,6 +13,23 @@ import {
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 const dir = "C:\\repo\\target\\release";
 
+// The source of one top-level `if (...) {` block of the installer, up to its closing brace.
+function block(text: string, header: string): string {
+  const source = text.replace(/\r\n/g, "\n");
+  const start = source.indexOf(header);
+  assert.notEqual(start, -1, "missing " + header);
+  const lines = source.slice(start).split("\n");
+  let depth = 0;
+  for (let i = 0; i < lines.length; i++) {
+    for (const ch of lines[i]) {
+      if (ch === "{") depth += 1;
+      if (ch === "}") depth -= 1;
+    }
+    if (depth === 0 && i > 0) return lines.slice(0, i + 1).join("\n");
+  }
+  assert.fail("unbalanced block after " + header);
+}
+
 describe("user PATH", () => {
   it("adds the bin folder to an empty PATH", () => {
     assert.deepEqual(withPathEntry("", dir), { value: dir, changed: true });
@@ -76,5 +93,17 @@ describe("user PATH", () => {
     assert.ok(installer.includes("./user-path.mjs"));
     assert.ok(installer.includes('"target", "release"'));
     assert.ok(installer.includes("--locked"));
+  });
+
+  it("the installer adds the bin folder on install, drops it on uninstall, and edits no PATH with --dir", () => {
+    const installer = fs.readFileSync(path.join(repoRoot, "app", "desktop", "install-shortcuts.mjs"), "utf8");
+    assert.ok(installer.includes("const userPath = !dirArg;"), "--dir must skip the PATH step");
+    const uninstall = block(installer, "if (uninstall) {");
+    assert.ok(uninstall.includes("withoutPathEntry(readUserPath(ps), binDir)"), "uninstall must read the user PATH");
+    assert.ok(uninstall.includes("writeUserPath(ps, r.value)"), "uninstall must write the shortened PATH");
+    const install = block(installer, "if (userPath) {\n  const r = withPathEntry");
+    assert.ok(install.includes("withPathEntry(readUserPath(ps), binDir)"), "install must read and extend the user PATH");
+    assert.ok(install.includes("writeUserPath(ps, r.value)"), "install must write the extended PATH");
+    assert.ok(install.includes("is already on the user PATH"), "a second install must not duplicate the entry");
   });
 });
