@@ -5,6 +5,11 @@ use std::pin::Pin;
 
 use serde_json::Value;
 
+use crate::protocol::{LearnerSettings, RoleModels};
+
+// One launch type for all three engines; agy and opencode ignore the claude-only fields.
+pub use crate::claude::{ClaudeBin as EngineBin, ClaudeLaunch as EngineLaunch, Grant, McpServer};
+
 /// One MCP server as the engine reports it at init.
 #[derive(Debug, Clone, PartialEq)]
 pub struct McpStatus {
@@ -65,6 +70,9 @@ pub enum EngineEvent {
         error: Option<String>,
     },
     ResumeFailed,
+    ActionDenied {
+        action: String,
+    },
     AuthFailed {
         message: Option<String>,
     },
@@ -97,6 +105,76 @@ pub trait EngineHandle: Send {
 
 /// Node's readable guidance when the CLI is not logged in (`app/server/claude.ts:20`).
 pub const CLAUDE_AUTH_ERROR_MESSAGE: &str = "Claude Code non risulta autenticato. Esegui `claude login` nel terminale oppure configura una API key Anthropic nelle Impostazioni.";
+
+/// The agy note appended to the system prompt: prompts name the claude tools (`engine.ts:10-16`).
+const AGY_ENGINE_NOTE: &str = "On this engine the read-only tools are named view_file (Read), list_dir (Glob), grep_search (Grep), search_web (WebSearch); there is no page fetch: cite search results with their URLs and say when a claim rests only on a snippet.";
+
+/// The one model rule: agy/opencode take their own model per role, claude the session's alias,
+/// else the role's setting (`engine.ts:19-23`).
+pub fn model_for(
+    settings: &LearnerSettings,
+    provider: &str,
+    role: &str,
+    alias: Option<&str>,
+) -> String {
+    if provider == "agy" {
+        return role_model(&settings.agy_models, role);
+    }
+    if provider == "opencode" {
+        return role_model(&settings.opencode_models, role);
+    }
+    if let Some(alias) = alias {
+        return alias.to_string();
+    }
+    match role {
+        "subagent" => settings.subagent_model.clone(),
+        "map" => settings.map_model.clone(),
+        _ => settings.teacher_model.clone(),
+    }
+}
+
+fn role_model(models: &RoleModels, role: &str) -> String {
+    match role {
+        "subagent" => models.subagent.clone(),
+        "map" => models.map.clone(),
+        _ => models.teacher.clone(),
+    }
+}
+
+/// The one effort rule: claude only, and never for `"default"` or an empty setting (`engine.ts:26-30`).
+pub fn effort_for(settings: &LearnerSettings, provider: &str, role: &str) -> Option<String> {
+    if provider == "agy" || provider == "opencode" {
+        return None;
+    }
+    let effort = match role {
+        "subagent" => &settings.effort.subagent,
+        "map" => &settings.effort.map,
+        _ => &settings.effort.teacher,
+    };
+    // Node's `eff && eff !== "default"`: the empty string is falsy too.
+    if effort.is_empty() || effort == "default" {
+        None
+    } else {
+        Some(effort.clone())
+    }
+}
+
+/// The system prompt an engine sees: agy only, and only when it has built-in tools to rename.
+pub fn with_engine_note(system_prompt: &str, provider: &str, grant: &[Grant]) -> String {
+    if provider != "agy" || grant.is_empty() {
+        return system_prompt.to_string();
+    }
+    format!("{system_prompt}\n\n{AGY_ENGINE_NOTE}")
+}
+
+/// Node's spawn-failure text: Node names the missing program, an io::Error does not.
+pub fn spawn_error_message(program: &str, err: &std::io::Error) -> String {
+    if err.kind() == std::io::ErrorKind::NotFound {
+        format!("spawn {program} ENOENT")
+    } else {
+        err.to_string()
+    }
+}
 
 /// Equivalent of Node's `CLAUDE_AUTH_ERROR_RE`, hand-rolled to avoid a regex crate.
 pub fn is_auth_error(text: &str) -> bool {
@@ -216,5 +294,93 @@ mod tests {
         assert_eq!(&id[14..15], "4", "{id}");
         assert!(matches!(&id[19..20], "8" | "9" | "a" | "b"), "{id}");
         assert_ne!(uuid_v4(), id);
+    }
+
+    fn settings() -> LearnerSettings {
+        LearnerSettings {
+            agy_models: RoleModels {
+                teacher: "agy-teacher".to_string(),
+                subagent: "agy-subagent".to_string(),
+                map: "agy-map".to_string(),
+            },
+            opencode_models: RoleModels {
+                teacher: "oc-teacher".to_string(),
+                subagent: "oc-subagent".to_string(),
+                map: "oc-map".to_string(),
+            },
+            teacher_model: "claude-teacher".to_string(),
+            subagent_model: "claude-subagent".to_string(),
+            map_model: "claude-map".to_string(),
+            ..LearnerSettings::default()
+        }
+    }
+
+    #[test]
+    fn model_for_follows_the_engine_rule() {
+        let s = settings();
+        assert_eq!(model_for(&s, "agy", "teacher", Some("alias")), "agy-teacher");
+        assert_eq!(model_for(&s, "agy", "subagent", None), "agy-subagent");
+        assert_eq!(model_for(&s, "agy", "map", None), "agy-map");
+        assert_eq!(model_for(&s, "opencode", "teacher", None), "oc-teacher");
+        assert_eq!(model_for(&s, "opencode", "subagent", Some("alias")), "oc-subagent");
+        assert_eq!(model_for(&s, "opencode", "map", None), "oc-map");
+        assert_eq!(model_for(&s, "claude", "teacher", Some("alias")), "alias");
+        assert_eq!(model_for(&s, "claude", "teacher", None), "claude-teacher");
+        assert_eq!(model_for(&s, "claude", "subagent", None), "claude-subagent");
+        assert_eq!(model_for(&s, "claude", "map", None), "claude-map");
+        // An unknown role behaves as the teacher's.
+        assert_eq!(model_for(&s, "claude", "other", None), "claude-teacher");
+        assert_eq!(model_for(&s, "agy", "other", None), "agy-teacher");
+    }
+
+    #[test]
+    fn effort_for_is_none_for_agy_opencode_and_default() {
+        let mut s = settings();
+        s.effort = crate::protocol::RoleEffort {
+            teacher: "high".to_string(),
+            subagent: "default".to_string(),
+            map: String::new(),
+        };
+        assert_eq!(effort_for(&s, "claude", "teacher").as_deref(), Some("high"));
+        assert_eq!(effort_for(&s, "claude", "subagent"), None);
+        assert_eq!(effort_for(&s, "claude", "map"), None);
+        assert_eq!(effort_for(&s, "agy", "teacher"), None);
+        assert_eq!(effort_for(&s, "opencode", "teacher"), None);
+    }
+
+    #[test]
+    fn engine_note_only_for_agy_with_grants() {
+        let note = "On this engine the read-only tools are named view_file (Read), list_dir (Glob), grep_search (Grep), search_web (WebSearch); there is no page fetch: cite search results with their URLs and say when a claim rests only on a snippet.";
+        assert_eq!(
+            with_engine_note("Sei il docente.", "agy", &[Grant::Read]),
+            format!("Sei il docente.\n\n{note}")
+        );
+        assert_eq!(
+            with_engine_note("Sei il docente.", "agy", &[Grant::Read, Grant::Web]),
+            format!("Sei il docente.\n\n{note}")
+        );
+        assert_eq!(with_engine_note("Sei il docente.", "agy", &[]), "Sei il docente.");
+        assert_eq!(
+            with_engine_note("Sei il docente.", "claude", &[Grant::Read]),
+            "Sei il docente."
+        );
+        assert_eq!(
+            with_engine_note("Sei il docente.", "opencode", &[Grant::Read]),
+            "Sei il docente."
+        );
+    }
+
+    #[test]
+    fn spawn_error_message_maps_not_found_to_enoent() {
+        let missing = std::io::Error::from(std::io::ErrorKind::NotFound);
+        assert_eq!(
+            spawn_error_message("C:\\tools\\agy.exe", &missing),
+            "spawn C:\\tools\\agy.exe ENOENT"
+        );
+        let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            spawn_error_message("claude", &denied),
+            denied.to_string()
+        );
     }
 }

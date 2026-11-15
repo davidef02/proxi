@@ -2,6 +2,7 @@
 // Turn scenario by marker in the user text (same markers as fake-claude): "FAKE:slow" (starts answering, never finishes: the
 // app interrupts), "FAKE:tool:<name>:<base64 json input>" (calls mcp_<server>_<name> on the MCP server of the agent file),
 // else a plain text answer naming the conversation. Usage is cumulative per process.
+// `models` prints a model list with a header line the parser must drop (the model-listing probe).
 // Env FAKE_AGY_RESUME_FAIL=1: a --conversation is refused (exit 1 before init), like an unknown conversation id.
 import fs from "node:fs";
 import path from "node:path";
@@ -9,6 +10,10 @@ import readline from "node:readline";
 
 const argv = process.argv.slice(2);
 console.error("fake-agy argv: " + JSON.stringify(argv));
+if (argv.includes("models")) {
+  process.stdout.write("gemini-3.8-flash-high\tGemini 3.8 Flash (High)\nModelli disponibili\nclaude-sonnet-4-6\tClaude Sonnet 4.6\n");
+  process.exit(0);
+}
 const arg = (n) => (argv.includes(n) ? argv[argv.indexOf(n) + 1] : undefined);
 if (process.env.FAKE_AGY_RESUME_FAIL === "1" && arg("--conversation")) {
   console.error("conversation not found: " + arg("--conversation"));

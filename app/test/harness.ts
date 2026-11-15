@@ -24,6 +24,19 @@ export function fakeClaude(extra: string[] = []): { cmd: string; args: string[] 
   return { cmd: process.execPath, args: [FAKE_CLAUDE, ...extra] };
 }
 
+export const FAKE_AGY = path.join(REPO_ROOT, "app", "test", "fake-agy.mjs");
+export const FAKE_OPENCODE = path.join(REPO_ROOT, "app", "test", "fake-opencode.mjs");
+
+/** The fake agy as a bin pair: node running fake-agy.mjs, plus test-hook flags before agy's own args. */
+export function fakeAgy(extra: string[] = []): { cmd: string; args: string[] } {
+  return { cmd: process.execPath, args: [FAKE_AGY, ...extra] };
+}
+
+/** The fake opencode as a bin pair: node running fake-opencode.mjs, plus test-hook flags before its own args. */
+export function fakeOpencode(extra: string[] = []): { cmd: string; args: string[] } {
+  return { cmd: process.execPath, args: [FAKE_OPENCODE, ...extra] };
+}
+
 export interface FakeUrls {
   anki?: string;
   github?: string;
@@ -81,6 +94,9 @@ export interface StartOptions {
   fakes?: FakeUrls;
   /** The engine to run instead of the real Claude (tests: `fakeClaude()`). */
   claude?: { cmd: string; args?: string[] };
+  /** The engines to run instead of the real agy and opencode (tests: `fakeAgy()`, `fakeOpencode()`). */
+  agy?: { cmd: string; args?: string[] };
+  opencode?: { cmd: string; args?: string[] };
   /** Fake executables. Node mode honours `git` only; it has no build step. */
   bins?: { git?: string; cargo?: string };
   /** Default: serverMode(). */
@@ -102,8 +118,8 @@ export async function startServer(opts: StartOptions): Promise<TestServer> {
   const repoRoot = path.resolve(opts.repoRoot);
   const dataRoot = path.resolve(opts.dataRoot ?? opts.repoRoot);
   return mode === "binary"
-    ? startBinary(repoRoot, dataRoot, opts.fakes, opts.bins, opts.claude)
-    : startNode(repoRoot, dataRoot, opts.fakes, opts.claude, opts.bins);
+    ? startBinary(repoRoot, dataRoot, opts.fakes, opts.bins, opts.claude, opts.agy, opts.opencode)
+    : startNode(repoRoot, dataRoot, opts.fakes, opts.claude, opts.bins, opts.agy, opts.opencode);
 }
 
 /** The `serve` arguments both-mode HTTP tests use: no startup update check, secrets in memory, fakes and bins. */
@@ -129,6 +145,8 @@ async function startNode(
   fakes?: FakeUrls,
   claude?: { cmd: string; args?: string[] },
   bins?: StartOptions["bins"],
+  agy?: { cmd: string; args?: string[] },
+  opencode?: { cmd: string; args?: string[] },
 ): Promise<TestServer> {
   // The Anki URL is the Node seam the fake server can reach without a new URL option.
   const prevAnki = process.env.LEARNER_ANKI_URL;
@@ -145,6 +163,10 @@ async function startNode(
       openBrowser: false,
       claudeBin: claude?.cmd,
       claudeBinArgs: claude?.args,
+      agyBin: agy?.cmd,
+      agyBinArgs: agy?.args,
+      opencodeBin: opencode?.cmd,
+      opencodeBinArgs: opencode?.args,
       checkUpdateOnStart: false,
       fetchModelOnStart: false,
       fetchFn: fakes ? fakeFetch(fakes) : undefined,
@@ -171,11 +193,21 @@ async function startBinary(
   fakes?: FakeUrls,
   bins?: StartOptions["bins"],
   claude?: { cmd: string; args?: string[] },
+  agy?: { cmd: string; args?: string[] },
+  opencode?: { cmd: string; args?: string[] },
 ): Promise<TestServer> {
   const args = binaryArgs(repoRoot, dataRoot, fakes, bins);
   if (claude) {
     args.push("--claude-bin", claude.cmd);
     for (const arg of claude.args ?? []) args.push("--claude-bin-arg", arg);
+  }
+  if (agy) {
+    args.push("--agy-bin", agy.cmd);
+    for (const arg of agy.args ?? []) args.push("--agy-bin-arg", arg);
+  }
+  if (opencode) {
+    args.push("--opencode-bin", opencode.cmd);
+    for (const arg of opencode.args ?? []) args.push("--opencode-bin-arg", arg);
   }
 
   // No shell (L15): a quoted path breaks under cmd.exe.

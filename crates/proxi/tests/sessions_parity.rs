@@ -1,9 +1,9 @@
-//! Replays the Node session golden against the Rust server (AC1/AC4).
+//! Replays the Node session goldens against the Rust server (AC1/AC2/AC4).
 //!
 //! Same flow as `captureSessions` of `app/test/capture-golden.ts` on the same two temp folders:
 //! create, poll idle, SSE, message, collect to the idle status, get, list, shutdown, state file.
 //! Every output goes through a port of `normaliseSession`, then value and compact serialisation
-//! (key order) are compared.
+//! (key order) are compared. One golden per engine: claude, agy, opencode.
 
 mod common;
 
@@ -14,17 +14,19 @@ use std::time::Duration;
 use reqwest::{Client, StatusCode};
 use serde_json::Value;
 
-use common::sessions::{body_json, data_events, post, read_until, require_fake_engine, wait_for};
+use common::sessions::{
+    body_json, data_events, fake_script_args, post, read_until, require_fake_engine, wait_for,
+};
 use proxi::server::{ServerOptions, start};
 
-fn golden_file() -> PathBuf {
+fn golden_file(name: &str) -> PathBuf {
     common::repo_root()
         .join("crates")
         .join("proxi")
         .join("tests")
         .join("fixtures")
         .join("golden")
-        .join("sessions.json")
+        .join(name)
 }
 
 fn case<'a>(golden: &'a Value, name: &str) -> &'a Value {
@@ -117,13 +119,16 @@ fn normalise_session(value: Value, roots: &Roots, session_id: &str) -> Value {
     }
 }
 
-/// In this order: the session id, every other UUID, the fake engine's pids, then the whole-string
-/// root and ISO rules of `normalise`.
+/// In this order: the session id, every other UUID, the fake engine's pids, agy's and opencode's
+/// invented ids, then the whole-string root and ISO rules of `normalise`.
 fn normalise_text(text: &str, roots: &Roots, session_id: &str) -> String {
     let replaced = text.replace(session_id, "<session>");
     let replaced = replace_uuids(&replaced);
     let replaced = replace_pid_counter(&replaced, "msg_");
     let replaced = replace_pid_counter(&replaced, "toolu_fake_");
+    let replaced = replace_engine_id(&replaced, "conv-");
+    let replaced = replace_engine_id(&replaced, "ses-");
+    let replaced = replace_step_ids(&replaced);
     if roots.repo.iter().any(|root| root == &replaced) {
         "<repoRoot>".to_string()
     } else if roots.data.iter().any(|root| root == &replaced) {
@@ -178,6 +183,53 @@ fn replace_pid_counter(text: &str, prefix: &str) -> String {
         } else {
             out.push_str(prefix);
             rest = after;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// `/conv-\d+/g` and `/ses-\d+/g`: the engine's conversation/session ids keep the prefix only.
+fn replace_engine_id(text: &str, prefix: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find(prefix) {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + prefix.len()..];
+        let digits = after.bytes().take_while(u8::is_ascii_digit).count();
+        if digits > 0 {
+            out.push_str(prefix);
+            out.push_str("<pid>");
+            rest = &after[digits..];
+        } else {
+            // No digits: no match here, the regex retries one char later.
+            out.push_str(&rest[start..start + 1]);
+            rest = &rest[start + 1..];
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// `/:a\d+_\d+_/g`: agy's `a<pid>_<run>_<step>` ids keep the step, losing the pid and the run.
+fn replace_step_ids(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find(":a") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        let pid = after.bytes().take_while(u8::is_ascii_digit).count();
+        let run = after[pid..]
+            .strip_prefix('_')
+            .map(|tail| tail.bytes().take_while(u8::is_ascii_digit).count())
+            .unwrap_or(0);
+        if pid > 0 && run > 0 && after.as_bytes().get(pid + 1 + run) == Some(&b'_') {
+            out.push_str(":a<pid>_<run>_");
+            rest = &after[pid + 1 + run + 1..];
+        } else {
+            // No full id: no match here, the regex retries one char later.
+            out.push_str(&rest[start..start + 1]);
+            rest = &rest[start + 1..];
         }
     }
     out.push_str(rest);
@@ -245,11 +297,53 @@ fn pid_normaliser_matches_the_js_regex() {
     );
 }
 
+#[test]
+fn engine_id_normalisers_match_the_js_regex() {
+    assert_eq!(replace_engine_id("conv-123", "conv-"), "conv-<pid>");
+    assert_eq!(replace_engine_id("conv-x", "conv-"), "conv-x");
+    assert_eq!(replace_engine_id("a:conv-7:b", "conv-"), "a:conv-<pid>:b");
+    assert_eq!(replace_step_ids("t:a12_3_1:0"), "t:a<pid>_<run>_1:0");
+    assert_eq!(replace_step_ids("t:a12_x"), "t:a12_x");
+    assert_eq!(replace_engine_id("ses-9.", "ses-"), "ses-<pid>.");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn sessions_match_the_node_golden() {
+    replay("sessions.json", |options| {
+        options.bins.claude = Some(PathBuf::from("node"));
+        options.bins.claude_args = fake_script_args("fake-claude.mjs", &[]);
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn agy_sessions_match_the_node_golden() {
+    replay("sessions-agy.json", |options| {
+        options.bins.claude = Some(PathBuf::from("node"));
+        options.bins.claude_args = fake_script_args("fake-claude.mjs", &[]);
+        options.bins.agy = Some(PathBuf::from("node"));
+        options.bins.agy_args = fake_script_args("fake-agy.mjs", &[]);
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn opencode_sessions_match_the_node_golden() {
+    replay("sessions-opencode.json", |options| {
+        options.bins.claude = Some(PathBuf::from("node"));
+        options.bins.claude_args = fake_script_args("fake-claude.mjs", &[]);
+        options.bins.opencode = Some(PathBuf::from("node"));
+        options.bins.opencode_args = fake_script_args("fake-opencode.mjs", &[]);
+    })
+    .await;
+}
+
+/// The whole `captureSessions` flow for one golden; `configure` picks the engine bins.
+async fn replay(golden: &str, configure: impl FnOnce(&mut ServerOptions)) {
     require_fake_engine();
-    let raw = fs::read_to_string(golden_file())
-        .unwrap_or_else(|error| panic!("read {}: {error}", golden_file().display()));
+    let file = golden_file(golden);
+    let raw = fs::read_to_string(&file)
+        .unwrap_or_else(|error| panic!("read {}: {error}", file.display()));
     let golden: Value = serde_json::from_str(&raw).expect("parse sessions golden");
 
     let dir = common::temp_dir("sessions-parity");
@@ -270,15 +364,7 @@ async fn sessions_match_the_node_golden() {
     options.memory_secrets = true;
     // Long enough that only the turn's events can appear in the stream, like the Node capture.
     options.keep_alive = Duration::from_secs(120);
-    options.bins.claude = Some(PathBuf::from("node"));
-    options.bins.claude_args = vec![
-        common::repo_root()
-            .join("app")
-            .join("test")
-            .join("fake-claude.mjs")
-            .display()
-            .to_string(),
-    ];
+    configure(&mut options);
     let server = start(options).await.expect("start Rust server");
     let client = Client::new();
 

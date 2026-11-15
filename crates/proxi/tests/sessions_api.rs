@@ -16,7 +16,7 @@ use reqwest::{Client, StatusCode};
 use serde_json::{json, Value};
 
 use common::sessions::{
-    body_json, data_events, delete, describe, fake_args, post, raw_inputs, read_until,
+    body_json, data_events, delete, describe, fake_script_args, post, raw_inputs, read_until,
     require_fake_engine, seed_demo_course, teach_planned, upload, user_texts, wait_for,
     wait_for_state_file, UploadPart, INTERRUPT_REQUEST,
 };
@@ -49,7 +49,7 @@ impl Fixture {
         options.data_root = Some(self.data.0.clone());
         options.memory_secrets = true;
         options.bins.claude = Some(PathBuf::from("node"));
-        options.bins.claude_args = fake_args(extra);
+        options.bins.claude_args = fake_script_args("fake-claude.mjs", extra);
         options
     }
 }
