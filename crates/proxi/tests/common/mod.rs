@@ -17,6 +17,7 @@ use proxi::server::ServerOptions;
 
 pub mod anki_seed;
 pub mod cli_golden;
+pub mod engine;
 pub mod fake_anki;
 pub mod fake_hf;
 pub mod sessions;

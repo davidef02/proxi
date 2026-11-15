@@ -11,7 +11,21 @@ import { captureLessonGolden, LESSON_GOLDEN } from "./capture-lesson-golden.ts";
 import { captureMcpGolden, MCP_GOLDEN } from "./capture-mcp-golden.ts";
 import { REPO_ROOT } from "./harness.ts";
 
-const ROUTES = ["settings", "limits", "events", "courses", "lesson", "graph", "exercises", "sync", "sync-gdrive", "home", "sessions"];
+const ROUTES = [
+  "settings",
+  "limits",
+  "events",
+  "courses",
+  "lesson",
+  "graph",
+  "exercises",
+  "sync",
+  "sync-gdrive",
+  "home",
+  "sessions",
+  "sessions-agy",
+  "sessions-opencode",
+];
 const ALL_GOLDENS = [...ROUTES, LESSON_GOLDEN, ANKI_GOLDEN, MCP_GOLDEN];
 
 const dirs: string[] = [];
@@ -304,6 +318,51 @@ it("sessions golden holds the snapshot, the live turn and the state file", () =>
 
   // A successful turn clears pendingStart and lastTurn: only the live fields keep their Node order.
   assert.deepEqual(Object.keys(file.stateFile), ["state", "provider", "resume", "canRetry"]);
+});
+
+it("agy and opencode session goldens pin the engine, its token and the turn", () => {
+  interface SessionCase {
+    name: string;
+    events?: any[];
+  }
+  interface TeacherItem {
+    kind: string;
+    text: string;
+  }
+  const tokens = { agy: "conv-<pid>", opencode: "ses-<pid>" } as const;
+  const uuid = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/;
+
+  for (const engine of ["agy", "opencode"] as const) {
+    const token = tokens[engine];
+    const file = JSON.parse(goldenText(`sessions-${engine}`)) as {
+      cases: SessionCase[];
+      stateFile: Record<string, unknown>;
+    };
+
+    assert.equal(file.stateFile.provider, engine);
+    assert.equal(file.stateFile.resume, token);
+    assert.deepEqual(Object.keys(file.stateFile), ["state", "provider", "resume", "canRetry"]);
+
+    const message = file.cases.find((c) => c.name === "message");
+    assert.ok(message?.events, `${engine}: the message case has no events`);
+    const [snapshot, ...live] = message.events;
+    assert.equal(snapshot.type, "snapshot", engine);
+    assert.ok(
+      snapshot.state.items.some((i: TeacherItem) => i.kind === "teacher" && i.text === `Ciao, sono il docente (${token}).`),
+      `${engine}: the snapshot has no teacher item naming ${token}`,
+    );
+    const kinds = live.map((e) => (e.type === "item" ? `item:${e.item.kind}` : e.type));
+    assert.equal(kinds[0], "item:learner", engine);
+    assert.equal(live[live.length - 1].type, "status", engine);
+    assert.equal(live[live.length - 1].status, "idle", engine);
+
+    // No machine- or run-dependent id survives the capture, in the cases and in the saved state.
+    walkStrings({ cases: file.cases, stateFile: file.stateFile }, (s) => {
+      assert.doesNotMatch(s, ISO_RE, s);
+      assert.doesNotMatch(s, uuid, s);
+      assert.doesNotMatch(s, /(?:conv|ses)-\d+/, s);
+    });
+  }
 });
 
 it("golden fixtures hold no raw timestamps", () => {

@@ -31,12 +31,10 @@ pub fn require_fake_engine() {
     );
 }
 
-/// The fake engine command line: the node script, then `extra` (test hooks such as `--input-out`).
-pub fn fake_args(extra: &[&str]) -> Vec<String> {
-    let fake = super::repo_root()
-        .join("app")
-        .join("test")
-        .join("fake-claude.mjs");
+/// The fake engine command line: the node script `script` under `app/test`, then `extra` (test
+/// hooks such as `--input-out`).
+pub fn fake_script_args(script: &str, extra: &[&str]) -> Vec<String> {
+    let fake = super::repo_root().join("app").join("test").join(script);
     let mut args = vec![fake.display().to_string()];
     args.extend(extra.iter().map(|arg| arg.to_string()));
     args
@@ -112,7 +110,7 @@ impl Fixture {
     /// The same with test-hook flags before the fake script (`--input-out`, `--env-out`).
     pub fn options_with(&self, extra: &[&str]) -> ServerOptions {
         let mut options = self.options();
-        options.bins.claude_args = fake_args(extra);
+        options.bins.claude_args = fake_script_args("fake-claude.mjs", extra);
         options
     }
 }
@@ -123,14 +121,7 @@ pub fn fake_engine_options(repo: &Path, data: &Path) -> ServerOptions {
     options.data_root = Some(data.to_path_buf());
     options.memory_secrets = true;
     options.bins.claude = Some(PathBuf::from("node"));
-    options.bins.claude_args = vec![
-        super::repo_root()
-            .join("app")
-            .join("test")
-            .join("fake-claude.mjs")
-            .display()
-            .to_string(),
-    ];
+    options.bins.claude_args = fake_script_args("fake-claude.mjs", &[]);
     options
 }
 

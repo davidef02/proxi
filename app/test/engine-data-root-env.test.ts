@@ -5,9 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { spawnAgy } from "../server/agy.ts";
 import { spawnClaude } from "../server/claude.ts";
-import { spawnOpencode } from "../server/opencode.ts";
 import { writeSettings } from "../server/settings.ts";
 import type { EngineCallbacks, EngineHandle, EngineLaunch, Provider } from "../server/types.ts";
 
@@ -18,9 +16,6 @@ const ECHO = `console.error("DATA_ROOT=" + (process.env.LEARNER_DATA_ROOT ?? "UN
 
 const ENGINES: { provider: Provider; spawn: Spawn; perTurn: boolean }[] = [
   { provider: "claude", spawn: spawnClaude, perTurn: false },
-  { provider: "agy", spawn: spawnAgy, perTurn: false },
-  // opencode starts one process per turn: the env is checked on the process a send() launches
-  { provider: "opencode", spawn: spawnOpencode, perTurn: true },
 ];
 
 /** Runs the adapter against the echo script and returns the value the child saw. */

@@ -3,7 +3,7 @@
 use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::ExitStatus;
+use std::process::{ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -15,6 +15,13 @@ use process_wrap::tokio::{ChildWrapper, CommandWrap, KillOnDrop};
 
 /// How long the reaper waits for a killed tree before giving up on it.
 const REAP_LIMIT: Duration = Duration::from_secs(5);
+
+/// How long a `models` query may run before it is killed (Node's `setTimeout(() => c.kill(),
+/// 10_000)`).
+const MODELS_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[cfg(windows)]
+pub(crate) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 pub struct TreeChild {
     inner: Box<dyn ChildWrapper>,
@@ -77,9 +84,8 @@ impl TreeChild {
     #[cfg(windows)]
     fn taskkill(pid: u32) {
         use std::os::windows::process::CommandExt;
-        use std::process::{Command, Stdio};
+        use std::process::Command;
 
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         let pid = pid.to_string();
         let _ = Command::new("taskkill")
             .args(["/PID", pid.as_str(), "/T", "/F"])
@@ -199,33 +205,75 @@ impl Drop for StderrReader {
     }
 }
 
-pub fn find_on_path(name: &str, path: Option<&OsStr>) -> Option<PathBuf> {
+/// Locates `name` in `path` with the given extensions, tried in order inside each directory
+/// (cmd's PATHEXT order). An empty list means the bare name, as on Unix.
+pub fn find_on_path_with_extensions(
+    name: &str,
+    extensions: &[&str],
+    path: Option<&OsStr>,
+) -> Option<PathBuf> {
     for entry in std::env::split_paths(path?) {
         if entry.as_os_str().is_empty() {
             continue;
         }
-        #[cfg(windows)]
-        {
-            // Windows' own lookup never picks an extensionless file: a `node` there is a shell
-            // shim, and running it fails with "%1 is not a valid Win32 application".
-            let exe = entry.join(format!("{name}.exe"));
-            if exe.is_file() {
-                return Some(exe);
-            }
-        }
-        #[cfg(not(windows))]
-        {
+        if extensions.is_empty() {
             let direct = entry.join(name);
             if direct.is_file() {
                 return Some(direct);
+            }
+            continue;
+        }
+        for extension in extensions {
+            let candidate = entry.join(format!("{name}.{extension}"));
+            if candidate.is_file() {
+                return Some(candidate);
             }
         }
     }
     None
 }
 
+pub fn find_on_path(name: &str, path: Option<&OsStr>) -> Option<PathBuf> {
+    // Windows' own lookup never picks an extensionless file: a `node` there is a shell shim, and
+    // running it fails with "%1 is not a valid Win32 application".
+    #[cfg(windows)]
+    let extensions = ["exe"];
+    #[cfg(not(windows))]
+    let extensions: [&str; 0] = [];
+    find_on_path_with_extensions(name, &extensions, path)
+}
+
 pub fn node_on_path() -> Option<PathBuf> {
     find_on_path("node", std::env::var_os("PATH").as_deref())
+}
+
+/// Runs `<program> <args…> models` and returns its stdout, lossily decoded. A failed spawn gives
+/// `None`; on the 10 s timeout the process is killed and what arrived is kept, like Node's buffer.
+pub(crate) async fn models_stdout(program: &str, args: &[String]) -> Option<String> {
+    let mut command = tokio::process::Command::new(program);
+    command
+        .args(args)
+        .arg("models")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    let mut child = command.spawn().ok()?;
+    let mut stdout = child.stdout.take()?;
+    let mut buffer = Vec::new();
+    if tokio::time::timeout(
+        MODELS_TIMEOUT,
+        tokio::io::AsyncReadExt::read_to_end(&mut stdout, &mut buffer),
+    )
+    .await
+    .is_err()
+    {
+        let _ = child.start_kill();
+    }
+    Some(String::from_utf8_lossy(&buffer).into_owned())
 }
 
 pub fn shim_command(program: &Path) -> tokio::process::Command {
@@ -420,6 +468,45 @@ writeFileSync(join(here, "holder.pid"), String(holder.pid));
         assert_eq!(find_on_path("tool", None), None);
         let empty_path = std::env::join_paths([&empty]).expect("join paths");
         assert_eq!(find_on_path("tool", Some(&empty_path)), None);
+    }
+
+    #[test]
+    fn find_on_path_with_extensions_prefers_the_earlier_extension() {
+        let dir = temp_dir();
+        let tools = dir.0.join("tools");
+        fs::create_dir_all(&tools).expect("create tools");
+        fs::write(tools.join("tool.cmd"), "").expect("write cmd");
+        fs::write(tools.join("tool.bat"), "").expect("write bat");
+
+        let path = std::env::join_paths([&tools]).expect("join paths");
+        assert_eq!(
+            find_on_path_with_extensions("tool", &["exe", "bat", "cmd"], Some(&path)),
+            Some(tools.join("tool.bat"))
+        );
+        assert_eq!(
+            find_on_path_with_extensions("tool", &["exe"], Some(&path)),
+            None
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_quoted_path_entry_still_matches() {
+        // `split_paths` unquotes an entry: a "C:\Program Files\opencode" dir must still be found.
+        let dir = temp_dir();
+        let tools = dir.0.join("Program Files").join("opencode");
+        fs::create_dir_all(&tools).expect("create tools");
+        fs::write(tools.join("opencode.cmd"), "").expect("write shim");
+
+        let quoted = format!("\"{}\"", tools.display());
+        assert_eq!(
+            find_on_path_with_extensions(
+                "opencode",
+                &["exe", "bat", "cmd"],
+                Some(OsStr::new(&quoted))
+            ),
+            Some(tools.join("opencode.cmd"))
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

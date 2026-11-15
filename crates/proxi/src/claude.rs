@@ -291,11 +291,17 @@ pub enum EnvPlan {
     MissingApiKey,
 }
 
-pub fn child_env(settings: &LearnerSettings, data_root: Option<&Path>) -> EnvPlan {
+/// Every engine's child env; claude adds the API key decision on top (`child_env`).
+pub(crate) fn base_env(data_root: Option<&Path>) -> Vec<(String, String)> {
     let mut set = vec![("MCP_TOOL_TIMEOUT".to_string(), "86400000".to_string())];
     if let Some(root) = data_root {
         set.push(("LEARNER_DATA_ROOT".to_string(), root.display().to_string()));
     }
+    set
+}
+
+pub fn child_env(settings: &LearnerSettings, data_root: Option<&Path>) -> EnvPlan {
+    let mut set = base_env(data_root);
     if settings.claude_auth == "apiKey" {
         let key = js::js_trim(&settings.anthropic_api_key);
         if key.is_empty() {
@@ -350,6 +356,98 @@ pub fn flush_line(buf: &mut Vec<u8>) -> Option<String> {
     }
 }
 
+/// The command every adapter starts: cwd, pipes, env, and the tree-killing wrappers.
+pub(crate) fn engine_command(
+    program: &str,
+    argv: &[String],
+    cwd: &Path,
+    set: &[(String, String)],
+    remove: &[String],
+    stdin: Stdio,
+) -> process_wrap::tokio::CommandWrap {
+    let mut command = process_wrap::tokio::CommandWrap::with_new(program, |command| {
+        command
+            .args(argv)
+            .current_dir(cwd)
+            .stdin(stdin)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        for (key, value) in set {
+            command.env(key, value);
+        }
+        for key in remove {
+            command.env_remove(key);
+        }
+    });
+    #[cfg(windows)]
+    {
+        // windowsHide, and the job so the whole tree dies with the handle.
+        use process_wrap::tokio::{CreationFlags, JobObject, KillOnDrop};
+        use windows::Win32::System::Threading::CREATE_NO_WINDOW;
+        command.wrap(JobObject);
+        command.wrap(KillOnDrop);
+        command.wrap(CreationFlags(CREATE_NO_WINDOW));
+    }
+    #[cfg(unix)]
+    {
+        use process_wrap::tokio::{KillOnDrop, ProcessGroup};
+        command.wrap(ProcessGroup::leader());
+        command.wrap(KillOnDrop);
+    }
+    command
+}
+
+/// Reads a pipe to EOF and hands over complete lines, the unterminated tail last.
+pub(crate) async fn pump_lines<R: tokio::io::AsyncRead + Unpin>(
+    reader: Option<R>,
+    mut on_line: impl FnMut(String),
+) {
+    let Some(mut reader) = reader else {
+        return;
+    };
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        let read = match reader.read(&mut chunk).await {
+            Ok(0) => break,
+            Ok(read) => read,
+            Err(_) => break,
+        };
+        for line in split_lines(&mut buf, &chunk[..read]) {
+            on_line(line);
+        }
+    }
+    if let Some(line) = flush_line(&mut buf) {
+        on_line(line);
+    }
+}
+
+/// Waits for the engine, or kills it when the handle stops; `(None, None)` when the wait failed.
+pub(crate) async fn wait_child(
+    child: &mut Box<dyn process_wrap::tokio::ChildWrapper>,
+    kill_rx: &mut mpsc::UnboundedReceiver<()>,
+) -> (Option<i32>, Option<String>) {
+    enum WaitOutcome {
+        Done(std::io::Result<ExitStatus>),
+        Kill,
+    }
+    let outcome = tokio::select! {
+        status = child.wait() => WaitOutcome::Done(status),
+        _ = kill_rx.recv() => WaitOutcome::Kill,
+    };
+    let status = match outcome {
+        WaitOutcome::Done(status) => status,
+        WaitOutcome::Kill => {
+            let _ = child.start_kill();
+            child.wait().await
+        }
+    };
+    match &status {
+        Ok(status) => (status.code(), exit_signal(status)),
+        Err(_) => (None, None),
+    }
+}
+
 fn prepare(l: &ClaudeLaunch) -> std::io::Result<()> {
     fs::create_dir_all(&l.scratch_dir)?;
     fs::write(l.scratch_dir.join("system.md"), &l.system_prompt)?;
@@ -372,7 +470,7 @@ fn prepare(l: &ClaudeLaunch) -> std::io::Result<()> {
 }
 
 #[cfg(unix)]
-fn exit_signal(status: &ExitStatus) -> Option<String> {
+pub(crate) fn exit_signal(status: &ExitStatus) -> Option<String> {
     use std::os::unix::process::ExitStatusExt;
     status.signal().map(|signal| {
         match signal {
@@ -391,11 +489,11 @@ fn exit_signal(status: &ExitStatus) -> Option<String> {
 }
 
 #[cfg(not(unix))]
-fn exit_signal(_status: &ExitStatus) -> Option<String> {
+pub(crate) fn exit_signal(_status: &ExitStatus) -> Option<String> {
     None
 }
 
-struct DeadHandle;
+pub(crate) struct DeadHandle;
 
 impl EngineHandle for DeadHandle {
     fn send(&mut self, _text: &str) {}
@@ -411,12 +509,41 @@ impl EngineHandle for DeadHandle {
     }
 }
 
-struct LiveHandle {
+/// The live process: writer for the stdin lines, kill switch, and the exit watch `stop` waits on.
+pub(crate) struct LiveHandle {
     writer: Option<mpsc::UnboundedSender<String>>,
     kill: Option<mpsc::UnboundedSender<()>>,
     exit: watch::Receiver<bool>,
     pid: Option<u32>,
+    /// The stdin line shape: each engine has its own (claude.ts, agy.ts, opencode.ts).
+    line: fn(&str) -> String,
+    /// The in-band abort line, for engines that have one; `None` leaves the turn to the watchdog.
+    interrupt_line: Option<fn(u32) -> String>,
+    stopped: Arc<AtomicBool>,
     interrupts: u32,
+}
+
+impl LiveHandle {
+    pub(crate) fn new(
+        writer: Option<mpsc::UnboundedSender<String>>,
+        kill: Option<mpsc::UnboundedSender<()>>,
+        exit: watch::Receiver<bool>,
+        pid: Option<u32>,
+        line: fn(&str) -> String,
+        interrupt_line: Option<fn(u32) -> String>,
+        stopped: Arc<AtomicBool>,
+    ) -> Self {
+        Self {
+            writer,
+            kill,
+            exit,
+            pid,
+            line,
+            interrupt_line,
+            stopped,
+            interrupts: 0,
+        }
+    }
 }
 
 impl EngineHandle for LiveHandle {
@@ -424,29 +551,22 @@ impl EngineHandle for LiveHandle {
         let Some(writer) = self.writer.as_ref() else {
             return;
         };
-        let line = serde_json::json!({
-            "type": "user",
-            "message": { "role": "user", "content": text },
-        })
-        .to_string();
-        let _ = writer.send(line);
+        let _ = writer.send((self.line)(text));
     }
 
     fn interrupt(&mut self) {
         self.interrupts += 1;
+        let Some(line) = self.interrupt_line else {
+            return;
+        };
         let Some(writer) = self.writer.as_ref() else {
             return;
         };
-        let line = serde_json::json!({
-            "type": "control_request",
-            "request_id": format!("int-{}", self.interrupts),
-            "request": { "subtype": "interrupt" },
-        })
-        .to_string();
-        let _ = writer.send(line);
+        let _ = writer.send(line(self.interrupts));
     }
 
     fn stop(&mut self) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
+        self.stopped.store(true, Ordering::SeqCst);
         // Closing stdin lets a well-behaved engine exit on its own; the kill covers the rest.
         self.writer.take();
         if let Some(kill) = self.kill.take() {
@@ -466,9 +586,26 @@ impl EngineHandle for LiveHandle {
     }
 }
 
+fn claude_user_line(text: &str) -> String {
+    serde_json::json!({
+        "type": "user",
+        "message": { "role": "user", "content": text },
+    })
+    .to_string()
+}
+
+fn claude_interrupt_line(n: u32) -> String {
+    serde_json::json!({
+        "type": "control_request",
+        "request_id": format!("int-{n}"),
+        "request": { "subtype": "interrupt" },
+    })
+    .to_string()
+}
+
 /// The dead-handle path shared by a missing key and a failed spawn: the caller attaches, the pump
 /// then delivers the messages and the exit.
-fn dead(
+pub(crate) fn dead(
     tx: mpsc::UnboundedSender<EngineMsg>,
     rx: mpsc::UnboundedReceiver<EngineMsg>,
     stderr: Option<String>,
@@ -500,11 +637,6 @@ pub fn spawn_claude(
         EnvPlan::Ready { set, remove } => (set, remove),
     };
 
-    if let Err(err) = prepare(&l) {
-        return dead(tx, rx, Some(format!("spawn error: {err}")), None);
-    }
-
-    let argv = build_claude_args(&l, &uuid_v4());
     // A `.cmd`/`.bat` shim (an npm-installed `claude.cmd`) is a valid program: std runs batch files
     // through cmd.exe with cmd-safe escaping, and refuses arguments it cannot escape (CVE-2024-24576).
     let program = if l.bin.cmd == "claude" {
@@ -513,39 +645,35 @@ pub fn spawn_claude(
         l.bin.cmd.clone()
     };
 
-    let mut command = process_wrap::tokio::CommandWrap::with_new(&program, |command| {
-        command
-            .args(&argv)
-            .current_dir(&l.repo_root)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        for (key, value) in &set {
-            command.env(key, value);
-        }
-        for key in &remove {
-            command.env_remove(key);
-        }
-    });
-    #[cfg(windows)]
-    {
-        // windowsHide, and the job so the whole tree dies with the handle.
-        use process_wrap::tokio::{CreationFlags, JobObject, KillOnDrop};
-        use windows::Win32::System::Threading::CREATE_NO_WINDOW;
-        command.wrap(JobObject);
-        command.wrap(KillOnDrop);
-        command.wrap(CreationFlags(CREATE_NO_WINDOW));
+    if let Err(err) = prepare(&l) {
+        // A filesystem error on the scratch dir is not a missing executable: keep the real text.
+        return dead(tx, rx, Some(format!("spawn error: {err}")), None);
     }
-    #[cfg(unix)]
-    {
-        use process_wrap::tokio::{KillOnDrop, ProcessGroup};
-        command.wrap(ProcessGroup::leader());
-        command.wrap(KillOnDrop);
-    }
+
+    let argv = build_claude_args(&l, &uuid_v4());
+
+    let mut command = engine_command(
+        &program,
+        &argv,
+        &l.repo_root,
+        &set,
+        &remove,
+        Stdio::piped(),
+    );
 
     let mut child = match command.spawn() {
         Ok(child) => child,
-        Err(err) => return dead(tx, rx, Some(format!("spawn error: {err}")), None),
+        Err(err) => {
+            return dead(
+                tx,
+                rx,
+                Some(format!(
+                    "spawn error: {}",
+                    crate::engine::spawn_error_message(&program, &err)
+                )),
+                None,
+            );
+        }
     };
     let pid = child.id();
     let stdin = child.stdin().take();
@@ -577,25 +705,11 @@ pub fn spawn_claude(
         let got_init = got_init.clone();
         let on_limits = l.on_limits;
         async move {
-            let Some(mut stdout) = stdout else {
-                return;
-            };
             let mut state = ParseState::default();
-            let mut buf = Vec::new();
-            let mut chunk = [0u8; 8192];
-            loop {
-                let read = match stdout.read(&mut chunk).await {
-                    Ok(0) => break,
-                    Ok(read) => read,
-                    Err(_) => break,
-                };
-                for line in split_lines(&mut buf, &chunk[..read]) {
-                    emit_line(&line, &mut state, &tx, &got_init, &on_limits);
-                }
-            }
-            if let Some(line) = flush_line(&mut buf) {
+            pump_lines(stdout, |line| {
                 emit_line(&line, &mut state, &tx, &got_init, &on_limits);
-            }
+            })
+            .await;
         }
     });
 
@@ -603,46 +717,17 @@ pub fn spawn_claude(
         let tx = tx.clone();
         let tail = tail.clone();
         async move {
-            let Some(mut stderr) = stderr else {
-                return;
-            };
-            let mut buf = Vec::new();
-            let mut chunk = [0u8; 8192];
-            loop {
-                let read = match stderr.read(&mut chunk).await {
-                    Ok(0) => break,
-                    Ok(read) => read,
-                    Err(_) => break,
-                };
-                for line in split_lines(&mut buf, &chunk[..read]) {
-                    push_tail(&tail, &line);
-                    let _ = tx.send(EngineMsg::Stderr(line));
-                }
-            }
-            if let Some(line) = flush_line(&mut buf) {
+            pump_lines(stderr, |line| {
                 push_tail(&tail, &line);
                 let _ = tx.send(EngineMsg::Stderr(line));
-            }
+            })
+            .await;
         }
     });
 
     let resume = l.resume;
     tokio::spawn(async move {
-        enum WaitOutcome {
-            Done(std::io::Result<ExitStatus>),
-            Kill,
-        }
-        let outcome = tokio::select! {
-            status = child.wait() => WaitOutcome::Done(status),
-            _ = kill_rx.recv() => WaitOutcome::Kill,
-        };
-        let status = match outcome {
-            WaitOutcome::Done(status) => status,
-            WaitOutcome::Kill => {
-                let _ = child.start_kill();
-                child.wait().await
-            }
-        };
+        let (code, signal) = wait_child(&mut child, &mut kill_rx).await;
         // The readers see EOF only once every process holding the pipes is gone.
         let _ = stdout_task.await;
         let _ = stderr_task.await;
@@ -664,22 +749,20 @@ pub fn spawn_claude(
                 message: Some(CLAUDE_AUTH_ERROR_MESSAGE.to_string()),
             }));
         }
-        let (code, signal) = match &status {
-            Ok(status) => (status.code(), exit_signal(status)),
-            Err(_) => (None, None),
-        };
         let _ = tx.send(EngineMsg::Exit { code, signal });
         let _ = exit_tx.send(true);
     });
 
     (
-        Box::new(LiveHandle {
-            writer: Some(writer_tx),
-            kill: Some(kill_tx),
-            exit: exit_rx,
+        Box::new(LiveHandle::new(
+            Some(writer_tx),
+            Some(kill_tx),
+            exit_rx,
             pid,
-            interrupts: 0,
-        }),
+            claude_user_line,
+            Some(claude_interrupt_line),
+            Arc::new(AtomicBool::new(false)),
+        )),
         rx,
     )
 }
@@ -1137,6 +1220,25 @@ mod tests {
     }
 
     #[test]
+    fn base_env_sets_the_timeout_and_the_data_root_only_when_given() {
+        assert_eq!(
+            base_env(None),
+            vec![("MCP_TOOL_TIMEOUT".to_string(), "86400000".to_string())]
+        );
+        let root = Path::new("/data");
+        assert_eq!(
+            base_env(Some(root)),
+            vec![
+                ("MCP_TOOL_TIMEOUT".to_string(), "86400000".to_string()),
+                (
+                    "LEARNER_DATA_ROOT".to_string(),
+                    root.display().to_string()
+                ),
+            ]
+        );
+    }
+
+    #[test]
     fn line_splitter_handles_split_chunks_and_crlf() {
         let mut buf = Vec::new();
         assert_eq!(split_lines(&mut buf, b"a\nb"), strings(&["a"]));
@@ -1161,13 +1263,15 @@ mod tests {
     fn interrupt_writes_the_in_band_control_request() {
         let (writer, mut written) = mpsc::unbounded_channel::<String>();
         let (kill, _kill_rx) = mpsc::unbounded_channel::<()>();
-        let mut handle = LiveHandle {
-            writer: Some(writer),
-            kill: Some(kill),
-            exit: watch::channel(false).1,
-            pid: None,
-            interrupts: 0,
-        };
+        let mut handle = LiveHandle::new(
+            Some(writer),
+            Some(kill),
+            watch::channel(false).1,
+            None,
+            claude_user_line,
+            Some(claude_interrupt_line),
+            Arc::new(AtomicBool::new(false)),
+        );
 
         handle.interrupt();
         handle.interrupt();
@@ -1248,6 +1352,7 @@ mod tests {
             EngineMsg::Event(EngineEvent::Result { .. }) => Some("result"),
             EngineMsg::Event(EngineEvent::ControlResponse { .. }) => Some("control-response"),
             EngineMsg::Event(EngineEvent::ResumeFailed) => Some("resume-failed"),
+            EngineMsg::Event(EngineEvent::ActionDenied { .. }) => Some("action-denied"),
             EngineMsg::Event(EngineEvent::AuthFailed { .. }) => Some("auth-failed"),
             EngineMsg::Event(EngineEvent::Limits { .. }) => Some("limits"),
             EngineMsg::Event(EngineEvent::Ignored) => Some("ignored"),
@@ -1510,6 +1615,36 @@ mod tests {
             }
         }
         assert_eq!(exits, 1);
+        handle.stop().await;
+    }
+
+    #[tokio::test]
+    async fn a_missing_executable_reports_spawn_enoent() {
+        let repo = temp_dir("missing-bin");
+        let missing = repo.join("missing-claude.exe");
+        let mut l = launch(&repo);
+        l.bin = ClaudeBin {
+            cmd: missing.display().to_string(),
+            args: Vec::new(),
+        };
+        let (mut handle, mut rx) = spawn_claude(l);
+        assert_eq!(handle.pid(), None);
+
+        assert_eq!(
+            next(&mut rx).await,
+            EngineMsg::Stderr(format!(
+                "spawn error: spawn {} ENOENT",
+                missing.display()
+            ))
+        );
+        assert_eq!(
+            next(&mut rx).await,
+            EngineMsg::Exit {
+                code: None,
+                signal: None
+            }
+        );
+        assert!(rx.recv().await.is_none());
         handle.stop().await;
     }
 
