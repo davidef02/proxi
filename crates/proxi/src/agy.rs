@@ -10,13 +10,13 @@ use std::path::Path;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::Duration;
 
 use indexmap::IndexMap;
 use serde_json::Value;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, watch};
 
+use crate::child;
 use crate::claude;
 use crate::engine::{
     EngineBin, EngineEvent, EngineHandle, EngineLaunch, EngineMsg, Grant, ToolUse,
@@ -554,38 +554,12 @@ fn fallback_models() -> Vec<String> {
         .collect()
 }
 
-#[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
 /// The live model list, cached by the caller per server.
 pub async fn list_agy_models(bin: &EngineBin) -> Vec<String> {
-    let mut command = tokio::process::Command::new(&bin.cmd);
-    command
-        .args(&bin.args)
-        .arg("models")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .kill_on_drop(true);
-    #[cfg(windows)]
-    command.creation_flags(CREATE_NO_WINDOW);
-
-    let mut child = match command.spawn() {
-        Ok(child) => child,
-        Err(_) => return fallback_models(),
-    };
-    let Some(mut stdout) = child.stdout.take() else {
-        return fallback_models();
-    };
-    let mut buffer = Vec::new();
-    if tokio::time::timeout(Duration::from_secs(10), stdout.read_to_end(&mut buffer))
-        .await
-        .is_err()
-    {
-        // Keep what arrived: Node parses the partial buffer after the kill too.
-        let _ = child.start_kill();
+    match child::models_stdout(&bin.cmd, &bin.args).await {
+        Some(stdout) => parse_agy_models(&stdout),
+        None => fallback_models(),
     }
-    parse_agy_models(&String::from_utf8_lossy(&buffer))
 }
 
 #[cfg(test)]

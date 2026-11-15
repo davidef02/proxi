@@ -618,15 +618,8 @@ pub fn spawn_claude(
     };
 
     if let Err(err) = prepare(&l) {
-        return dead(
-            tx,
-            rx,
-            Some(format!(
-                "spawn error: {}",
-                crate::engine::spawn_error_message(&program, &err)
-            )),
-            None,
-        );
+        // A filesystem error on the scratch dir is not a missing executable: keep the real text.
+        return dead(tx, rx, Some(format!("spawn error: {err}")), None);
     }
 
     let argv = build_claude_args(&l, &uuid_v4());

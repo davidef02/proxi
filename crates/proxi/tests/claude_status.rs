@@ -14,6 +14,14 @@ fn mock(dir: &common::TempDir, body: &str) -> String {
     script.display().to_string()
 }
 
+/// The program the probe runs for a `.mjs` mock: Node's own executable, as `process.execPath` in
+/// `claude-version.test.ts`.
+fn node_program() -> String {
+    proxi::child::node_on_path()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "node".to_string())
+}
+
 async fn probe(script: &str) -> ClaudeStatusResponse {
     probe_claude_cli(script, Duration::from_secs(10)).await
 }
@@ -62,6 +70,31 @@ async fn failing_process_is_version_unchecked() {
         error.starts_with("Command failed: "),
         "Node's execFile text: {error}"
     );
+}
+
+#[tokio::test]
+async fn a_silent_failure_still_ends_with_node_newline() {
+    common::require_node();
+    let dir = common::temp_dir("claude-status-silent");
+    let script = mock(&dir, "process.exit(1);\n");
+
+    let status = probe(&script).await;
+    assert_eq!(status.status, "version-unchecked");
+    // Node's execFile always appends the newline before the stderr, empty included.
+    let expected = format!("Command failed: {} {script} --version\n", node_program());
+    assert_eq!(status.error.as_deref(), Some(expected.as_str()));
+}
+
+#[tokio::test]
+async fn a_timeout_is_a_command_failed_with_the_newline() {
+    common::require_node();
+    let dir = common::temp_dir("claude-status-timeout");
+    let script = mock(&dir, "setTimeout(() => {}, 5000);\n");
+
+    let status = probe_claude_cli(&script, Duration::from_millis(300)).await;
+    assert_eq!(status.status, "version-unchecked");
+    let expected = format!("Command failed: {} {script} --version\n", node_program());
+    assert_eq!(status.error.as_deref(), Some(expected.as_str()));
 }
 
 #[tokio::test]

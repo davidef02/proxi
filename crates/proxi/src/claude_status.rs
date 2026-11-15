@@ -5,15 +5,14 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use crate::child;
+#[cfg(windows)]
+use crate::child::CREATE_NO_WINDOW;
 use crate::claude;
 use crate::engine::spawn_error_message;
 use crate::js;
 use crate::protocol::ClaudeStatusResponse;
 
 pub const CLAUDE_MIN_VERSION: &str = "2.1.259";
-
-#[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Semver {
@@ -63,14 +62,13 @@ pub fn compare_semver(a: &Semver, b: &Semver) -> Ordering {
         .then_with(|| a.patch.cmp(&b.patch))
 }
 
-/// Node's `execFile` rejection text: `Command failed: <cmd> <args>`, then the stderr when there is one.
+/// How long the stderr drain may take once the process is gone: a descendant can hold the pipe.
+const STDERR_GRACE: Duration = Duration::from_secs(1);
+
+/// Node's `execFile` rejection text: `Command failed: <cmd> <args>`, then a newline and the stderr
+/// read so far (empty included: the newline is always there).
 fn command_failed(program: &str, args: &[String], stderr: &str) -> String {
-    let mut message = format!("Command failed: {program} {}", args.join(" "));
-    if !stderr.is_empty() {
-        message.push('\n');
-        message.push_str(stderr);
-    }
-    message
+    format!("Command failed: {program} {}\n{stderr}", args.join(" "))
 }
 
 fn unchecked(min_version: &str, bin_path: &str, error: String) -> ClaudeStatusResponse {
@@ -129,7 +127,7 @@ pub async fn probe_claude_cli(bin_path: &str, timeout: Duration) -> ClaudeStatus
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW);
 
-    let child = match command.spawn() {
+    let mut child = match command.spawn() {
         Ok(child) => child,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             return ClaudeStatusResponse {
@@ -143,15 +141,24 @@ pub async fn probe_claude_cli(bin_path: &str, timeout: Duration) -> ClaudeStatus
         Err(err) => return unchecked(&min_version, &bin_path, err.to_string()),
     };
 
+    // Node's `execFile` appends the stderr read so far to every failure, the timeout included.
+    let stderr_reader = child::StderrReader::start(child.stderr.take());
     let output = match tokio::time::timeout(timeout, child.wait_with_output()).await {
         Ok(Ok(output)) => output,
         Ok(Err(err)) => return unchecked(&min_version, &bin_path, err.to_string()),
         // The child is dropped and killed: Node's timeout is a `Command failed` too.
-        Err(_) => return unchecked(&min_version, &bin_path, command_failed(&program, &args, "")),
+        Err(_) => {
+            let stderr = stderr_reader.finish(STDERR_GRACE).await;
+            return unchecked(
+                &min_version,
+                &bin_path,
+                command_failed(&program, &args, &stderr),
+            );
+        }
     };
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr = stderr_reader.finish(STDERR_GRACE).await;
         return unchecked(
             &min_version,
             &bin_path,
@@ -238,5 +245,19 @@ mod tests {
         for lower in [version(2, 1, 258), version(2, 0, 999), version(1, 9, 999)] {
             assert_eq!(compare_semver(&lower, &min), Ordering::Less);
         }
+    }
+
+    #[test]
+    fn command_failed_keeps_the_newline_before_an_empty_stderr() {
+        // Node's execFile: `Command failed: ${cmd}\n${stderr}`, with or without stderr.
+        let args = vec!["--version".to_string()];
+        assert_eq!(
+            command_failed("claude", &args, ""),
+            "Command failed: claude --version\n"
+        );
+        assert_eq!(
+            command_failed("claude", &args, "boom\n"),
+            "Command failed: claude --version\nboom\n"
+        );
     }
 }

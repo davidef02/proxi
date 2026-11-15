@@ -17,9 +17,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use serde_json::{Map, Value, json};
-use tokio::io::AsyncReadExt;
 use tokio::sync::{mpsc, watch};
 
+use crate::child;
 use crate::claude;
 use crate::engine::{EngineBin, EngineEvent, EngineHandle, EngineLaunch, EngineMsg, ToolUse};
 use crate::js;
@@ -367,20 +367,12 @@ pub fn resolve_opencode_cmd(
             return npm_exe.display().to_string();
         }
     }
-    if let Some(path) = path.and_then(OsStr::to_str) {
-        let separator = if windows { ';' } else { ':' };
-        for entry in path.split(separator) {
-            let entry = js::js_trim(entry);
-            if entry.is_empty() {
-                continue;
-            }
-            // cmd's PATHEXT order, one directory at a time.
-            for name in ["opencode.exe", "opencode.bat", "opencode.cmd"] {
-                let candidate = Path::new(entry).join(name);
-                if candidate.is_file() {
-                    return candidate.display().to_string();
-                }
-            }
+    if let Some(path) = path {
+        // cmd's PATHEXT order, one directory at a time.
+        if let Some(found) =
+            child::find_on_path_with_extensions("opencode", &["exe", "bat", "cmd"], Some(path))
+        {
+            return found.display().to_string();
         }
     }
     cmd.to_string()
@@ -749,34 +741,10 @@ pub fn parse_opencode_models(stdout: &str) -> Vec<String> {
 /// `opencode models`, killed after 10 s; any failure gives the static list.
 pub async fn list_opencode_models(bin: &EngineBin) -> Vec<String> {
     let program = resolve_from_process(&bin.cmd);
-    let mut command = tokio::process::Command::new(&program);
-    command.args(&bin.args);
-    command.arg("models");
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .kill_on_drop(true);
-    #[cfg(windows)]
-    {
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
+    match child::models_stdout(&program, &bin.args).await {
+        Some(stdout) => parse_opencode_models(&stdout),
+        None => fallback_models(),
     }
-    let mut child = match command.spawn() {
-        Ok(child) => child,
-        Err(_) => return fallback_models(),
-    };
-    let mut buf = Vec::new();
-    if let Some(mut stdout) = child.stdout.take() {
-        // A timeout keeps the bytes read so far: the engine is already dead, its list may still do.
-        if tokio::time::timeout(Duration::from_secs(10), stdout.read_to_end(&mut buf))
-            .await
-            .is_err()
-        {
-            let _ = child.start_kill();
-        }
-    }
-    parse_opencode_models(&String::from_utf8_lossy(&buf))
 }
 
 #[cfg(test)]
