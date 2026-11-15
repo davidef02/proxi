@@ -526,6 +526,8 @@ pub fn spawn_agy(l: EngineLaunch) -> (Box<dyn EngineHandle>, mpsc::UnboundedRece
             exit_rx,
             pid,
             agy_user_line,
+            // agy has no in-band abort (agy.ts): the interrupted turn is left to the watchdog.
+            None,
             stopped,
         )),
         rx,

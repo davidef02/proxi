@@ -11,14 +11,17 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::http::StatusCode;
-use common::sessions::{describe, require_fake_engine, seed_demo_course, teach_planned};
+use common::sessions::{
+    INTERRUPT_REQUEST, describe, pid_running, raw_inputs, require_fake_engine, seed_demo_course,
+    teach_planned, user_texts, wait_for_state_file,
+};
 use proxi::anki_client::AnkiClient;
 use proxi::anki_import::ImportRegistry;
 use proxi::claude::ClaudeBin;
 use proxi::events::EventBus;
 use proxi::limits::LimitsCache;
 use proxi::protocol::{ANKI_OPT_IN_QUESTION, SessionState, SessionStatus};
-use proxi::sessions::{HttpError, ManagerOptions, SessionManager};
+use proxi::sessions::{AttachmentUpload, HttpError, ManagerOptions, SessionManager};
 use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -69,20 +72,40 @@ fn manager_for(repo: &Path, data: &Path, events: &EventBus) -> SessionManager {
 
 fn manager_with_agy(repo: &Path, data: &Path, events: &EventBus, agy: ClaudeBin) -> SessionManager {
     SessionManager::new(ManagerOptions {
+        agy,
+        ..options_for(repo, data, events, fake_bin())
+    })
+}
+
+fn manager_with(env: &TestEnv, extra: &[&str]) -> SessionManager {
+    let claude = ClaudeBin {
+        cmd: "node".to_string(),
+        args: common::sessions::fake_args(extra),
+    };
+    SessionManager::new(options_for(&env.repo.0, &env.data.0, &env.events, claude))
+}
+
+fn options_for(
+    repo: &Path,
+    data: &Path,
+    events: &EventBus,
+    claude: ClaudeBin,
+) -> ManagerOptions {
+    ManagerOptions {
         repo_root: repo.to_path_buf(),
         data_root: data.to_path_buf(),
         code_root: common::repo_root(),
         port: 4599,
         token: "test-token".to_string(),
-        claude: fake_bin(),
-        agy,
+        claude,
+        agy: node_bin("fake-agy.mjs"),
         opencode: node_bin("fake-opencode.mjs"),
         add_dirs: vec![repo.parent().unwrap_or(repo).to_path_buf()],
         events: events.clone(),
         limits: Arc::new(LimitsCache::new()),
         anki: AnkiClient::new("http://127.0.0.1:1").expect("anki client"),
         imports: ImportRegistry::new(),
-    })
+    }
 }
 
 fn settings(env: &TestEnv, body: &str) {
@@ -159,6 +182,30 @@ async fn next_event(receiver: &mut UnboundedReceiver<String>) -> Value {
         .expect("an event within 20 s")
         .expect("the events channel is open");
     serde_json::from_str(&payload).expect("each event is JSON")
+}
+
+/// The fake's first delta: the `FAKE:slow` turn is really playing, so an in-band interrupt can reach
+/// its script (an interrupt sent before the turn starts is dropped by the fake, unlike the CLI).
+async fn wait_for_first_delta(manager: &SessionManager, id: &str) {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let state = manager.get(id).expect("a session");
+        let streaming = state["items"].as_array().is_some_and(|items| {
+            items.iter().any(|item| {
+                item["kind"] == "teacher"
+                    && item["streaming"] == true
+                    && item["text"].as_str().is_some_and(|text| !text.is_empty())
+            })
+        });
+        if streaming {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the fake turn never streamed: {state}"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1099,4 +1146,382 @@ async fn missing_sessions_are_not_found() {
         .await
         .unwrap_err();
     assert_eq!(error.status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn interrupt_close_delete_and_retry_on_a_missing_session_are_404() {
+    let env = TestEnv::new();
+    let manager = env.manager();
+    assert_eq!(
+        manager.interrupt("nope").unwrap_err().status,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        manager.retry("nope").await.unwrap_err().status,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        manager.close("nope").await.unwrap_err().status,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        manager.delete("nope").await.unwrap_err().status,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn attachments_are_stored_with_node_names_and_reach_the_engine() {
+    require_fake_engine();
+    let env = TestEnv::new();
+    let input = env.repo.0.join("input.jsonl");
+    let input = input.to_str().expect("utf-8 repo path").to_string();
+    let manager = manager_with(&env, &["--input-out", &input]);
+    let id = manager.create(teach_planned(Some(false))).await.unwrap();
+    wait_for(&manager, &id, SessionStatus::Idle).await;
+
+    let metas = manager
+        .save_attachments(
+            &id,
+            vec![
+                AttachmentUpload {
+                    name: "diagram.png".to_string(),
+                    mime_type: Some("IMAGE/PNG".to_string()),
+                    bytes: vec![0x89, 0x50],
+                },
+                AttachmentUpload {
+                    name: "../x/notes.pdf".to_string(),
+                    mime_type: None,
+                    bytes: vec![1, 2, 3],
+                },
+            ],
+        )
+        .unwrap();
+    let metas = metas.as_array().expect("an array of metas").clone();
+    assert_eq!(metas.len(), 2);
+    assert_eq!(metas[0]["name"], "diagram.png");
+    assert_eq!(metas[0]["mimeType"], "image/png", "Blob types are lowercased");
+    assert_eq!(metas[0]["size"], 2);
+    assert_eq!(metas[1]["name"], "notes.pdf", "the basename, not the path");
+    assert_eq!(metas[1]["mimeType"], "application/octet-stream");
+    assert_eq!(metas[1]["size"], 3);
+    for meta in &metas {
+        let file_id = meta["id"].as_str().expect("an id");
+        let name = meta["name"].as_str().expect("a name");
+        assert_eq!(
+            meta["path"],
+            format!(".learner/sessions/{id}/attachments/{}_{name}", &file_id[..8])
+        );
+    }
+    assert_eq!(
+        fs::read(env.repo.0.join(metas[0]["path"].as_str().unwrap())).unwrap(),
+        vec![0x89, 0x50]
+    );
+    assert_eq!(
+        fs::read(env.repo.0.join(metas[1]["path"].as_str().unwrap())).unwrap(),
+        vec![1, 2, 3]
+    );
+    assert_eq!(
+        serde_json::to_string(&metas[0]).unwrap(),
+        format!(
+            r#"{{"id":"{}","name":"diagram.png","path":"{}","mimeType":"image/png","size":2}}"#,
+            metas[0]["id"].as_str().unwrap(),
+            metas[0]["path"].as_str().unwrap()
+        )
+    );
+
+    manager
+        .message(
+            &id,
+            json!({"text": "guarda", "attachments": metas.clone()}),
+        )
+        .await
+        .unwrap();
+    let state = wait_for(&manager, &id, SessionStatus::Idle).await;
+    let learner = state["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .filter(|item| item["kind"] == "learner")
+        .next_back()
+        .expect("the message bubble");
+    assert_eq!(learner["text"], "guarda");
+    assert_eq!(learner["attachments"], Value::Array(metas.clone()));
+    assert_eq!(
+        user_texts(Path::new(&input))
+            .last()
+            .expect("the turn reached the engine"),
+        &format!(
+            "[Allegati forniti dallo studente:\n- diagram.png (percorso: {})\n- notes.pdf (percorso: {})]\n\nguarda",
+            metas[0]["path"].as_str().unwrap(),
+            metas[1]["path"].as_str().unwrap()
+        )
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn unsupported_or_closed_attachments_are_refused() {
+    require_fake_engine();
+    let env = TestEnv::new();
+    let manager = env.manager();
+    let id = manager.create(teach_planned(Some(false))).await.unwrap();
+    wait_for(&manager, &id, SessionStatus::Idle).await;
+
+    let error = manager
+        .save_attachments(
+            &id,
+            vec![AttachmentUpload {
+                name: "setup.exe".to_string(),
+                mime_type: None,
+                bytes: vec![1],
+            }],
+        )
+        .unwrap_err();
+    assert_eq!(error.status, StatusCode::BAD_REQUEST);
+    assert_eq!(error.message, "Tipo di file non supportato: .exe");
+
+    let error = manager
+        .save_attachments(
+            "nope",
+            vec![AttachmentUpload {
+                name: "a.png".to_string(),
+                mime_type: None,
+                bytes: vec![1],
+            }],
+        )
+        .unwrap_err();
+    assert_eq!(error.status, StatusCode::NOT_FOUND);
+    assert_eq!(error.message, "Session not found");
+
+    manager.close(&id).await.unwrap();
+    let error = manager
+        .save_attachments(
+            &id,
+            vec![AttachmentUpload {
+                name: "a.png".to_string(),
+                mime_type: None,
+                bytes: vec![1],
+            }],
+        )
+        .unwrap_err();
+    assert_eq!(error.status, StatusCode::CONFLICT);
+    assert_eq!(error.message, "Session is closed");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn retry_reruns_the_failed_turn_without_a_second_bubble() {
+    require_fake_engine();
+    let env = TestEnv::new();
+    let manager = env.manager();
+    let id = manager.create(teach_planned(Some(false))).await.unwrap();
+    wait_for(&manager, &id, SessionStatus::Idle).await;
+
+    manager
+        .message(&id, json!({"text": "FAKE:error_once x"}))
+        .await
+        .unwrap();
+    let state = wait_for(&manager, &id, SessionStatus::Error).await;
+    assert_eq!(state["retryable"], true);
+
+    manager.retry(&id).await.unwrap();
+    let state = wait_for(&manager, &id, SessionStatus::Idle).await;
+    let items = state["items"].as_array().expect("items");
+    assert_eq!(
+        items
+            .iter()
+            .filter(|item| item["kind"] == "learner" && item["text"] == "FAKE:error_once x")
+            .count(),
+        1,
+        "the rerun turn keeps the one bubble: {state}"
+    );
+    assert!(
+        items
+            .iter()
+            .all(|item| !(item["kind"] == "notice" && item["level"] == "error")),
+        "the error notice is gone: {state}"
+    );
+
+    // The flush after the idle is asynchronous: wait for the file, then read the flag.
+    let file = wait_for_state_file(&env.repo.0, &id, |v| {
+        v.get("lastTurn").is_none_or(Value::is_null)
+    })
+    .await;
+    assert_ne!(file["canRetry"], json!(true), "{file}");
+
+    let error = manager.retry(&id).await.unwrap_err();
+    assert_eq!(error.status, StatusCode::BAD_REQUEST);
+    assert_eq!(error.message, "Nessun turno fallito da riprovare");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn retry_is_409_while_busy_or_closed() {
+    require_fake_engine();
+    let env = TestEnv::new();
+    let manager = env.manager();
+    let id = manager.create(teach_planned(Some(false))).await.unwrap();
+    wait_for(&manager, &id, SessionStatus::Idle).await;
+
+    manager
+        .message(&id, json!({"text": "FAKE:slow:20"}))
+        .await
+        .unwrap();
+    wait_for(&manager, &id, SessionStatus::Running).await;
+    let error = manager.retry(&id).await.unwrap_err();
+    assert_eq!(error.status, StatusCode::CONFLICT);
+    assert_eq!(
+        error.message,
+        "The teacher is busy: wait for the current turn to finish"
+    );
+
+    wait_for(&manager, &id, SessionStatus::Idle).await;
+    manager.close(&id).await.unwrap();
+    let error = manager.retry(&id).await.unwrap_err();
+    assert_eq!(error.status, StatusCode::CONFLICT);
+    assert_eq!(error.message, "Session is closed");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_loaded_interrupted_turn_retries_on_a_fresh_launch() {
+    require_fake_engine();
+    let env = TestEnv::new();
+    write_state_file(
+        &env.repo.0,
+        "cut",
+        json!({
+            "state": hand_state(
+                "cut",
+                "running",
+                json!([{"id": "l:1", "at": "2026-01-01T00:00:00.000Z", "kind": "learner", "text": "ciao"}]),
+            ),
+            "provider": "claude",
+            "lastTurn": {"text": "ciao", "show": ["ciao"], "turnText": "ciao", "pushedLearner": true},
+        }),
+    );
+    let manager = env.manager();
+    let state = manager.get("cut").expect("loaded");
+    assert_eq!(state["status"], "error");
+    assert_eq!(state["retryable"], true);
+
+    manager.retry("cut").await.unwrap();
+    let state = wait_for(&manager, "cut", SessionStatus::Idle).await;
+    let learners = state["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .filter(|item| item["kind"] == "learner")
+        .count();
+    assert_eq!(learners, 1, "the retried turn duplicates no bubble: {state}");
+    assert_eq!(state["usage"]["turns"], 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn interrupt_stops_the_turn_in_band_and_close_leaves_no_process() {
+    require_fake_engine();
+    let env = TestEnv::new();
+    let input = env.repo.0.join("input.jsonl");
+    let input = input.to_str().expect("utf-8 repo path").to_string();
+    let manager = manager_with(&env, &["--input-out", &input]);
+    let id = manager.create(teach_planned(Some(false))).await.unwrap();
+    wait_for(&manager, &id, SessionStatus::Idle).await;
+
+    manager
+        .message(&id, json!({"text": "FAKE:slow"}))
+        .await
+        .unwrap();
+    wait_for(&manager, &id, SessionStatus::Running).await;
+    wait_for_first_delta(&manager, &id).await;
+    manager.interrupt(&id).unwrap();
+    let state = tokio::time::timeout(
+        Duration::from_secs(8),
+        wait_for(&manager, &id, SessionStatus::Idle),
+    )
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "the interrupt idles the turn within 8 s: {:?}",
+            manager.get(&id)
+        )
+    });
+
+    let items = state["items"].as_array().expect("items");
+    let notices: Vec<&Value> = items.iter().filter(|item| item["kind"] == "notice").collect();
+    assert_eq!(
+        notices
+            .iter()
+            .filter(|item| item["level"] == "info" && item["text"] == "Turno interrotto.")
+            .count(),
+        1,
+        "{state}"
+    );
+    assert!(
+        notices.iter().all(|item| item["level"] != "error"),
+        "an interrupt is not an error: {state}"
+    );
+    assert_eq!(state["retryable"], false);
+    assert!(
+        raw_inputs(Path::new(&input))
+            .iter()
+            .any(|line| line == INTERRUPT_REQUEST),
+        "the engine got the in-band request"
+    );
+
+    // In-band for Claude: the process stays up after the interrupt, as in Node.
+    assert_eq!(manager.live_pids().len(), 1);
+    let pid = manager.live_pids()[0];
+    manager.close(&id).await.unwrap();
+    assert!(manager.live_pids().is_empty());
+    assert!(!pid_running(pid), "the engine process is gone");
+    let state = manager.get(&id).expect("a closed session");
+    assert_eq!(state["status"], "closed");
+    assert_eq!(state_file(&env.repo.0, &id)["state"]["status"], "closed");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn delete_removes_the_session_and_no_late_flush_recreates_it() {
+    require_fake_engine();
+    let env = TestEnv::new();
+    let manager = env.manager();
+    let id = manager.create(teach_planned(Some(false))).await.unwrap();
+    wait_for(&manager, &id, SessionStatus::Idle).await;
+    manager
+        .message(&id, json!({"text": "FAKE:slow"}))
+        .await
+        .unwrap();
+    wait_for(&manager, &id, SessionStatus::Running).await;
+    assert_eq!(manager.live_pids().len(), 1);
+    let pid = manager.live_pids()[0];
+    manager
+        .save_attachments(
+            &id,
+            vec![AttachmentUpload {
+                name: "diagram.png".to_string(),
+                mime_type: Some("image/png".to_string()),
+                bytes: vec![0x89, 0x50],
+            }],
+        )
+        .unwrap();
+
+    manager.delete(&id).await.unwrap();
+    assert!(manager.get(&id).is_none());
+    let dir = env.repo.0.join(".learner").join("sessions").join(&id);
+    assert!(!dir.exists(), "the session dir went away, attachments included");
+    assert!(
+        manager
+            .list()
+            .as_array()
+            .expect("a list")
+            .iter()
+            .all(|row| row["id"] != id.as_str())
+    );
+    assert!(manager.live_pids().is_empty());
+    assert!(!pid_running(pid), "the engine process is gone");
+
+    // A save timer scheduled before the delete must not resurrect the dir.
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert!(!dir.exists(), "a late flush recreated the deleted dir");
+
+    assert_eq!(
+        manager.delete(&id).await.unwrap_err().status,
+        StatusCode::NOT_FOUND
+    );
 }

@@ -498,6 +498,8 @@ pub(crate) struct DeadHandle;
 impl EngineHandle for DeadHandle {
     fn send(&mut self, _text: &str) {}
 
+    fn interrupt(&mut self) {}
+
     fn stop(&mut self) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
         Box::pin(async {})
     }
@@ -515,7 +517,10 @@ pub(crate) struct LiveHandle {
     pid: Option<u32>,
     /// The stdin line shape: each engine has its own (claude.ts, agy.ts, opencode.ts).
     line: fn(&str) -> String,
+    /// The in-band abort line, for engines that have one; `None` leaves the turn to the watchdog.
+    interrupt_line: Option<fn(u32) -> String>,
     stopped: Arc<AtomicBool>,
+    interrupts: u32,
 }
 
 impl LiveHandle {
@@ -525,6 +530,7 @@ impl LiveHandle {
         exit: watch::Receiver<bool>,
         pid: Option<u32>,
         line: fn(&str) -> String,
+        interrupt_line: Option<fn(u32) -> String>,
         stopped: Arc<AtomicBool>,
     ) -> Self {
         Self {
@@ -533,7 +539,9 @@ impl LiveHandle {
             exit,
             pid,
             line,
+            interrupt_line,
             stopped,
+            interrupts: 0,
         }
     }
 }
@@ -544,6 +552,17 @@ impl EngineHandle for LiveHandle {
             return;
         };
         let _ = writer.send((self.line)(text));
+    }
+
+    fn interrupt(&mut self) {
+        self.interrupts += 1;
+        let Some(line) = self.interrupt_line else {
+            return;
+        };
+        let Some(writer) = self.writer.as_ref() else {
+            return;
+        };
+        let _ = writer.send(line(self.interrupts));
     }
 
     fn stop(&mut self) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
@@ -571,6 +590,15 @@ fn claude_user_line(text: &str) -> String {
     serde_json::json!({
         "type": "user",
         "message": { "role": "user", "content": text },
+    })
+    .to_string()
+}
+
+fn claude_interrupt_line(n: u32) -> String {
+    serde_json::json!({
+        "type": "control_request",
+        "request_id": format!("int-{n}"),
+        "request": { "subtype": "interrupt" },
     })
     .to_string()
 }
@@ -732,6 +760,7 @@ pub fn spawn_claude(
             exit_rx,
             pid,
             claude_user_line,
+            Some(claude_interrupt_line),
             Arc::new(AtomicBool::new(false)),
         )),
         rx,
@@ -1228,6 +1257,38 @@ mod tests {
         assert!(out.is_empty());
         assert_eq!(flush_line(&mut buf).as_deref(), Some(text));
         assert_eq!(flush_line(&mut buf), None);
+    }
+
+    #[test]
+    fn interrupt_writes_the_in_band_control_request() {
+        let (writer, mut written) = mpsc::unbounded_channel::<String>();
+        let (kill, _kill_rx) = mpsc::unbounded_channel::<()>();
+        let mut handle = LiveHandle::new(
+            Some(writer),
+            Some(kill),
+            watch::channel(false).1,
+            None,
+            claude_user_line,
+            Some(claude_interrupt_line),
+            Arc::new(AtomicBool::new(false)),
+        );
+
+        handle.interrupt();
+        handle.interrupt();
+        assert_eq!(
+            written.try_recv().unwrap(),
+            r#"{"type":"control_request","request_id":"int-1","request":{"subtype":"interrupt"}}"#
+        );
+        assert_eq!(
+            written.try_recv().unwrap(),
+            r#"{"type":"control_request","request_id":"int-2","request":{"subtype":"interrupt"}}"#
+        );
+        assert!(written.try_recv().is_err());
+
+        // A stopped handle has no writer: the next interrupt writes nothing and does not panic.
+        let _ = handle.stop();
+        handle.interrupt();
+        assert!(written.try_recv().is_err());
     }
 
     fn node_available() -> bool {

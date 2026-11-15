@@ -4,12 +4,16 @@
 //! `attach`/`finish_send`. A generation number stands in for Node's `mine()` closure.
 
 use std::collections::VecDeque;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::engine::{CLAUDE_AUTH_ERROR_MESSAGE, EngineEvent, EngineHandle, is_auth_error};
 use crate::protocol::SessionStatus;
+
+/// Node's WATCHDOG_MS: an interrupted turn that never reports its result is given up.
+pub const WATCHDOG: Duration = Duration::from_secs(10);
 
 /// The last turn sent: re-sent on a fresh conversation when the engine refuses the resume token.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -31,8 +35,9 @@ pub trait TurnHost {
     /// `retryable` is the session's `Turns::can_retry()` at the call (Node reads it inside `setStatus`).
     fn set_status(&mut self, status: SessionStatus, error: Option<String>, retryable: bool);
     fn notice(&mut self, level: &str, text: &str);
-    /// A learner bubble: pushed only once its turn really goes out.
-    fn learner(&mut self, text: &str);
+    /// A learner bubble: pushed only once its turn really goes out. Attachments ride on the last
+    /// bubble of the turn; the host adds them only when it is a non-empty array.
+    fn learner(&mut self, text: &str, attachments: Option<&Value>);
     /// Engine events to render. `late` = result of a turn already given up.
     fn event(&mut self, e: &EngineEvent, late: bool);
     /// Interactive cards blocking the teacher; `cancel_pending` rejects them all.
@@ -63,6 +68,11 @@ pub struct Turns {
     refused: bool,
     auth_failed: bool,
     auth_notice_emitted: bool,
+    /// A watchdog is expected to end the interrupted turn.
+    interrupting: bool,
+    watchdog_seq: u64,
+    /// The ticket of the watchdog that must still fire; a stale one is a no-op.
+    watchdog_armed: Option<u64>,
     /// Last stderr lines of the current process.
     stderr: VecDeque<String>,
 }
@@ -82,6 +92,9 @@ impl Turns {
             refused: false,
             auth_failed: false,
             auth_notice_emitted: false,
+            interrupting: false,
+            watchdog_seq: 0,
+            watchdog_armed: None,
             stderr: VecDeque::new(),
         }
     }
@@ -114,7 +127,27 @@ impl Turns {
         show: Vec<String>,
         attachments: Option<Value>,
     ) -> bool {
-        let turn_text = text.clone().unwrap_or_default();
+        let turn_text = match attachments.as_ref() {
+            Some(Value::Array(items)) if !items.is_empty() => {
+                let lines = items
+                    .iter()
+                    .map(|item| {
+                        format!(
+                            "- {} (percorso: {})",
+                            item["name"].as_str().unwrap_or(""),
+                            item["path"].as_str().unwrap_or("")
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let block = format!("[Allegati forniti dallo studente:\n{lines}]");
+                match &text {
+                    Some(text) => format!("{block}\n\n{text}"),
+                    None => block,
+                }
+            }
+            _ => text.clone().unwrap_or_default(),
+        };
         self.last_turn = Some(LastTurn {
             text,
             show,
@@ -128,6 +161,23 @@ impl Turns {
             return true;
         }
         false
+    }
+
+    /// Re-arms the saved turn: `Ok(true)` asks the caller for a fresh launch, `Ok(false)` only for
+    /// an attach-less re-send. The caller then runs `finish_send`.
+    pub fn begin_retry<H: TurnHost + ?Sized>(&mut self, host: &mut H) -> Result<bool, &'static str> {
+        if self.stopped {
+            return Err("Session is closed");
+        }
+        if !self.can_retry() {
+            return Err("Nessun turno fallito da riprovare");
+        }
+        self.can_retry_flag = false;
+        if self.handle.is_none() {
+            self.set_status(host, SessionStatus::Starting, None);
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     /// The launch raised: the turn stays saved (retryable) and the session shows the error.
@@ -158,18 +208,66 @@ impl Turns {
     pub fn finish_send<H: TurnHost + ?Sized>(&mut self, host: &mut H) {
         let text = match self.last_turn.as_mut() {
             Some(turn) => {
-                for line in &turn.show {
-                    host.learner(line);
+                if !turn.pushed_learner {
+                    for (index, line) in turn.show.iter().enumerate() {
+                        let attachments = if index + 1 == turn.show.len() {
+                            turn.attachments.as_ref()
+                        } else {
+                            None
+                        };
+                        host.learner(line, attachments);
+                    }
+                    turn.pushed_learner = true;
                 }
-                turn.pushed_learner = true;
                 Some(turn.turn_text.clone())
             }
             None => None,
         };
-        if let Some(text) = text {
-            self.write(&text);
+        match text {
+            Some(text) => {
+                self.write(&text);
+                self.set_status(host, SessionStatus::Running, None);
+            }
+            // Interrupted while starting: the turn never went out, so there is nothing to wait for.
+            None => self.set_status(host, SessionStatus::Idle, None),
         }
-        self.set_status(host, SessionStatus::Running, None);
+    }
+
+    /// Aborts the running turn; `Some(ticket)` asks the caller to arm the watchdog with it.
+    pub fn interrupt<H: TurnHost + ?Sized>(&mut self, host: &mut H) -> Option<u64> {
+        let busy = matches!(host.status(), SessionStatus::Running | SessionStatus::Waiting)
+            && self.handle.is_some();
+        if busy {
+            self.interrupting = true;
+        }
+        self.can_retry_flag = false;
+        self.last_turn = None;
+        if let Some(handle) = self.handle.as_mut() {
+            handle.interrupt();
+        }
+        host.cancel_pending();
+        if !busy {
+            return None;
+        }
+        self.watchdog_seq += 1;
+        self.watchdog_armed = Some(self.watchdog_seq);
+        Some(self.watchdog_seq)
+    }
+
+    /// The interrupt watchdog: gives up a turn that never reported its result.
+    pub fn watchdog_fired<H: TurnHost + ?Sized>(&mut self, host: &mut H, ticket: u64) {
+        if self.watchdog_armed != Some(ticket) {
+            return;
+        }
+        self.watchdog_armed = None;
+        if !self.interrupting {
+            return;
+        }
+        self.interrupting = false;
+        host.notice("info", "Turno interrotto.");
+        if host.status().is_busy() {
+            self.set_status(host, SessionStatus::Idle, None);
+        }
     }
 
     /// Re-sends the same text on a fresh engine after a refused resume.
@@ -253,7 +351,11 @@ impl Turns {
                 if late {
                     return TurnAction::None;
                 }
-                if *is_error && !self.auth_failed {
+                if self.interrupting {
+                    host.notice("info", "Turno interrotto.");
+                    self.can_retry_flag = false;
+                    self.last_turn = None;
+                } else if *is_error && !self.auth_failed {
                     let mut error = format!("Errore del docente ({subtype})");
                     if let Some(text) = text.as_deref().filter(|text| !text.is_empty()) {
                         error.push_str(": ");
@@ -264,10 +366,15 @@ impl Turns {
                     if host.pending() == 0 {
                         self.set_status(host, SessionStatus::Error, Some(error));
                     }
+                    self.interrupting = false;
+                    self.watchdog_armed = None;
                     return TurnAction::None;
+                } else {
+                    self.can_retry_flag = false;
+                    self.last_turn = None;
                 }
-                self.can_retry_flag = false;
-                self.last_turn = None;
+                self.interrupting = false;
+                self.watchdog_armed = None;
                 if host.pending() == 0 && !self.auth_failed {
                     self.set_status(host, SessionStatus::Idle, None);
                 }
@@ -288,6 +395,8 @@ impl Turns {
             return TurnAction::None;
         }
         self.handle = None;
+        self.interrupting = false;
+        self.watchdog_armed = None;
         host.cancel_pending();
         let stderr = self.stderr.iter().cloned().collect::<Vec<_>>().join(" ");
         if self.auth_failed || is_auth_error(&stderr) {
@@ -339,6 +448,7 @@ impl Turns {
     /// Close/shutdown: no launch ever again; the caller awaits the returned handle's `stop()`.
     pub fn stop(&mut self) -> Option<Box<dyn EngineHandle>> {
         self.stopped = true;
+        self.watchdog_armed = None;
         self.handle.take()
     }
 
@@ -378,6 +488,7 @@ mod tests {
     struct EngineLog {
         sent: Vec<String>,
         stops: usize,
+        interrupts: usize,
     }
 
     struct MemoryHandle {
@@ -388,6 +499,10 @@ mod tests {
     impl EngineHandle for MemoryHandle {
         fn send(&mut self, text: &str) {
             self.log.lock().unwrap().sent.push(text.to_string());
+        }
+
+        fn interrupt(&mut self) {
+            self.log.lock().unwrap().interrupts += 1;
         }
 
         fn stop(&mut self) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
@@ -406,7 +521,7 @@ mod tests {
         status: SessionStatus,
         errors: Vec<String>,
         notices: Vec<(String, String)>,
-        learner: Vec<String>,
+        learner: Vec<(String, Option<Value>)>,
         late: Vec<bool>,
         events: usize,
         pending: usize,
@@ -445,8 +560,8 @@ mod tests {
             self.notices.push((level.to_string(), text.to_string()));
         }
 
-        fn learner(&mut self, text: &str) {
-            self.learner.push(text.to_string());
+        fn learner(&mut self, text: &str, attachments: Option<&Value>) {
+            self.learner.push((text.to_string(), attachments.cloned()));
         }
 
         fn event(&mut self, event: &EngineEvent, late: bool) {
@@ -478,6 +593,10 @@ mod tests {
             Host::new(),
             Arc::new(Mutex::new(EngineLog::default())),
         )
+    }
+
+    fn learner_texts(host: &Host) -> Vec<&str> {
+        host.learner.iter().map(|line| line.0.as_str()).collect()
     }
 
     fn handle(log: &Arc<Mutex<EngineLog>>, pid: u32) -> Box<dyn EngineHandle> {
@@ -554,7 +673,7 @@ mod tests {
         turns.finish_send(&mut host);
 
         assert_eq!(host.status, SessionStatus::Running);
-        assert_eq!(host.learner, ["ciao"]);
+        assert_eq!(learner_texts(&host), ["ciao"]);
         assert_eq!(log.lock().unwrap().sent, ["ciao"]);
         assert_eq!(turns.resume, None);
 
@@ -591,7 +710,7 @@ mod tests {
         let generation = launch(&mut turns, &log);
         turns.resend(&mut host, "dopo il crash");
         assert_eq!(host.status, SessionStatus::Running);
-        assert_eq!(host.learner, ["dopo il crash"]);
+        assert_eq!(learner_texts(&host), ["dopo il crash"]);
         assert_eq!(log.lock().unwrap().sent, ["dopo il crash", "dopo il crash"]);
         turns.on_event(&mut host, generation, &init("new-token"));
         assert_eq!(turns.resume.as_deref(), Some("new-token"));
@@ -666,7 +785,7 @@ mod tests {
         let (mut turns, mut host, log) = harness(None);
         let generation = send(&mut turns, &mut host, &log, "Qual è la derivata di x^2?");
         assert!(!turns.can_retry());
-        assert_eq!(host.learner, ["Qual è la derivata di x^2?"]);
+        assert_eq!(learner_texts(&host), ["Qual è la derivata di x^2?"]);
 
         turns.on_event(&mut host, generation, &init("tok-err"));
         turns.on_event(
@@ -930,5 +1049,214 @@ mod tests {
             serde_json::to_string(turns.saved_last_turn().unwrap()).unwrap(),
             r#"{"text":"y","show":["y"],"turnText":"y","pushedLearner":false}"#
         );
+    }
+
+    #[test]
+    fn interrupt_then_the_late_result_of_the_given_up_turn_does_not_idle_the_newer_turn() {
+        let (mut turns, mut host, log) = harness(None);
+        let generation = send(&mut turns, &mut host, &log, "uno");
+
+        let ticket = turns
+            .interrupt(&mut host)
+            .expect("a busy turn arms the watchdog");
+        assert_eq!(log.lock().unwrap().interrupts, 1);
+        turns.watchdog_fired(&mut host, ticket);
+        assert_eq!(host.status, SessionStatus::Idle);
+        assert_eq!(
+            host.notices,
+            [("info".to_string(), "Turno interrotto.".to_string())]
+        );
+
+        assert!(!turns.begin_send(
+            &mut host,
+            Some("due".to_string()),
+            vec!["due".to_string()],
+            None
+        ));
+        turns.finish_send(&mut host);
+        turns.on_event(&mut host, generation, &result_event()); // late result of "uno"
+        assert_eq!(host.status, SessionStatus::Running);
+        turns.on_event(&mut host, generation, &result_event());
+        assert_eq!(host.status, SessionStatus::Idle);
+        assert_eq!(host.late, [true, false]);
+    }
+
+    #[test]
+    fn interrupt_with_a_prompt_result_gives_one_notice_and_disarms_the_watchdog() {
+        let (mut turns, mut host, log) = harness(None);
+        let generation = send(&mut turns, &mut host, &log, "uno");
+
+        let ticket = turns.interrupt(&mut host).expect("a busy turn");
+        turns.on_event(
+            &mut host,
+            generation,
+            &error_result("error_during_execution", None),
+        );
+
+        assert_eq!(host.status, SessionStatus::Idle);
+        assert_eq!(
+            host.notices,
+            [("info".to_string(), "Turno interrotto.".to_string())]
+        );
+        turns.watchdog_fired(&mut host, ticket);
+        assert_eq!(host.notices.len(), 1, "the disarmed watchdog adds nothing");
+        assert!(!turns.can_retry());
+        assert!(turns.saved_last_turn().is_none());
+    }
+
+    #[test]
+    fn interrupt_without_a_process_only_cancels_the_cards() {
+        let (mut turns, mut host, log) = harness(None);
+        host.status = SessionStatus::Waiting;
+        host.pending = 1;
+
+        assert!(turns.interrupt(&mut host).is_none(), "no process to abort");
+        assert_eq!(host.pending, 0);
+        assert_eq!(log.lock().unwrap().interrupts, 0);
+    }
+
+    #[test]
+    fn attachments_go_into_the_turn_prompt_and_onto_the_last_learner_bubble() {
+        let (mut turns, mut host, log) = harness(None);
+        let attachments = json!([
+            {
+                "id": "1",
+                "name": "diagram.png",
+                "path": ".learner/sessions/s/attachments/diagram.png",
+                "mimeType": "image/png",
+                "size": 100
+            },
+            {
+                "id": "2",
+                "name": "book.pdf",
+                "path": ".learner/sessions/s/attachments/book.pdf",
+                "mimeType": "application/pdf",
+                "size": 500
+            }
+        ]);
+
+        assert!(turns.begin_send(
+            &mut host,
+            Some("Spiegami questo diagramma".to_string()),
+            vec![
+                "apertura".to_string(),
+                "Spiegami questo diagramma".to_string()
+            ],
+            Some(attachments.clone())
+        ));
+        launch(&mut turns, &log);
+        turns.finish_send(&mut host);
+
+        assert_eq!(
+            log.lock().unwrap().sent,
+            ["[Allegati forniti dallo studente:\n- diagram.png (percorso: .learner/sessions/s/attachments/diagram.png)\n- book.pdf (percorso: .learner/sessions/s/attachments/book.pdf)]\n\nSpiegami questo diagramma"]
+        );
+        assert_eq!(
+            host.learner,
+            [
+                ("apertura".to_string(), None),
+                ("Spiegami questo diagramma".to_string(), Some(attachments))
+            ]
+        );
+        assert_eq!(
+            turns.saved_last_turn().unwrap().text.as_deref(),
+            Some("Spiegami questo diagramma")
+        );
+    }
+
+    #[test]
+    fn a_model_error_enables_retry_and_retry_resends_without_duplicating_bubbles() {
+        let (mut turns, mut host, log) = harness(None);
+        let generation = send(&mut turns, &mut host, &log, "Qual è la derivata di x^2?");
+        turns.on_event(&mut host, generation, &init("tok-err"));
+        turns.on_event(
+            &mut host,
+            generation,
+            &error_result("error_during_execution", Some("Rate limit reached")),
+        );
+        assert!(turns.can_retry());
+
+        assert_eq!(turns.begin_retry(&mut host), Ok(false));
+        turns.finish_send(&mut host);
+        assert_eq!(host.status, SessionStatus::Running);
+        assert_eq!(learner_texts(&host), ["Qual è la derivata di x^2?"]);
+        assert_eq!(
+            log.lock().unwrap().sent,
+            ["Qual è la derivata di x^2?", "Qual è la derivata di x^2?"]
+        );
+
+        turns.on_event(&mut host, generation, &result_event());
+        assert_eq!(host.status, SessionStatus::Idle);
+        assert!(!turns.can_retry());
+        assert!(turns.saved_last_turn().is_none());
+    }
+
+    #[test]
+    fn a_crash_enables_retry_and_retry_relaunches_with_the_resume_token() {
+        let (mut turns, mut host, log) = harness(None);
+        let generation = send(&mut turns, &mut host, &log, "Spiegazione");
+        turns.on_event(&mut host, generation, &init("tok-crash"));
+        turns.on_stderr(generation, "SIGSEGV");
+        turns.on_exit(&mut host, generation, Some(139), None);
+        assert_eq!(host.status, SessionStatus::Error);
+        assert!(turns.can_retry());
+        assert!(!turns.live());
+
+        assert_eq!(turns.begin_retry(&mut host), Ok(true));
+        assert_eq!(host.status, SessionStatus::Starting);
+        assert_eq!(turns.resume.as_deref(), Some("tok-crash"));
+        launch(&mut turns, &log);
+        turns.finish_send(&mut host);
+
+        assert_eq!(
+            log.lock().unwrap().sent,
+            ["Spiegazione", "Spiegazione"],
+            "the new handle got the turn once"
+        );
+        assert_eq!(learner_texts(&host), ["Spiegazione"]);
+        assert_eq!(host.status, SessionStatus::Running);
+    }
+
+    #[test]
+    fn retry_is_refused_when_nothing_failed_or_the_session_is_closed() {
+        let (mut turns, mut host, _log) = harness(None);
+        assert_eq!(
+            turns.begin_retry(&mut host),
+            Err("Nessun turno fallito da riprovare")
+        );
+
+        let (mut turns, mut host, _log) = harness(None);
+        assert!(turns.begin_send(
+            &mut host,
+            Some("x".to_string()),
+            vec!["x".to_string()],
+            None
+        ));
+        turns.launch_failed(&mut host, "no binary");
+        assert!(turns.can_retry());
+        turns.stop();
+        assert_eq!(turns.begin_retry(&mut host), Err("Session is closed"));
+    }
+
+    #[test]
+    fn finish_send_after_an_interrupt_during_start_idles_without_writing() {
+        let (mut turns, mut host, log) = harness(None);
+        assert!(turns.begin_send(
+            &mut host,
+            Some("x".to_string()),
+            vec!["x".to_string()],
+            None
+        ));
+        assert_eq!(host.status, SessionStatus::Starting);
+
+        assert!(
+            turns.interrupt(&mut host).is_none(),
+            "starting is not a running turn"
+        );
+        launch(&mut turns, &log);
+        turns.finish_send(&mut host);
+
+        assert!(log.lock().unwrap().sent.is_empty(), "nothing went out");
+        assert_eq!(host.status, SessionStatus::Idle);
     }
 }

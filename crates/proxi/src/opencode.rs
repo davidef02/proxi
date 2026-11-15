@@ -643,6 +643,34 @@ impl EngineHandle for OpencodeHandle {
         );
     }
 
+    fn interrupt(&mut self) {
+        // Node: gen++, current = undefined, kill the tree, then a synthetic `interrupted` result.
+        let (turn, session_id, in_flight) = {
+            let mut state = lock(&self.inner);
+            state.generation += 1;
+            let turn = state.current.take();
+            let in_flight = state.in_flight;
+            state.in_flight = false;
+            (turn, state.session_id.clone().unwrap_or_default(), in_flight)
+        };
+        if let Some(turn) = turn {
+            let _ = turn.kill.send(());
+        }
+        if in_flight {
+            let _ = self.tx.send(EngineMsg::Event(EngineEvent::Result {
+                is_error: true,
+                subtype: "interrupted".to_string(),
+                text: None,
+                session_id,
+                input_tokens: 0.0,
+                output_tokens: 0.0,
+                cache_read_tokens: 0.0,
+                cache_creation_tokens: 0.0,
+                cost_usd: 0.0,
+            }));
+        }
+    }
+
     fn stop(&mut self) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
         let inner = self.inner.clone();
         let tx = self.tx.clone();
