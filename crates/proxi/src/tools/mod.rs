@@ -138,3 +138,86 @@ pub async fn invoke(def: &ToolDef, input: Value, host: &dyn ToolHost) -> ToolOut
     }
     out
 }
+
+/// The tools a session of this kind may call, in Node's order (`toolsFor` in `tools/index.ts`),
+/// minus the ones this build does not serve (D11: they are not listed at all).
+///
+/// `data_root` is where the exercise tools would look for their package: no such tool is served
+/// yet, so it is only passed through for the day they land.
+pub fn tools_for(config: &Map<String, Value>, _data_root: &Path) -> Vec<&'static ToolDef> {
+    let lesson: Vec<&'static ToolDef> = vec![
+        &quiz::TOOL,
+        &ask::TOOL,
+        &node::TOOL,
+        &dispatch::RESEARCH,
+        &dispatch::VISUAL,
+        &dispatch::DEMO,
+        &finish::TOOL,
+        &lessontext::TOOL,
+    ];
+    match config.get("kind").and_then(Value::as_str) {
+        // `[quiz, ask, propose_curriculum, research]` plus the shared `read_lesson`.
+        Some("plan") => vec![
+            &quiz::TOOL,
+            &ask::TOOL,
+            &dispatch::RESEARCH,
+            &lessontext::TOOL,
+        ],
+        // `[quiz, ask, problem, conclude, research, visual, …]` plus the shared `read_lesson`.
+        Some("practice") => vec![
+            &quiz::TOOL,
+            &ask::TOOL,
+            &dispatch::RESEARCH,
+            &dispatch::VISUAL,
+            &lessontext::TOOL,
+        ],
+        // Node's `default`: the lesson tools, whatever `kind` is missing or unknown.
+        _ => lesson,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn names(config: Value) -> Vec<&'static str> {
+        let config = config.as_object().expect("a session config").clone();
+        tools_for(&config, Path::new("/data"))
+            .into_iter()
+            .map(|def| def.name)
+            .collect()
+    }
+
+    #[test]
+    fn the_registry_is_nodes_list_without_the_out_of_scope_tools() {
+        // The lesson tools of `toolsOf`, in Node's order, then the shared `read_lesson`.
+        assert_eq!(
+            names(json!({"kind": "teach", "course": "demo"})),
+            [
+                "quiz",
+                "ask",
+                "write_node",
+                "research",
+                "visual",
+                "demo",
+                "finish_lesson",
+                "read_lesson"
+            ]
+        );
+        // A practice session has no write_node, demo or finish_lesson in Node either.
+        assert_eq!(
+            names(json!({"kind": "practice", "course": "demo"})),
+            ["quiz", "ask", "research", "visual", "read_lesson"]
+        );
+        // The plan tools: propose_curriculum is out of scope, read_lesson is shared.
+        assert_eq!(
+            names(json!({"kind": "plan", "course": "demo"})),
+            ["quiz", "ask", "research", "read_lesson"]
+        );
+        // A missing kind falls into Node's `default` branch.
+        assert_eq!(names(json!({})), names(json!({"kind": "teach"})));
+        assert_eq!(names(json!({"kind": "nope"})), names(json!({"kind": "teach"})));
+    }
+}

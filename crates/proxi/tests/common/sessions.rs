@@ -3,7 +3,7 @@
 //! same shapes.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
@@ -11,7 +11,7 @@ use reqwest::header::CONTENT_TYPE;
 use reqwest::{Client, Response};
 use serde_json::{Value, json};
 
-use proxi::server::RunningServer;
+use proxi::server::{RunningServer, ServerOptions};
 
 /// The data seed of the session tests: one planned chapter, one course, no lesson taught yet.
 pub const CURRICULUM: &str = r#"{"chapters":[{"title":"Demo","slug":"demo","lessons":[{"title":"Prima lezione","slug":"prima-lezione","plannedNodes":2}]}]}"#;
@@ -37,6 +37,40 @@ pub fn seed_demo_course(data: &Path) {
     fs::create_dir_all(course.join("lessons")).expect("create lessons dir");
     fs::write(course.join("MISSION.md"), "# Mission\n").expect("write mission");
     fs::write(course.join("NOTES.md"), "# Notes\n").expect("write notes");
+}
+
+/// A temp repo (`.learner`) and a separate temp data folder holding the `demo` course.
+pub struct Fixture {
+    pub repo: super::TempDir,
+    pub data: super::TempDir,
+}
+
+impl Fixture {
+    pub fn new(tag: &str) -> Self {
+        let fixture = Self {
+            repo: super::temp_dir(tag),
+            data: super::temp_dir(&format!("{tag}-data")),
+        };
+        seed_demo_course(&fixture.data.0);
+        fixture
+    }
+
+    /// The fake engine, wired the way `proxi serve --claude-bin node --claude-bin-arg <fake>` is.
+    pub fn options(&self) -> ServerOptions {
+        let mut options = ServerOptions::new(self.repo.0.clone());
+        options.data_root = Some(self.data.0.clone());
+        options.memory_secrets = true;
+        options.bins.claude = Some(PathBuf::from("node"));
+        options.bins.claude_args = vec![
+            super::repo_root()
+                .join("app")
+                .join("test")
+                .join("fake-claude.mjs")
+                .display()
+                .to_string(),
+        ];
+        options
+    }
 }
 
 /// A POST with the CSRF header the routes require.

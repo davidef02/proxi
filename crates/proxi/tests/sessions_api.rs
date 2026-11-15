@@ -6,51 +6,16 @@
 mod common;
 
 use std::fs;
-use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use reqwest::{Client, StatusCode};
 use serde_json::{json, Value};
 
 use common::sessions::{
-    body_json, data_events, describe, post, read_until, require_fake_engine, seed_demo_course,
+    Fixture, body_json, data_events, describe, post, read_until, require_fake_engine,
     teach_planned, wait_for,
 };
-use proxi::server::{start, RunningServer, ServerOptions};
-
-/// A temp repo (`.learner`) and a separate temp data folder holding the `demo` course.
-struct Fixture {
-    repo: common::TempDir,
-    data: common::TempDir,
-}
-
-impl Fixture {
-    fn new(tag: &str) -> Self {
-        let fixture = Self {
-            repo: common::temp_dir(tag),
-            data: common::temp_dir(&format!("{tag}-data")),
-        };
-        seed_demo_course(&fixture.data.0);
-        fixture
-    }
-
-    /// The fake engine, wired the way `proxi serve --claude-bin node --claude-bin-arg <fake>` is.
-    fn options(&self) -> ServerOptions {
-        let mut options = ServerOptions::new(self.repo.0.clone());
-        options.data_root = Some(self.data.0.clone());
-        options.memory_secrets = true;
-        options.bins.claude = Some(PathBuf::from("node"));
-        options.bins.claude_args = vec![
-            common::repo_root()
-                .join("app")
-                .join("test")
-                .join("fake-claude.mjs")
-                .display()
-                .to_string(),
-        ];
-        options
-    }
-}
+use proxi::server::{start, RunningServer};
 
 fn url(server: &RunningServer, path: &str) -> String {
     format!("{}{}", server.url, path)

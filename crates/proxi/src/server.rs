@@ -44,7 +44,7 @@ use crate::model_download;
 use crate::protocol::{
     GlobalEvent, LearnerSettings, SettingsResponse, SyncStatus, UpdateStatusResponse, DEFAULT_PORT,
 };
-use crate::sessions::{ManagerOptions, SessionManager};
+use crate::sessions::{CallRequests, ManagerOptions, SessionManager};
 use crate::settings::{self, SettingsError};
 use crate::stt;
 use crate::sync::gdrive::GoogleEndpoints;
@@ -52,6 +52,7 @@ use crate::sync::github::{GithubEndpoints, real_sleeper};
 use crate::sync::routes::spawn_auto;
 use crate::sync::secrets::{ElectronDecryptor, KeychainStore, MemoryStore, SecretStore};
 use crate::sync::service::{SyncConfig, SyncService};
+use crate::tools::tools_for;
 use crate::update::{self, ActiveWork, NoActiveWork, UpdateConfig, UpdateManager};
 
 /// Shown instead of the SPA when `app/web/dist` has not been built (main.ts:536-537).
@@ -443,6 +444,10 @@ fn router(state: Arc<AppState>, sync: SyncService) -> Router {
             post(post_session_message).fallback(not_found),
         )
         .route(
+            "/api/sessions/{id}/answer",
+            post(post_session_answer).fallback(not_found),
+        )
+        .route(
             "/api/exercises/{course}",
             get(get_exercises).post(post_exercise).fallback(not_found),
         )
@@ -452,6 +457,13 @@ fn router(state: Arc<AppState>, sync: SyncService) -> Router {
         )
         .route("/files/", get(get_file))
         .route("/files/{*rest}", get(get_file))
+        .route(
+            "/mcp/{id}",
+            post(post_mcp)
+                // A lesson payload or a batch can be large; Node has no limit.
+                .layer(DefaultBodyLimit::max(100 * 1024 * 1024))
+                .fallback(not_found),
+        )
         .route("/api/", any(not_found))
         .route("/api/{*rest}", any(not_found))
         // Merged before the layer so the host/CSRF guards still cover it.
@@ -577,7 +589,21 @@ async fn front(State(state): State<Arc<AppState>>, request: Request, next: Next)
         }
     }
 
-    if !path.starts_with("/api/") {
+    // MCP speaks JSON-RPC to the engine: its own secret instead of the CSRF header, and one
+    // session per path (`POST /mcp/<id>`). It is not the SPA, so it skips the branch below.
+    if path.starts_with("/mcp/") {
+        let token = state.sessions.token();
+        let sent = request
+            .headers()
+            .get("x-learner-token")
+            .and_then(|value| value.to_str().ok());
+        if sent != Some(token.as_str()) {
+            return json_error(StatusCode::UNAUTHORIZED, "Unauthorized");
+        }
+        if method != Method::POST || !is_mcp_session_path(&path) {
+            return not_found_response();
+        }
+    } else if !path.starts_with("/api/") {
         if !is_read {
             return not_found_response();
         }
@@ -981,6 +1007,78 @@ async fn post_session_message(
     match state.sessions.message(&id, body).await {
         Ok(()) => Json(json!({ "ok": true })).into_response(),
         Err(error) => json_error(error.status, &error.message),
+    }
+}
+
+/// `POST /api/sessions/:id/answer`: the learner's answer to the card the turn is waiting on.
+async fn post_session_answer(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> Response {
+    let body: Value = match js::parse(&String::from_utf8_lossy(&body)) {
+        Ok(value) => value,
+        Err(_) => return json_error(StatusCode::BAD_REQUEST, "Invalid JSON body"),
+    };
+    match state.sessions.answer(&id, body) {
+        Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Err(error) => json_error(error.status, &error.message),
+    }
+}
+
+/// `true` for `/mcp/<one segment>`: the only path the MCP route serves.
+fn is_mcp_session_path(path: &str) -> bool {
+    path.strip_prefix("/mcp/")
+        .is_some_and(|rest| !rest.is_empty() && !rest.contains('/'))
+}
+
+/// Cancels the cards one `/mcp` call created when axum drops the handler (the engine went away),
+/// like Node's abort listener on `c.req.raw.signal`.
+struct CallGuard {
+    sessions: SessionManager,
+    id: String,
+    call: CallRequests,
+    armed: bool,
+}
+
+impl Drop for CallGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let ids = self.call.lock().expect("call lock").clone();
+        self.sessions.cancel_requests(&self.id, &ids);
+    }
+}
+
+/// `POST /mcp/:id`: the engine's JSON-RPC endpoint (main.ts:464-481).
+async fn post_mcp(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> Response {
+    let call: CallRequests = CallRequests::default();
+    let Some(host) = state.sessions.tool_host(&id, call.clone()) else {
+        return json_error(StatusCode::NOT_FOUND, "Session not found");
+    };
+    let mut guard = CallGuard {
+        sessions: state.sessions.clone(),
+        id: id.clone(),
+        call,
+        armed: true,
+    };
+    let body: Value = match js::parse(&String::from_utf8_lossy(&body)) {
+        Ok(value) => value,
+        Err(_) => return json_error(StatusCode::BAD_REQUEST, "Invalid JSON body"),
+    };
+    let config = state.sessions.session_config(&id).unwrap_or_default();
+    let tools = tools_for(&config, &state.data_root);
+    let out = crate::mcp::handle(&body, &tools, &host).await;
+    guard.armed = false;
+    match out {
+        Some(answer) => Json(answer).into_response(),
+        // A notification (or a batch of only notifications): 202 with an empty body.
+        None => StatusCode::ACCEPTED.into_response(),
     }
 }
 
