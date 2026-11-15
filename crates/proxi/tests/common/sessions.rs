@@ -31,12 +31,10 @@ pub fn require_fake_engine() {
     );
 }
 
-/// The fake engine command line: the node script, then `extra` (test hooks such as `--input-out`).
-pub fn fake_args(extra: &[&str]) -> Vec<String> {
-    let fake = super::repo_root()
-        .join("app")
-        .join("test")
-        .join("fake-claude.mjs");
+/// The fake engine command line: the node script `script` under `app/test`, then `extra` (test
+/// hooks such as `--input-out`).
+pub fn fake_script_args(script: &str, extra: &[&str]) -> Vec<String> {
+    let fake = super::repo_root().join("app").join("test").join(script);
     let mut args = vec![fake.display().to_string()];
     args.extend(extra.iter().map(|arg| arg.to_string()));
     args

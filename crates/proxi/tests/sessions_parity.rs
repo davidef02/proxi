@@ -14,7 +14,9 @@ use std::time::Duration;
 use reqwest::{Client, StatusCode};
 use serde_json::Value;
 
-use common::sessions::{body_json, data_events, post, read_until, require_fake_engine, wait_for};
+use common::sessions::{
+    body_json, data_events, fake_script_args, post, read_until, require_fake_engine, wait_for,
+};
 use proxi::server::{ServerOptions, start};
 
 fn golden_file(name: &str) -> PathBuf {
@@ -25,18 +27,6 @@ fn golden_file(name: &str) -> PathBuf {
         .join("fixtures")
         .join("golden")
         .join(name)
-}
-
-/// `node <repo>/app/test/<script>`, the fake engines the goldens were captured with.
-fn fake_args(script: &str) -> Vec<String> {
-    vec![
-        common::repo_root()
-            .join("app")
-            .join("test")
-            .join(script)
-            .display()
-            .to_string(),
-    ]
 }
 
 fn case<'a>(golden: &'a Value, name: &str) -> &'a Value {
@@ -321,7 +311,7 @@ fn engine_id_normalisers_match_the_js_regex() {
 async fn sessions_match_the_node_golden() {
     replay("sessions.json", |options| {
         options.bins.claude = Some(PathBuf::from("node"));
-        options.bins.claude_args = fake_args("fake-claude.mjs");
+        options.bins.claude_args = fake_script_args("fake-claude.mjs", &[]);
     })
     .await;
 }
@@ -330,9 +320,9 @@ async fn sessions_match_the_node_golden() {
 async fn agy_sessions_match_the_node_golden() {
     replay("sessions-agy.json", |options| {
         options.bins.claude = Some(PathBuf::from("node"));
-        options.bins.claude_args = fake_args("fake-claude.mjs");
+        options.bins.claude_args = fake_script_args("fake-claude.mjs", &[]);
         options.bins.agy = Some(PathBuf::from("node"));
-        options.bins.agy_args = fake_args("fake-agy.mjs");
+        options.bins.agy_args = fake_script_args("fake-agy.mjs", &[]);
     })
     .await;
 }
@@ -341,9 +331,9 @@ async fn agy_sessions_match_the_node_golden() {
 async fn opencode_sessions_match_the_node_golden() {
     replay("sessions-opencode.json", |options| {
         options.bins.claude = Some(PathBuf::from("node"));
-        options.bins.claude_args = fake_args("fake-claude.mjs");
+        options.bins.claude_args = fake_script_args("fake-claude.mjs", &[]);
         options.bins.opencode = Some(PathBuf::from("node"));
-        options.bins.opencode_args = fake_args("fake-opencode.mjs");
+        options.bins.opencode_args = fake_script_args("fake-opencode.mjs", &[]);
     })
     .await;
 }

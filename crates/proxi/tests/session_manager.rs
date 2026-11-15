@@ -55,14 +55,7 @@ fn fake_bin() -> ClaudeBin {
 fn node_bin(script: &str) -> ClaudeBin {
     ClaudeBin {
         cmd: "node".to_string(),
-        args: vec![
-            common::repo_root()
-                .join("app")
-                .join("test")
-                .join(script)
-                .display()
-                .to_string(),
-        ],
+        args: common::sessions::fake_script_args(script, &[]),
     }
 }
 
@@ -80,7 +73,7 @@ fn manager_with_agy(repo: &Path, data: &Path, events: &EventBus, agy: ClaudeBin)
 fn manager_with(env: &TestEnv, extra: &[&str]) -> SessionManager {
     let claude = ClaudeBin {
         cmd: "node".to_string(),
-        args: common::sessions::fake_args(extra),
+        args: common::sessions::fake_script_args("fake-claude.mjs", extra),
     };
     SessionManager::new(options_for(&env.repo.0, &env.data.0, &env.events, claude))
 }
