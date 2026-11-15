@@ -858,6 +858,62 @@ async fn load_re_asks_the_anki_opt_in_of_an_unstarted_teach_session() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_message_on_a_loaded_pending_start_opens_the_lesson_with_it() {
+    require_fake_engine();
+    let env = TestEnv::new();
+    // A teach session whose opening turn never ran (created and closed before it started, Anki
+    // already decided): the next message must carry the lesson opening in the same turn.
+    write_state_file(
+        &env.repo.0,
+        "unstarted",
+        json!({
+            "state": hand_state("unstarted", "idle", json!([])),
+            "provider": "claude",
+            "pendingStart": "Prima lezione",
+        }),
+    );
+    let manager = env.manager();
+
+    manager
+        .message("unstarted", json!({"text": "Ciao"}))
+        .await
+        .expect("the opening turn is accepted");
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let state = loop {
+        let state = manager.get("unstarted").expect("the loaded session");
+        if state["status"] == "idle" && state["usage"]["turns"] == 1 {
+            break state;
+        }
+        assert!(Instant::now() < deadline, "timed out: {state}");
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    };
+    let learners: Vec<&Value> = state["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .filter(|item| item["kind"] == "learner")
+        .collect();
+    let texts: Vec<&str> = learners
+        .iter()
+        .filter_map(|item| item["text"].as_str())
+        .collect();
+    assert_eq!(
+        texts,
+        ["Iniziamo la lezione \"Prima lezione\".", "Ciao"],
+        "the opening and the message share one turn: {state}"
+    );
+    assert_eq!(state["config"]["ankiOptIn"], false, "the decision is kept");
+    manager.shutdown().await;
+    assert!(
+        state_file(&env.repo.0, "unstarted")
+            .get("pendingStart")
+            .is_none(),
+        "the opening turn clears pendingStart"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn load_keeps_the_has_run_token_for_the_next_message() {
     require_fake_engine();
     let env = TestEnv::new();
