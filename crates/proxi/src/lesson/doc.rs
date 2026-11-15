@@ -521,6 +521,39 @@ pub fn rebuild_lesson(o: &RebuildOptions) -> Result<RebuildResult, String> {
     })
 }
 
+/// Port of `updateLessonMetadata`: patches the island and re-renders the page from it.
+pub fn update_lesson_metadata(
+    lesson_path: &str,
+    base_dir: &str,
+    repo_root: &Path,
+    patch: &Map<String, Value>,
+) -> Result<(), String> {
+    let raw = read_text(Path::new(lesson_path))?;
+    let mut doc = parse_lesson_document(&raw)?
+        .filter(|doc| js::js_truthy(Some(doc)))
+        .ok_or_else(|| {
+            format!("Corrupted lesson file: missing #lesson-data island in {lesson_path}")
+        })?;
+    if !doc.is_object() {
+        return Err("Malformed #lesson-data island: expected metadata and nodes".to_string());
+    }
+
+    let mut metadata = match doc.get("metadata") {
+        Some(Value::Object(map)) => map.clone(),
+        _ => Map::new(),
+    };
+    // `{...metadata, ...patch}`: a key already there keeps its slot, a new one lands last.
+    for (key, value) in patch {
+        metadata.insert(key.clone(), value.clone());
+    }
+    metadata.insert("dateModified".to_string(), Value::String(iso_now()));
+    doc["metadata"] = Value::Object(metadata);
+
+    let template = load_template(base_dir, repo_root)?;
+    let html = render_full_lesson(&doc, &template)?;
+    fs::write(Path::new(lesson_path), html).map_err(|e| e.to_string())
+}
+
 /// JS `a || b`.
 fn or_truthy<'a>(a: Option<&'a Value>, b: Option<&'a Value>) -> Option<&'a Value> {
     if js::js_truthy(a) { a } else { b }
@@ -1303,5 +1336,138 @@ mod tests {
             "got {err}"
         );
         assert_eq!(fs::read(&broken).expect("read after"), before);
+    }
+
+    fn metadata_keys(doc: &Value) -> Vec<&str> {
+        doc["metadata"]
+            .as_object()
+            .expect("metadata object")
+            .keys()
+            .map(String::as_str)
+            .collect()
+    }
+
+    #[test]
+    fn update_metadata_keeps_key_order_and_rerenders() {
+        let tmp = temp_dir("update-metadata");
+        let mut options = init_options(&tmp.0, "Derivate", "Le derivate");
+        options.dag = Some(
+            "flowchart TD\n  N1[\"Nodo 1: la prima cosa\"] --> N2[\"Nodo 2: la seconda\"]"
+                .to_string(),
+        );
+        options.target_goal = Some("capire".to_string());
+        let init = init_lesson(&options).expect("init");
+        append_node(append_options(
+            &tmp.0,
+            &init.file_path,
+            json!({"nodeId": "prima-cosa", "title": "La prima cosa", "tier": "axiom", "content": "uno"}),
+        ))
+        .expect("append");
+
+        let dag = "flowchart TD\n  N1[\"Nodo 1: la prima cosa\"] --> N2[\"Nodo 2: la seconda\"]\n  N2 --> N3[\"Nodo 3: la terza completa\"]";
+        let patch = json!({"initialDag": dag, "targetGoal": "nuovo goal"});
+        update_lesson_metadata(
+            &init.file_path,
+            &as_string(&tmp.0),
+            &repo_root(),
+            patch.as_object().expect("patch object"),
+        )
+        .expect("update metadata");
+
+        let html = fs::read_to_string(&init.file_path).expect("read lesson");
+        let doc = parse_lesson_document(&html)
+            .expect("island parses")
+            .expect("island exists");
+        assert_eq!(
+            metadata_keys(&doc),
+            [
+                "lessonNumber",
+                "topic",
+                "title",
+                "slug",
+                "dateCreated",
+                "dateModified",
+                "initialDag",
+                "targetGoal",
+                "version"
+            ]
+        );
+        assert_eq!(doc["metadata"]["initialDag"], json!(dag));
+        assert_eq!(doc["metadata"]["targetGoal"], json!("nuovo goal"));
+        let modified = doc["metadata"]["dateModified"]
+            .as_str()
+            .expect("dateModified");
+        assert_eq!(modified.len(), 24, "got {modified}");
+        assert!(modified.ends_with('Z'), "got {modified}");
+        assert!(html.contains("Nodo 3: la terza completa"), "got {html}");
+        assert!(html.contains("id=\"node-prima-cosa\""), "got {html}");
+    }
+
+    #[test]
+    fn update_metadata_appends_new_keys_last() {
+        let tmp = temp_dir("update-metadata-new-key");
+        let init = init_lesson(&init_options(&tmp.0, "Reti", "Il modello OSI")).expect("init");
+
+        let patch = json!({"custom": "x", "title": "Il modello OSI rivisto"});
+        update_lesson_metadata(
+            &init.file_path,
+            &as_string(&tmp.0),
+            &repo_root(),
+            patch.as_object().expect("patch object"),
+        )
+        .expect("update metadata");
+
+        let html = fs::read_to_string(&init.file_path).expect("read lesson");
+        let doc = parse_lesson_document(&html)
+            .expect("island parses")
+            .expect("island exists");
+        assert_eq!(
+            metadata_keys(&doc),
+            [
+                "lessonNumber",
+                "topic",
+                "title",
+                "slug",
+                "dateCreated",
+                "dateModified",
+                "initialDag",
+                "version",
+                "custom"
+            ]
+        );
+        assert_eq!(doc["metadata"]["title"], json!("Il modello OSI rivisto"));
+        assert_eq!(doc["metadata"]["custom"], json!("x"));
+    }
+
+    #[test]
+    fn update_metadata_errors_on_missing_island() {
+        let tmp = temp_dir("update-metadata-errors");
+        let handmade = tmp.0.join("handmade.html");
+        fs::write(&handmade, "<html></html>").expect("handmade lesson");
+        let handmade_path = as_string(&handmade);
+        let before = fs::read(&handmade).expect("read before");
+        let err = update_lesson_metadata(
+            &handmade_path,
+            &as_string(&tmp.0),
+            &repo_root(),
+            &Map::new(),
+        )
+        .expect_err("no island");
+        assert_eq!(
+            err,
+            format!("Corrupted lesson file: missing #lesson-data island in {handmade_path}")
+        );
+        assert_eq!(fs::read(&handmade).expect("read after"), before);
+
+        let null_island = tmp.0.join("null-island.html");
+        fs::write(&null_island, format!("{ISLAND_OPEN}\nnull\n{SCRIPT_CLOSE}"))
+            .expect("null island");
+        let null_path = as_string(&null_island);
+        let err = update_lesson_metadata(&null_path, &as_string(&tmp.0), &repo_root(), &Map::new())
+            .expect_err("falsy island");
+        assert_eq!(
+            err,
+            format!("Corrupted lesson file: missing #lesson-data island in {null_path}")
+        );
     }
 }

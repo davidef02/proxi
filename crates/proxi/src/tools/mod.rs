@@ -17,16 +17,23 @@
 use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use serde_json::{Map, Value};
 use tokio::sync::oneshot;
 
+pub mod anki;
 pub mod ask;
 pub mod board;
+pub mod concepts;
+pub mod curriculum;
 pub mod dispatch;
+pub mod exercise;
 pub mod finish;
 pub mod lessontext;
 pub mod node;
+pub mod plan;
+pub mod practice;
 pub mod quiz;
 pub mod util;
 
@@ -94,6 +101,15 @@ pub trait ToolHost: Send + Sync {
     fn set_plan(&self, plan: Value);
     /// Stores the lesson path and notifies `{"type":"lesson","lessonPath",…,"nodeId"?}`.
     fn set_lesson(&self, lesson_path: String, node_id: Option<String>);
+    /// Node's `getExercises`: the session's exercise list.
+    fn exercises(&self) -> Vec<Value>;
+    /// Stores the list and notifies `{"type":"exercises","exercises":…}`.
+    fn set_exercises(&self, list: Vec<Value>);
+    /// Node's `open` map: `None` while a problem is already open; else shows `item` and remembers
+    /// it (`id`, its input) for `conclude`.
+    fn open_problem(&self, item: Value) -> Option<String>;
+    /// The open problem, if any: `(id, input)`.
+    fn take_problem(&self) -> Option<(String, Value)>;
     /// Pushes the interactive card and waits for the learner's answer.
     fn request(&self, item: Value) -> Result<oneshot::Receiver<Result<Value, Cancelled>>, Cancelled>;
     /// Pushes or upserts a non-blocking item; returns its id.
@@ -105,6 +121,15 @@ pub trait ToolHost: Send + Sync {
     fn start_job(&self, kind: &str, input: Value, title: &str) -> Result<String, String>;
     /// Starts the map job for a lesson (`<course>/<file stem>`).
     fn start_map(&self, target: &str) -> Result<(), String>;
+    /// The route's runner for `run_exercise` (the same node and npm the UI uses).
+    fn run_config(&self) -> crate::exercises::RunConfig;
+    /// The installs registry shared with the routes: one `npm install` per exercises dir.
+    fn installs(&self) -> crate::exercises::Installs;
+    /// The server's resolved AnkiConnect URL (flag, then env), never the process env here: tests
+    /// point at a fake without racing.
+    fn anki_url(&self) -> Option<String>;
+    /// The server's one `SemanticSearch`.
+    fn semantic(&self) -> Arc<crate::semantic::SemanticSearch>;
     fn courses_changed(&self);
 }
 
