@@ -13,10 +13,7 @@ use proxi::protocol::LearnerSettings;
 
 /// A `node <repo>/app/test/<script> [extra…]` bin: the fake engine.
 pub fn fake_bin(script: &str, extra: &[&str]) -> EngineBin {
-    let fake = super::repo_root()
-        .join("app")
-        .join("test")
-        .join(script);
+    let fake = super::repo_root().join("app").join("test").join(script);
     let mut args = vec![fake.display().to_string()];
     args.extend(extra.iter().map(|arg| arg.to_string()));
     EngineBin {

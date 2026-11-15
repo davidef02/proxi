@@ -9,7 +9,7 @@ import { driveBody, installFakeDrive, type FakeDriveSeed } from "./fake-drive.ts
 import type { FakeGithubSeed } from "./fake-github.ts";
 import { installFakeGithub } from "./fake-github.ts";
 import { FakeHttpServer, type RecordedRequest } from "./fake-servers.ts";
-import { fakeClaude, REPO_ROOT, startServer, type ServerMode } from "./harness.ts";
+import { fakeAgy, fakeClaude, fakeOpencode, REPO_ROOT, startServer, type ServerMode } from "./harness.ts";
 
 export interface GoldenRequest {
   method: "GET" | "POST";
@@ -83,7 +83,8 @@ const SESSION_UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 /**
  * Like `normalise`, plus the session ids a run invents. In every string, in this order: the captured
  * session id becomes `<session>`, every other UUID `<uuid>`, the fake engine's `msg_<pid>_` /
- * `toolu_fake_<pid>_` counters lose the pid, then the whole-string root and ISO rules of `normalise`.
+ * `toolu_fake_<pid>_` counters lose the pid, agy's `conv-<pid>` and opencode's `ses-<pid>` too, as do
+ * agy's `a<pid>_<run>_<step>` step ids, then the whole-string root and ISO rules of `normalise`.
  * The Rust replay mirrors these rules.
  */
 export function normaliseSession(value: unknown, roots: Roots, sessionId: string): unknown {
@@ -92,7 +93,10 @@ export function normaliseSession(value: unknown, roots: Roots, sessionId: string
       .split(sessionId).join("<session>")
       .replace(SESSION_UUID_RE, "<uuid>")
       .replace(/msg_\d+_/g, "msg_<pid>_")
-      .replace(/toolu_fake_\d+_/g, "toolu_fake_<pid>_");
+      .replace(/toolu_fake_\d+_/g, "toolu_fake_<pid>_")
+      .replace(/conv-\d+/g, "conv-<pid>")
+      .replace(/ses-\d+/g, "ses-<pid>")
+      .replace(/:a\d+_\d+_/g, ":a<pid>_<run>_");
     if (roots.repoRoot.includes(replaced)) return "<repoRoot>";
     if (roots.dataRoot.includes(replaced)) return "<dataRoot>";
     return ISO_RE.test(replaced) ? "<iso>" : replaced;
@@ -619,21 +623,39 @@ const SESSIONS_DATA_SEED: Record<string, string> = {
 
 /**
  * Captures the session core (AC1/AC4): the opening turn, a message turn with its whole SSE stream,
- * get, list and the saved `state.json`. Seeds are raw; only the output is normalised.
+ * get, list and the saved `state.json`. `engine` picks the provider the session is created with.
+ * Seeds are raw; only the output is normalised.
  */
-export async function captureSessions(mode: ServerMode = "node"): Promise<SessionGolden> {
+export async function captureSessions(
+  mode: ServerMode = "node",
+  engine: "claude" | "agy" | "opencode" = "claude",
+): Promise<SessionGolden> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "golden-sessions-"));
   const repo = path.join(dir, "repo");
   const data = path.join(dir, "data");
   fs.mkdirSync(repo);
   fs.mkdirSync(data);
+  // The provider is a setting the server reads at create: agy and opencode need it seeded.
+  const seed: Record<string, unknown> = engine === "claude" ? {} : { ".learner/settings.json": { provider: engine } };
+  for (const [rel, content] of Object.entries(seed)) {
+    const file = path.join(repo, rel);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(content, null, 2) + "\n");
+  }
   for (const [rel, text] of Object.entries(SESSIONS_DATA_SEED)) {
     const file = path.join(data, rel);
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, text);
   }
   const roots = { repoRoot: rootVariants(repo), dataRoot: rootVariants(data) };
-  const server = await startServer({ repoRoot: repo, dataRoot: data, mode, claude: fakeClaude() });
+  const server = await startServer({
+    repoRoot: repo,
+    dataRoot: data,
+    mode,
+    claude: fakeClaude(),
+    ...(engine === "agy" ? { agy: fakeAgy() } : {}),
+    ...(engine === "opencode" ? { opencode: fakeOpencode() } : {}),
+  });
   try {
     const created = await send(server.url, { method: "POST", path: "/api/sessions", body: SESSIONS_CREATE });
     const createBody = JSON.parse(await created.text()) as { id: string };
@@ -674,8 +696,8 @@ export async function captureSessions(mode: ServerMode = "node"): Promise<Sessio
       fs.readFileSync(path.join(repo, ".learner", "sessions", sessionId, "state.json"), "utf-8"),
     );
     return {
-      route: "sessions",
-      seed: {},
+      route: engine === "claude" ? "sessions" : `sessions-${engine}`,
+      seed,
       dataSeed: SESSIONS_DATA_SEED,
       cases: [
         {
@@ -735,6 +757,11 @@ export async function captureGolden(outDir: string = GOLDEN_DIR): Promise<string
   const sessions = path.join(outDir, "sessions.json");
   fs.writeFileSync(sessions, JSON.stringify(await captureSessions("node"), null, 2) + "\n");
   written.push(sessions);
+  for (const engine of ["agy", "opencode"] as const) {
+    const target = path.join(outDir, `sessions-${engine}.json`);
+    fs.writeFileSync(target, JSON.stringify(await captureSessions("node", engine), null, 2) + "\n");
+    written.push(target);
+  }
   written.push(await captureHome(outDir));
   return written;
 }
