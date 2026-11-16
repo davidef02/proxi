@@ -15,7 +15,9 @@ use serde_json::{json, Value};
 use tokio::task::JoinHandle;
 
 use common::cli_golden::normalise_file;
-use common::sessions::{Fixture, body_json, post, require_fake_engine, teach_planned, wait_for};
+use common::sessions::{
+    Fixture, body_json, data_events, post, read_until, require_fake_engine, teach_planned, wait_for,
+};
 use proxi::lesson::doc::{self, AppendOptions, InitOptions};
 use proxi::server::{RunningServer, start};
 use proxi::tools::NO_JOBS_MESSAGE;
@@ -793,6 +795,397 @@ async fn mcp_route_guards() {
         body_json(response).await,
         json!({"error": "Session not found"})
     );
+
+    server.shutdown().await;
+}
+
+/// A fake AnkiConnect for the sync tools: no card to import, a deck that accepts every note.
+fn anki_connect() -> common::FakeAnki {
+    common::fake_anki(|request| {
+        let action = request["action"].as_str().unwrap_or_default();
+        let result = match action {
+            "findCards" => json!([]),
+            "version" => json!(6),
+            "createDeck" => json!(1),
+            "modelNames" => json!(["Basic", "Cloze"]),
+            "modelFieldNames" => match request["params"]["modelName"].as_str() {
+                Some("Basic") => json!(["Front", "Back"]),
+                _ => json!(["Text", "Extra"]),
+            },
+            "addNotes" => {
+                let count = request["params"]["notes"].as_array().map_or(0, Vec::len);
+                Value::Array((1..=count).map(|id| json!(id)).collect())
+            }
+            _ => Value::Null,
+        };
+        common::FakeReply {
+            status: 200,
+            body: json!({"result": result, "error": null}).to_string(),
+            delay: Duration::ZERO,
+        }
+    })
+}
+
+/// The deck and note writes the fake saw: the review import never does either.
+fn writes(fake: &common::FakeAnki) -> usize {
+    fake.requests()
+        .iter()
+        .filter(|request| matches!(request["action"].as_str(), Some("createDeck" | "addNotes")))
+        .count()
+}
+
+/// The request count once no new request arrived for 500 ms (the import runs behind the create).
+async fn settled_len(fake: &common::FakeAnki) -> usize {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut len = fake.requests().len();
+    let mut unchanged = Instant::now();
+    loop {
+        assert!(
+            Instant::now() < deadline,
+            "the fake Anki never settled: {len} requests"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let now = fake.requests().len();
+        if now == len {
+            if unchanged.elapsed() >= Duration::from_millis(500) {
+                return len;
+            }
+        } else {
+            len = now;
+            unchanged = Instant::now();
+        }
+    }
+}
+
+/// The names of a `tools/list`, in registry order.
+async fn tool_names(client: &Client, server: &RunningServer, id: &str) -> Vec<String> {
+    let reply = body_json(
+        mcp(
+            client,
+            server,
+            id,
+            &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
+        )
+        .await,
+    )
+    .await;
+    reply["result"]["tools"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no tools in {reply}"))
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap_or_default().to_string())
+        .collect()
+}
+
+/// Writes the seeded lesson, plus the node whose Anki params give the sync one card to add.
+fn seed_lesson_with_cards(data: &std::path::Path) -> String {
+    let (absolute, relative) = seed_lesson(data);
+    doc::append_node(AppendOptions {
+        lesson_path: Some(absolute),
+        slug: None,
+        node: json!({
+            "nodeId": "prima-cosa",
+            "title": "La prima cosa",
+            "tier": "unconditional-truth",
+            "content": "<p>vera</p>",
+            "ankiParams": {"targetQuestion": "Q?", "targetFact": "F"},
+        }),
+        base_dir: Some(data.display().to_string()),
+    })
+    .expect("append the Anki node");
+    relative
+}
+
+/// AC4: no request reaches AnkiConnect before the opt-in answer said `si`, and the tool exists only
+/// after it. The create already imports reviews, so only the writes are compared, never total traffic.
+#[tokio::test(flavor = "multi_thread")]
+async fn sync_anki_waits_for_the_explicit_yes() {
+    require_fake_engine();
+    let fixture = Fixture::new("mcp-api-anki-sync");
+    let relative = seed_lesson_with_cards(&fixture.data.0);
+    let fake = anki_connect();
+    let mut options = fixture.options();
+    options.endpoints.anki = Some(fake.url.clone());
+    let server = start(options).await.expect("start server");
+    let client = Client::new();
+
+    // No `ankiOptIn`: the session opens on the card, and nothing has written to Anki yet.
+    let body = json!({
+        "kind": "teach",
+        "course": "demo",
+        "model": "haiku",
+        "target": {"mode": "existing", "lessonPath": relative},
+    });
+    let id = create(&client, &server, &body).await;
+    let state = wait_for(&client, &server, &id, "waiting").await;
+    let card = pending_card(&state).expect("the opt-in card").clone();
+    let base = settled_len(&fake).await;
+    let base_writes = writes(&fake);
+    assert_eq!(base_writes, 0, "a create writes no cards: {:?}", fake.requests());
+
+    let names = tool_names(&client, &server, &id).await;
+    assert!(!names.contains(&"sync_anki".to_string()), "{names:?}");
+    let refused = body_json(
+        mcp(
+            &client,
+            &server,
+            &id,
+            &tools_call("sync_anki", json!({})),
+        )
+        .await,
+    )
+    .await;
+    let (text, is_error) = tool_result(&refused);
+    assert!(is_error, "{text}");
+    assert!(
+        text.starts_with("Unknown tool \"sync_anki\". Available:"),
+        "{text}"
+    );
+    assert_eq!(settled_len(&fake).await, base);
+    assert_eq!(writes(&fake), base_writes);
+
+    // The yes alone opens the lesson: it writes no card either.
+    let response = answer(
+        &client,
+        &server,
+        &id,
+        &json!({
+            "requestId": card["requestId"],
+            "kind": "ask",
+            "answer": {"selected": ["si"]},
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    wait_for(&client, &server, &id, "idle").await;
+    assert_eq!(writes(&fake), base_writes);
+
+    let names = tool_names(&client, &server, &id).await;
+    assert!(names.contains(&"sync_anki".to_string()), "{names:?}");
+    let synced = body_json(
+        mcp(
+            &client,
+            &server,
+            &id,
+            &tools_call("sync_anki", json!({})),
+        )
+        .await,
+    )
+    .await;
+    let (text, is_error) = tool_result(&synced);
+    assert!(!is_error, "{text}");
+    let result: Value = serde_json::from_str(&text).expect("a JSON result");
+    assert!(result["summary"].is_string(), "{text}");
+    assert!(fake.requests().len() > base, "{:?}", fake.requests());
+    assert!(writes(&fake) > base_writes);
+
+    // A second session answers no: its own baseline (its review import adds a request), no writes.
+    let id = create(&client, &server, &body).await;
+    let state = wait_for(&client, &server, &id, "waiting").await;
+    let card = pending_card(&state).expect("the opt-in card").clone();
+    let base2 = settled_len(&fake).await;
+    let writes2 = writes(&fake);
+    let response = answer(
+        &client,
+        &server,
+        &id,
+        &json!({
+            "requestId": card["requestId"],
+            "kind": "ask",
+            "answer": {"selected": ["no"]},
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    wait_for(&client, &server, &id, "idle").await;
+
+    let names = tool_names(&client, &server, &id).await;
+    assert!(!names.contains(&"sync_anki".to_string()), "{names:?}");
+    let refused = body_json(
+        mcp(
+            &client,
+            &server,
+            &id,
+            &tools_call("sync_anki", json!({})),
+        )
+        .await,
+    )
+    .await;
+    assert!(tool_result(&refused).1, "{refused}");
+    assert_eq!(settled_len(&fake).await, base2);
+    assert_eq!(writes(&fake), writes2);
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn write_exercise_updates_the_session_and_its_stream() {
+    require_fake_engine();
+    let fixture = Fixture::new("mcp-api-write-exercise");
+    common::write(
+        &fixture.data.0,
+        "courses/demo/exercises/package.json",
+        "{\n  \"name\": \"demo-exercises\",\n  \"private\": true\n}\n",
+    );
+    let server = start(fixture.options()).await.expect("start server");
+    let client = Client::new();
+    let id = create(
+        &client,
+        &server,
+        &json!({"kind": "practice", "course": "demo", "model": "haiku"}),
+    )
+    .await;
+    wait_for(&client, &server, &id, "idle").await;
+
+    // Subscribed first: the list is pushed to the open stream, not only saved.
+    let mut stream = client
+        .get(url(&server, &format!("/api/sessions/{id}/events")))
+        .send()
+        .await
+        .expect("GET events");
+    assert_eq!(stream.status(), StatusCode::OK);
+    read_until(&mut stream, Duration::from_secs(10), |buffer| {
+        buffer.contains("\n\n")
+    })
+    .await;
+
+    let reply = body_json(
+        mcp(
+            &client,
+            &server,
+            &id,
+            &tools_call(
+                "write_exercise",
+                json!({
+                    "name": "01-demo",
+                    "instructions": "Fai **questo**.",
+                    "files": [{"path": "Esercizio.vue", "content": "<template/>\n"}],
+                }),
+            ),
+        )
+        .await,
+    )
+    .await;
+    assert!(!tool_result(&reply).1, "{reply}");
+
+    let state = session(&client, &server, &id).await;
+    assert_eq!(state["exercises"][0]["name"], "01-demo", "{state}");
+    assert!(
+        fixture
+            .data
+            .0
+            .join("courses/demo/exercises/01-demo/Esercizio.vue")
+            .is_file(),
+        "the exercise file is on disk"
+    );
+
+    let raw = read_until(&mut stream, Duration::from_secs(10), |buffer| {
+        data_events(buffer)
+            .iter()
+            .any(|event| event["type"] == "exercises")
+    })
+    .await;
+    let events = data_events(&raw);
+    let update = events
+        .iter()
+        .find(|event| event["type"] == "exercises")
+        .expect("the exercises event");
+    assert_eq!(update["exercises"][0]["name"], "01-demo", "{update}");
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn one_open_problem_per_session_across_calls() {
+    require_fake_engine();
+    let fixture = Fixture::new("mcp-api-problem");
+    let server = start(fixture.options()).await.expect("start server");
+    let client = Client::new();
+    let id = create(
+        &client,
+        &server,
+        &json!({"kind": "practice", "course": "demo", "model": "haiku"}),
+    )
+    .await;
+    wait_for(&client, &server, &id, "idle").await;
+
+    let problem = json!({
+        "statement": "Risolvi.",
+        "mode": "recall",
+        "nodeKeys": ["demo/x#n1"],
+        "modelSolution": "Così.",
+    });
+    let reply = body_json(
+        mcp(
+            &client,
+            &server,
+            &id,
+            &tools_call("problem", problem.clone()),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        tool_result(&reply),
+        (
+            "Problem shown. Wait for the learner's attempt in chat; coach with the hint ladder; call conclude when done."
+                .to_string(),
+            false
+        )
+    );
+
+    // A second POST builds a new host, but the problem belongs to the session: it is still open.
+    let reply = body_json(
+        mcp(
+            &client,
+            &server,
+            &id,
+            &tools_call("problem", problem.clone()),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        tool_result(&reply),
+        (
+            "A problem is already open: coach it to the end and call conclude before opening another."
+                .to_string(),
+            true
+        )
+    );
+
+    let reply = body_json(
+        mcp(
+            &client,
+            &server,
+            &id,
+            &tools_call(
+                "conclude",
+                json!({
+                    "outcome": "solvedWithHints",
+                    "verdict": "ok",
+                    "rung": "R2",
+                    "missClass": null,
+                    "retest": false,
+                }),
+            ),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(tool_result(&reply), ("Concluded.".to_string(), false));
+
+    let reply = body_json(
+        mcp(
+            &client,
+            &server,
+            &id,
+            &tools_call("problem", problem),
+        )
+        .await,
+    )
+    .await;
+    assert!(!tool_result(&reply).1, "{reply}");
 
     server.shutdown().await;
 }
