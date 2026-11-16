@@ -20,6 +20,7 @@ pub mod cli_golden;
 pub mod engine;
 pub mod fake_anki;
 pub mod fake_hf;
+pub mod process_tree;
 pub mod sessions;
 
 pub fn repo_root() -> PathBuf {

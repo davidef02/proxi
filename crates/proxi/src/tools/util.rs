@@ -9,7 +9,7 @@ use crate::js;
 use crate::knowledge;
 use crate::lesson::artifact::{self, Lesson};
 use crate::planstate;
-use crate::sessions::{trunc, utf16_len};
+use crate::sessions::{invalid_type, issue, trunc, utf16_len};
 use crate::tools::{ToolHost, ToolOutcome};
 
 /// Node's message for an interrupted card; the tool answers it as an error result.
@@ -121,6 +121,61 @@ pub fn ack(job_id: &str) -> ToolOutcome {
     ToolOutcome::ok(format!(
         "Avviato in background (job {job_id}): il risultato arriverà come messaggio. Continua la lezione."
     ))
+}
+
+/// One field of a zod object of plain strings: `.min()` counts UTF-16 units, like JS `.length`.
+pub(crate) struct Field {
+    pub(crate) key: &'static str,
+    pub(crate) min: usize,
+    pub(crate) required: bool,
+}
+
+/// A zod object of plain string fields: issues in schema key order, the cleaned data rebuilt in the
+/// same order with unknown keys dropped (that is what Node stores and what the tool receives).
+pub(crate) fn string_object(input: &Value, fields: &[Field]) -> Result<Value, Vec<String>> {
+    let Some(object) = input.as_object() else {
+        return Err(vec![issue("(input)", &invalid_type("object", Some(input)))]);
+    };
+    let mut issues = Vec::new();
+    let mut out = Map::new();
+    for field in fields {
+        match string_value(object.get(field.key), field) {
+            Ok(Some(text)) => {
+                out.insert(field.key.to_string(), Value::String(text));
+            }
+            Ok(None) => {}
+            Err(issue) => issues.push(issue),
+        }
+    }
+    if issues.is_empty() {
+        Ok(Value::Object(out))
+    } else {
+        Err(issues)
+    }
+}
+
+pub(crate) fn string_value(
+    value: Option<&Value>,
+    field: &Field,
+) -> Result<Option<String>, String> {
+    let text = match value {
+        Some(Value::String(text)) => text,
+        Some(other) => {
+            return Err(issue(field.key, &invalid_type("string", Some(other))));
+        }
+        None if field.required => {
+            return Err(issue(field.key, &invalid_type("string", None)));
+        }
+        None => return Ok(None),
+    };
+    let length = text.encode_utf16().count();
+    if length < field.min {
+        return Err(format!(
+            "{}: Too small: expected string to have >={} characters",
+            field.key, field.min
+        ));
+    }
+    Ok(Some(text.clone()))
 }
 
 /// Node's `gradeQuiz`: the answer with `correct` appended (same keys, same order).

@@ -1044,6 +1044,25 @@ impl TurnHost for SessionData {
     fn cancel_pending(&mut self) {
         self.cancel_pending_only(None);
     }
+
+    fn owed_jobs(&self) -> Vec<Value> {
+        let Some(shared) = self.manager.upgrade() else {
+            return Vec::new();
+        };
+        shared
+            .opts
+            .jobs
+            .list_for(&self.state.id)
+            .into_iter()
+            .filter(crate::turns::is_owed)
+            .collect()
+    }
+
+    fn mark_delivered(&mut self, id: &str) {
+        if let Some(shared) = self.manager.upgrade() {
+            shared.opts.jobs.mark_delivered(id);
+        }
+    }
 }
 
 impl Shared {
@@ -1398,18 +1417,30 @@ impl SessionManager {
             state.pending_request_id = None;
             for item in &mut state.items {
                 if item.get("kind").and_then(Value::as_str) == Some("job") {
-                    // No job manager: a card left "running" by a previous run is an interrupted job.
-                    let job = item
-                        .get_mut("job")
-                        .filter(|job| job.get("status").and_then(Value::as_str) == Some("running"))
-                        .and_then(Value::as_object_mut);
-                    if let Some(job) = job {
-                        job.insert("status".to_string(), json!("error"));
-                        job.insert(
-                            "error".to_string(),
-                            json!("interrotto alla chiusura dell'app"),
-                        );
-                        job.insert("activity".to_string(), json!(""));
+                    // The job manager is the source of truth; a card left "running" by a previous
+                    // run is an interrupted job only when it has no record.
+                    let record = item
+                        .get("job")
+                        .and_then(|job| job.get("id"))
+                        .and_then(Value::as_str)
+                        .and_then(|id| self.0.opts.jobs.get(id));
+                    if let Some(record) = record {
+                        item["job"] = record;
+                    } else {
+                        let job = item
+                            .get_mut("job")
+                            .filter(|job| {
+                                job.get("status").and_then(Value::as_str) == Some("running")
+                            })
+                            .and_then(Value::as_object_mut);
+                        if let Some(job) = job {
+                            job.insert("status".to_string(), json!("error"));
+                            job.insert(
+                                "error".to_string(),
+                                json!("interrotto alla chiusura dell'app"),
+                            );
+                            job.insert("activity".to_string(), json!(""));
+                        }
                     }
                 }
                 if item.get("kind").and_then(Value::as_str) == Some("teacher") {
@@ -1488,6 +1519,86 @@ impl SessionManager {
     }
 
     // ───────────── public API ─────────────
+
+    /// A job owned by a session changed: upsert its card; a result now owed goes to an idle teacher
+    /// at once (`sessions.ts:382-387`).
+    pub fn on_job(&self, job: Value) {
+        let Some(session_id) = job.get("sessionId").and_then(Value::as_str) else {
+            return;
+        };
+        let Some(session) = self.0.session(session_id) else {
+            return;
+        };
+        {
+            let mut guard = session.lock().expect("session lock");
+            if guard.data.state.status == SessionStatus::Closed {
+                return;
+            }
+            let mut card = Map::new();
+            card.insert(
+                "id".to_string(),
+                json!(format!(
+                    "job:{}",
+                    job.get("id").and_then(Value::as_str).unwrap_or_default()
+                )),
+            );
+            card.insert(
+                "at".to_string(),
+                job.get("createdAt").cloned().unwrap_or(Value::Null),
+            );
+            card.insert("kind".to_string(), json!("job"));
+            card.insert("job".to_string(), job.clone());
+            guard.data.upsert(Value::Object(card));
+        }
+        if crate::turns::is_owed(&job) {
+            self.deliver(&session);
+        }
+    }
+
+    /// Hands owed results to an idle teacher, relaunching the engine if needed (`turns.ts:155-158`).
+    fn deliver(&self, session: &Arc<Mutex<Session>>) {
+        let needs_launch = {
+            let mut guard = session.lock().expect("session lock");
+            let Session { data, turns } = &mut *guard;
+            if !turns.should_deliver(&*data) {
+                return;
+            }
+            let needs_launch = turns.begin_send(data, None, Vec::new(), None);
+            if !needs_launch {
+                turns.finish_send(data);
+            }
+            needs_launch
+        };
+        if needs_launch {
+            // A failed launch already set status "error": the results stay owed and ride along.
+            self.spawn_turn(session.clone());
+        }
+    }
+
+    /// `launch_turn` off the caller's stack: the callback that starts a delivery may run anywhere.
+    fn spawn_turn(&self, session: Arc<Mutex<Session>>) {
+        let manager = self.clone();
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                handle.spawn(async move {
+                    let _ = manager.launch_turn(&session).await;
+                });
+            }
+            Err(_) => {
+                std::thread::spawn(move || {
+                    let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                    else {
+                        return;
+                    };
+                    runtime.block_on(async move {
+                        let _ = manager.launch_turn(&session).await;
+                    });
+                });
+            }
+        }
+    }
 
     pub fn list(&self) -> Value {
         let sessions: Vec<Arc<Mutex<Session>>> = self
@@ -2209,6 +2320,7 @@ impl SessionManager {
                         relaunched = self.relaunch_fresh(&id, &text).await;
                         break;
                     }
+                    TurnAction::Deliver => self.deliver(&session),
                 }
             }
             match relaunched {
