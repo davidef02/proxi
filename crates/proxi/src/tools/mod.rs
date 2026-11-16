@@ -12,6 +12,12 @@
 //! node --import tsx --input-type=module -e "import {toJsonSchema} from './app/server/mcp.ts'; import {toolsFor} from './app/server/tools/index.ts'; const t = toolsFor({kind:'teach',course:'demo',model:'haiku',ankiOptIn:false}, process.cwd()).find((x) => x.name === process.argv[1]); process.stdout.write(JSON.stringify(toJsonSchema(t.schema), null, 2) + '\n')" <tool-name> > crates/proxi/src/tools/schemas/<tool-name>.json
 //! ```
 //!
+//! The job tools come from their role's own registry, same recipe:
+//!
+//! ```text
+//! node --import tsx --input-type=module -e "import {toJsonSchema} from './app/server/mcp.ts'; import {researchRole} from './app/server/jobs/roles/research.ts'; import {visualRole} from './app/server/jobs/roles/visual.ts'; import {demoRole} from './app/server/jobs/roles/demo.ts'; import {makeMapRole} from './app/server/graph/extract.ts'; const all = [...researchRole.tools({}), ...visualRole.tools({}), ...demoRole.tools({title:'t'}), ...makeMapRole(process.cwd()).tools({source:'c/l'})]; const t = all.find((x) => x.name === process.argv[1]); process.stdout.write(JSON.stringify(toJsonSchema(t.schema), null, 2) + '\n')" <tool-name> > crates/proxi/src/tools/schemas/<tool-name>.json
+//! ```
+//!
 //! The validator's messages are zod 4's own: get one with the same imports, `t.schema.safeParse(<input>).error.issues`.
 
 use std::future::Future;
@@ -23,6 +29,8 @@ use serde_json::{Map, Value};
 use tokio::sync::oneshot;
 
 use crate::course_data;
+use crate::events::EventBus;
+use crate::graph::store::GraphStore;
 use crate::js;
 
 pub mod anki;
@@ -43,11 +51,19 @@ pub mod util;
 #[cfg(test)]
 pub(crate) mod fake;
 
-/// What a tool answers: MCP text content plus the `isError` flag.
+/// One image a tool answers with, after its text (Node's `ToolOutcome["images"]`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolImage {
+    pub data: String,
+    pub mime_type: String,
+}
+
+/// What a tool answers: MCP text content, the `isError` flag, and any images.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolOutcome {
     pub text: String,
     pub is_error: bool,
+    pub images: Vec<ToolImage>,
 }
 
 impl ToolOutcome {
@@ -55,6 +71,7 @@ impl ToolOutcome {
         Self {
             text: text.into(),
             is_error: false,
+            images: Vec::new(),
         }
     }
 
@@ -62,7 +79,14 @@ impl ToolOutcome {
         Self {
             text: text.into(),
             is_error: true,
+            images: Vec::new(),
         }
+    }
+
+    /// Node's `images`: MCP appends one `image` content entry per image, after the text.
+    pub fn with_images(mut self, images: Vec<ToolImage>) -> Self {
+        self.images = images;
+        self
     }
 }
 
@@ -135,12 +159,49 @@ pub trait ToolHost: Send + Sync {
     /// The server's one `SemanticSearch`.
     fn semantic(&self) -> Arc<crate::semantic::SemanticSearch>;
     fn courses_changed(&self);
+    /// The job the calling tool runs in; `None` for a session host (Node's `ToolContext` vs
+    /// `JobContext` union).
+    fn job(&self) -> Option<&dyn JobContext> {
+        None
+    }
+}
+
+/// What a job tool may touch: Node's `JobContext` (`types.ts:178-186`), implemented by the job
+/// manager. Sync methods only, like `ToolHost`, so the trait stays object-safe.
+pub trait JobContext: Send + Sync {
+    fn job_id(&self) -> &str;
+    /// The job's input, from its record.
+    fn input(&self) -> Value;
+    /// Updates `JobRecord.activity`, shown live in the activity dock.
+    fn set_activity(&self, text: &str);
+    /// Delivers the result: the job becomes `done`; its process is stopped after the turn.
+    fn finish(&self, result: Value);
+    /// Settles the job as `error` with that text.
+    fn fail(&self, error: &str);
+    /// The `Arc` itself, so a tool can clone it into `spawn_blocking`.
+    fn graph(&self) -> &Arc<GraphStore>;
+    fn events(&self) -> &EventBus;
+    /// The server's headless browser, for the visual and demo roles; `None` where rendering is
+    /// not wired (tests, a build without jobs).
+    fn renderer(&self) -> Option<&crate::jobs::render::Renderer> {
+        None
+    }
 }
 
 /// The background job seam: implemented by the session (it owns the job's session id).
 pub trait JobStarter: Send + Sync {
     fn start(&self, kind: &str, input: Value, title: &str, session_id: &str) -> Result<String, String>;
     fn start_map(&self, target: &str, session_id: &str) -> Result<(), String>;
+    /// The record of that job, `None` when unknown.
+    fn get(&self, _id: &str) -> Option<Value> {
+        None
+    }
+    /// The session's records, newest first.
+    fn list_for(&self, _session_id: &str) -> Vec<Value> {
+        Vec::new()
+    }
+    /// The finished result was handed to the owning session's teacher.
+    fn mark_delivered(&self, _id: &str) {}
 }
 
 /// Node's message when no job manager exists in this build (#22): never a fake ack whose result

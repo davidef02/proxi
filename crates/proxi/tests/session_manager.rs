@@ -7,7 +7,7 @@ mod common;
 
 use std::fs;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use axum::http::StatusCode;
@@ -24,6 +24,7 @@ use proxi::limits::LimitsCache;
 use proxi::protocol::{ANKI_OPT_IN_QUESTION, SessionState, SessionStatus};
 use proxi::semantic::SemanticSearch;
 use proxi::sessions::{AttachmentUpload, HttpError, ManagerOptions, SessionManager};
+use proxi::tools::JobStarter;
 use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -1526,4 +1527,414 @@ async fn delete_removes_the_session_and_no_late_flush_recreates_it() {
         manager.delete(&id).await.unwrap_err().status,
         StatusCode::NOT_FOUND
     );
+}
+
+// ───────────── job delivery (port of app/test/jobs-delivery.test.ts) ─────────────
+
+/// The job manager's seam with the session: records in memory, the acks recorded.
+#[derive(Default)]
+struct FakeJobs {
+    records: Mutex<Vec<Value>>,
+    delivered: Mutex<Vec<String>>,
+}
+
+impl FakeJobs {
+    fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    fn add(&self, record: Value) {
+        self.records.lock().unwrap().push(record);
+    }
+
+    fn replace(&self, record: Value) {
+        let mut records = self.records.lock().unwrap();
+        match records
+            .iter_mut()
+            .find(|stored| stored["id"] == record["id"])
+        {
+            Some(stored) => *stored = record,
+            None => records.push(record),
+        }
+    }
+
+    fn delivered(&self) -> Vec<String> {
+        self.delivered.lock().unwrap().clone()
+    }
+
+    fn record(&self, id: &str) -> Option<Value> {
+        self.records
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|record| record["id"] == id)
+            .cloned()
+    }
+}
+
+impl JobStarter for FakeJobs {
+    fn start(
+        &self,
+        _kind: &str,
+        _input: Value,
+        _title: &str,
+        _session_id: &str,
+    ) -> Result<String, String> {
+        Err("jobs are faked in this test".to_string())
+    }
+
+    fn start_map(&self, _target: &str, _session_id: &str) -> Result<(), String> {
+        Err("jobs are faked in this test".to_string())
+    }
+
+    fn get(&self, id: &str) -> Option<Value> {
+        self.record(id)
+    }
+
+    fn list_for(&self, session_id: &str) -> Vec<Value> {
+        let mut records: Vec<Value> = self
+            .records
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|record| record["sessionId"] == session_id)
+            .cloned()
+            .collect();
+        // Newest first, as the manager lists them.
+        records.sort_by(|a, b| {
+            b["createdAt"]
+                .as_str()
+                .unwrap_or("")
+                .cmp(a["createdAt"].as_str().unwrap_or(""))
+        });
+        records
+    }
+
+    fn mark_delivered(&self, id: &str) {
+        self.delivered.lock().unwrap().push(id.to_string());
+        if let Some(record) = self
+            .records
+            .lock()
+            .unwrap()
+            .iter_mut()
+            .find(|record| record["id"] == id)
+        {
+            record["delivered"] = json!(true);
+        }
+    }
+}
+
+const JOB_AT: &str = "2026-01-01T00:00:10.000Z";
+const RESEARCH_HEAD: &str = "[Risultato del subagente research · job j1]";
+
+fn job_record(id: &str, session: &str, kind: &str, status: &str) -> Value {
+    json!({
+        "id": id,
+        "kind": kind,
+        "title": "Ricerca: q",
+        "sessionId": session,
+        "model": "haiku",
+        "status": status,
+        "activity": "",
+        "createdAt": JOB_AT,
+        "updatedAt": JOB_AT,
+        "costUsd": 0,
+    })
+}
+
+fn research_job(id: &str, session: &str) -> Value {
+    let mut record = job_record(id, session, "research", "done");
+    record["result"] = json!({
+        "kind": "research",
+        "brief": "## Sintesi\nx",
+        "sources": [{"title": "A", "url": "https://a"}],
+    });
+    record
+}
+
+fn job_manager(env: &TestEnv, jobs: Arc<FakeJobs>, extra: &[&str]) -> SessionManager {
+    let claude = ClaudeBin {
+        cmd: "node".to_string(),
+        args: common::sessions::fake_script_args("fake-claude.mjs", extra),
+    };
+    let mut options = options_for(&env.repo.0, &env.data.0, &env.events, claude);
+    options.jobs = jobs;
+    SessionManager::new(options)
+}
+
+async fn wait_for_turns(manager: &SessionManager, id: &str, turns: u64) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let state = manager.get(id).expect("a session");
+        if state["usage"]["turns"] == json!(turns) && state["status"] == "idle" {
+            return state;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {turns} turns: {state}"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
+fn job_cards(state: &Value) -> Vec<&Value> {
+    state["items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|item| item["kind"] == "job")
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn on_job_upserts_the_card_with_node_key_order() {
+    require_fake_engine();
+    let env = TestEnv::new();
+    let jobs = FakeJobs::new();
+    let manager = job_manager(&env, jobs.clone(), &[]);
+    let id = manager.create(teach_planned(Some(false))).await.unwrap();
+    wait_for(&manager, &id, SessionStatus::Idle).await;
+
+    let running = job_record("j1", &id, "research", "running");
+    jobs.add(running.clone());
+    manager.on_job(running);
+
+    let state = manager.get(&id).expect("a session");
+    let cards = job_cards(&state);
+    assert_eq!(cards.len(), 1, "one card: {state}");
+    assert_eq!(top_level_keys(cards[0]), ["id", "at", "kind", "job"]);
+    assert_eq!(cards[0]["id"], "job:j1");
+    assert_eq!(cards[0]["at"], JOB_AT);
+    assert_eq!(cards[0]["job"]["status"], "running");
+
+    // The settle upserts the same card, it does not add a second one.
+    let done = research_job("j1", &id);
+    jobs.replace(done.clone());
+    manager.on_job(done);
+    let state = wait_for_turns(&manager, &id, 2).await;
+    let cards = job_cards(&state);
+    assert_eq!(cards.len(), 1, "upserted, not appended: {state}");
+    assert_eq!(cards[0]["job"]["status"], "done");
+    assert_eq!(cards[0]["at"], JOB_AT, "the card keeps its position");
+    manager.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_idle_session_delivers_the_result_as_a_text_less_turn() {
+    require_fake_engine();
+    let env = TestEnv::new();
+    let input = env.repo.0.join("input.jsonl");
+    let input = input.to_str().expect("utf-8 repo path").to_string();
+    let jobs = FakeJobs::new();
+    let manager = job_manager(&env, jobs.clone(), &["--input-out", &input]);
+    let id = manager.create(teach_planned(Some(false))).await.unwrap();
+    wait_for_turns(&manager, &id, 1).await;
+
+    let job = research_job("j1", &id);
+    jobs.add(job.clone());
+    manager.on_job(job);
+
+    let state = wait_for_turns(&manager, &id, 2).await;
+    assert_eq!(jobs.delivered(), ["j1"]);
+    assert_eq!(
+        user_texts(Path::new(&input)).last().expect("the turn"),
+        &format!("{RESEARCH_HEAD}\n\n## Sintesi\nx\n\nFonti:\n- A: https://a")
+    );
+    let learners = state["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .filter(|item| item["kind"] == "learner")
+        .count();
+    assert_eq!(learners, 1, "the delivery is not a learner bubble: {state}");
+    manager.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_busy_session_delivers_only_after_its_turn_result() {
+    require_fake_engine();
+    let env = TestEnv::new();
+    let jobs = FakeJobs::new();
+    let manager = job_manager(&env, jobs.clone(), &[]);
+    let id = manager.create(teach_planned(Some(false))).await.unwrap();
+    wait_for_turns(&manager, &id, 1).await;
+
+    manager
+        .message(&id, json!({"text": "FAKE:slow:3"}))
+        .await
+        .unwrap();
+    wait_for(&manager, &id, SessionStatus::Running).await;
+    let job = research_job("j1", &id);
+    jobs.add(job.clone());
+    manager.on_job(job);
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert!(jobs.delivered().is_empty(), "never mid-turn");
+
+    let state = wait_for_turns(&manager, &id, 3).await;
+    assert_eq!(jobs.delivered(), ["j1"]);
+    assert_eq!(job_cards(&state)[0]["job"]["status"], "done");
+    manager.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pending_card_defers_the_delivery_until_answered() {
+    require_fake_engine();
+    let env = TestEnv::new();
+    let input = env.repo.0.join("input.jsonl");
+    let input = input.to_str().expect("utf-8 repo path").to_string();
+    let jobs = FakeJobs::new();
+    let manager = job_manager(&env, jobs.clone(), &["--input-out", &input]);
+    // The Anki opt-in card: the session waits with no process until the learner answers.
+    let id = manager.create(teach_planned(None)).await.unwrap();
+    let waiting = wait_for(&manager, &id, SessionStatus::Waiting).await;
+
+    let job = research_job("j1", &id);
+    jobs.add(job.clone());
+    manager.on_job(job);
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert!(jobs.delivered().is_empty(), "never while a card is pending");
+    assert_eq!(manager.get(&id).expect("a session")["status"], "waiting");
+
+    let request_id = waiting["pendingRequestId"].as_str().expect("the card id");
+    manager
+        .answer(
+            &id,
+            json!({"requestId": request_id, "kind": "ask", "answer": {"selected": ["no"]}}),
+        )
+        .unwrap();
+
+    // The owed result rides along the opening turn the answer starts.
+    let state = wait_for_turns(&manager, &id, 1).await;
+    assert_eq!(jobs.delivered(), ["j1"]);
+    assert_eq!(job_cards(&state)[0]["job"]["status"], "done");
+    assert!(
+        user_texts(Path::new(&input))
+            .last()
+            .expect("the turn")
+            .starts_with(RESEARCH_HEAD),
+        "the result went out only after the answer"
+    );
+    manager.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_job_is_delivered_too_and_a_map_job_is_not() {
+    require_fake_engine();
+    let env = TestEnv::new();
+    let input = env.repo.0.join("input.jsonl");
+    let input = input.to_str().expect("utf-8 repo path").to_string();
+    let jobs = FakeJobs::new();
+    let manager = job_manager(&env, jobs.clone(), &["--input-out", &input]);
+    let id = manager.create(teach_planned(Some(false))).await.unwrap();
+    wait_for_turns(&manager, &id, 1).await;
+
+    let mut failed = job_record("j1", &id, "research", "error");
+    failed["error"] = json!("boom");
+    jobs.add(failed.clone());
+    manager.on_job(failed);
+    let state = wait_for_turns(&manager, &id, 2).await;
+    assert_eq!(jobs.delivered(), ["j1"]);
+    assert_eq!(
+        user_texts(Path::new(&input)).last().expect("the turn"),
+        &format!("{RESEARCH_HEAD}\n\nIl subagente non ha consegnato: boom.")
+    );
+    assert_eq!(job_cards(&state)[0]["job"]["status"], "error");
+
+    let turns = state["usage"]["turns"].clone();
+    let mut map = job_record("m1", &id, "map", "done");
+    map["result"] =
+        json!({"kind": "map", "source": "demo/x", "added": 1, "linked": 0, "chains": 0});
+    jobs.add(map.clone());
+    manager.on_job(map);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let state = manager.get(&id).expect("a session");
+    assert_eq!(state["usage"]["turns"], turns, "no turn for a map job");
+    assert_eq!(jobs.delivered(), ["j1"], "never acked: {state}");
+    let card = job_cards(&state)
+        .into_iter()
+        .find(|card| card["id"] == "job:m1")
+        .expect("the map card");
+    assert_eq!(card["job"]["status"], "done");
+    manager.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn after_a_restart_a_session_without_a_process_relaunches_to_deliver() {
+    require_fake_engine();
+    let env = TestEnv::new();
+    let input = env.repo.0.join("input.jsonl");
+    let input = input.to_str().expect("utf-8 repo path").to_string();
+    let jobs = FakeJobs::new();
+    let manager = job_manager(&env, jobs.clone(), &["--input-out", &input]);
+    let id = manager.create(teach_planned(Some(false))).await.unwrap();
+    wait_for_turns(&manager, &id, 1).await;
+    manager.shutdown().await;
+
+    let manager = job_manager(&env, jobs.clone(), &["--input-out", &input]);
+    let state = manager.get(&id).expect("reloaded");
+    assert_eq!(state["status"], "idle");
+    assert!(
+        manager.live_pids().is_empty(),
+        "no process after the restart"
+    );
+
+    let job = research_job("j1", &id);
+    jobs.add(job.clone());
+    manager.on_job(job);
+
+    wait_for_turns(&manager, &id, 2).await;
+    assert_eq!(jobs.delivered(), ["j1"]);
+    assert_eq!(manager.live_pids().len(), 1, "the engine was relaunched");
+    assert!(
+        user_texts(Path::new(&input))
+            .last()
+            .expect("the turn")
+            .starts_with(RESEARCH_HEAD),
+        "the result went out on the relaunched engine"
+    );
+    manager.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_saved_running_card_shows_the_manager_record_after_load() {
+    let env = TestEnv::new();
+    let jobs = FakeJobs::new();
+    let mut record = job_record("j9", "open", "research", "error");
+    record["error"] = json!("interrotto alla chiusura dell'app");
+    jobs.add(record);
+
+    let card = |id: &str, session: &str| {
+        json!({
+            "id": format!("job:{id}"),
+            "at": JOB_AT,
+            "kind": "job",
+            "job": job_record(id, session, "research", "running"),
+        })
+    };
+    write_state_file(
+        &env.repo.0,
+        "open",
+        json!({"state": hand_state("open", "idle", json!([card("j9", "open")])), "provider": "claude"}),
+    );
+    write_state_file(
+        &env.repo.0,
+        "orphan",
+        json!({"state": hand_state("orphan", "idle", json!([card("j8", "orphan")])), "provider": "claude"}),
+    );
+
+    let manager = job_manager(&env, jobs, &[]);
+
+    let open = manager.get("open").expect("loaded");
+    let saved = job_cards(&open)[0];
+    assert_eq!(saved["job"]["status"], "error", "the manager is the truth");
+    assert_eq!(saved["job"]["id"], "j9");
+
+    let orphan = manager.get("orphan").expect("loaded");
+    let interrupted = job_cards(&orphan)[0];
+    assert_eq!(interrupted["job"]["status"], "error");
+    assert_eq!(
+        interrupted["job"]["error"],
+        "interrotto alla chiusura dell'app"
+    );
+    assert_eq!(interrupted["job"]["activity"], "");
 }

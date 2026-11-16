@@ -4,6 +4,8 @@ use std::collections::{HashMap, HashSet};
 
 use serde_json::{Map, Value};
 
+use crate::js;
+
 pub type Record = Map<String, Value>;
 /// id -> `{"x":..,"y":..}`, already JS-shaped.
 pub type Positions = Map<String, Value>;
@@ -16,7 +18,7 @@ fn s<'a>(record: &'a Record, key: &str) -> &'a str {
     record.get(key).and_then(Value::as_str).unwrap_or("")
 }
 
-fn list(record: &Record, key: &str) -> Vec<String> {
+pub(crate) fn list(record: &Record, key: &str) -> Vec<String> {
     match record.get(key) {
         Some(Value::Array(items)) => items
             .iter()
@@ -56,6 +58,156 @@ pub fn chain_key(premises: &[String], conclusion: &str) -> String {
     let mut sorted = premises.to_vec();
     sorted.sort();
     format!("{}>{}", sorted.join("+"), conclusion)
+}
+
+/// The deterministic chain-simplification pass: strips redundant derivations — same-conclusion chains whose
+/// premises add nothing a leaner kept chain doesn't already derive. Pure over the input list; the caller owns the
+/// ledger rewrite.
+///
+/// Same (premises, conclusion) lines are ONE logical chain (read-time merge semantics) — a key is kept or dropped
+/// as a whole, every provenance line with it.
+pub fn simplify_chains(lines: &[Record]) -> Vec<Record> {
+    if lines.len() < 2 {
+        return lines.to_vec();
+    }
+
+    // Group lines by chain key (logical chains).
+    let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
+    let mut group_index: HashMap<String, usize> = HashMap::new();
+    for (index, line) in lines.iter().enumerate() {
+        let key = chain_key(&list(line, "premises"), s(line, "conclusion"));
+        match group_index.get(&key) {
+            Some(&group) => groups[group].1.push(index),
+            None => {
+                group_index.insert(key.clone(), groups.len());
+                groups.push((key, vec![index]));
+            }
+        }
+    }
+
+    // Ancestry over the FULL chain set: every node id reachable as a premise behind an id (a cycle cannot be
+    // minted by the extractor — a premise equal to the conclusion is refused — but the walk stays honest).
+    let mut premises_of: HashMap<String, Vec<Vec<String>>> = HashMap::new();
+    for line in lines {
+        premises_of
+            .entry(s(line, "conclusion").to_string())
+            .or_default()
+            .push(list(line, "premises"));
+    }
+    let mut memo: HashMap<String, HashSet<String>> = HashMap::new();
+
+    // Per conclusion: greedy in (premiseCount, createdAt, key).
+    let mut by_conclusion: Vec<Vec<Candidate>> = Vec::new();
+    let mut conclusion_index: HashMap<String, usize> = HashMap::new();
+    for (key, bucket) in &groups {
+        let head = &lines[bucket[0]];
+        let candidate = Candidate {
+            key: key.clone(),
+            premises: list(head, "premises"),
+            created_at: s(head, "createdAt").to_string(),
+        };
+        match conclusion_index.get(s(head, "conclusion")) {
+            Some(&group) => by_conclusion[group].push(candidate),
+            None => {
+                conclusion_index.insert(s(head, "conclusion").to_string(), by_conclusion.len());
+                by_conclusion.push(vec![candidate]);
+            }
+        }
+    }
+
+    let mut dropped: HashSet<String> = HashSet::new();
+    for candidates in &mut by_conclusion {
+        candidates.sort_by(|a, b| {
+            a.premises
+                .len()
+                .cmp(&b.premises.len())
+                .then_with(|| js::locale_compare(&a.created_at, &b.created_at))
+                .then_with(|| js::locale_compare(&a.key, &b.key))
+        });
+        let mut kept: Vec<&Candidate> = Vec::new();
+        for candidate in &*candidates {
+            let candidate_set: HashSet<&str> = candidate.premises.iter().map(String::as_str).collect();
+            let redundant = kept.iter().any(|k| {
+                // Rule 1 — prefer-fewest-premises: a strict subset (equal keys are grouped).
+                if k.premises.iter().all(|p| candidate_set.contains(p.as_str())) {
+                    return true;
+                }
+                // Rule 2 — ancestry-cover: every candidate premise is a kept premise, or reachable behind one.
+                let mut covered: HashSet<String> = k.premises.iter().cloned().collect();
+                for premise in &k.premises {
+                    covered.extend(ancestry(premise, &mut HashSet::new(), &premises_of, &mut memo));
+                }
+                candidate.premises.iter().all(|p| covered.contains(p))
+            });
+            if redundant {
+                dropped.insert(candidate.key.clone());
+            } else {
+                kept.push(candidate);
+            }
+        }
+    }
+    if dropped.is_empty() {
+        return lines.to_vec();
+    }
+    // Never strip the only chain a premise sits in: the map holds no isolated idea. Checked in key order so the
+    // result is deterministic.
+    let mut kept_ids: HashSet<String> = HashSet::new();
+    for line in lines {
+        if dropped.contains(&chain_key(&list(line, "premises"), s(line, "conclusion"))) {
+            continue;
+        }
+        kept_ids.extend(list(line, "premises"));
+        kept_ids.insert(s(line, "conclusion").to_string());
+    }
+    let mut dropped_keys: Vec<String> = dropped.iter().cloned().collect();
+    dropped_keys.sort();
+    for key in dropped_keys {
+        let Some(&group) = group_index.get(&key) else {
+            continue;
+        };
+        let premises = list(&lines[groups[group].1[0]], "premises");
+        if premises.iter().all(|p| kept_ids.contains(p)) {
+            continue;
+        }
+        dropped.remove(&key);
+        kept_ids.extend(premises);
+    }
+    lines
+        .iter()
+        .filter(|line| !dropped.contains(&chain_key(&list(line, "premises"), s(line, "conclusion"))))
+        .cloned()
+        .collect()
+}
+
+struct Candidate {
+    key: String,
+    premises: Vec<String>,
+    created_at: String,
+}
+
+/// Memoized, cycle-guarded ancestor set of `id` (`A⟹X` makes `A` an ancestor of `X`).
+fn ancestry(
+    id: &str,
+    visiting: &mut HashSet<String>,
+    premises_of: &HashMap<String, Vec<Vec<String>>>,
+    memo: &mut HashMap<String, HashSet<String>>,
+) -> HashSet<String> {
+    if let Some(cached) = memo.get(id) {
+        return cached.clone();
+    }
+    let mut out = HashSet::new();
+    if !visiting.insert(id.to_string()) {
+        return out;
+    }
+    for premises in premises_of.get(id).into_iter().flatten() {
+        for premise in premises {
+            out.insert(premise.clone());
+            out.extend(ancestry(premise, visiting, premises_of, memo));
+        }
+    }
+    visiting.remove(id);
+    memo.insert(id.to_string(), out.clone());
+    out
 }
 
 /// The merged stored truth: node lines deduped by id, chain lines by their premises + conclusion.
@@ -587,6 +739,57 @@ mod tests {
     fn chain_key_sorts_the_premises() {
         let premises = vec!["n_b".to_string(), "n_a".to_string()];
         assert_eq!(chain_key(&premises, "n_c"), "n_a+n_b>n_c");
+    }
+
+    fn chain(id: &str, premises: &[&str], conclusion: &str, created_at: &str) -> Record {
+        record(json!({
+            "id": id,
+            "premises": premises,
+            "conclusion": conclusion,
+            "createdAt": created_at,
+            "provenance": [],
+        }))
+    }
+
+    fn ids(lines: &[Record]) -> Vec<String> {
+        lines.iter().map(|line| s(line, "id").to_string()).collect()
+    }
+
+    #[test]
+    fn simplify_keeps_a_redundant_chain_when_it_is_a_premises_only_home() {
+        let two = simplify_chains(&[
+            chain("a1", &["A"], "C", "1"),
+            chain("a2", &["A", "B"], "C", "2"),
+        ]);
+        assert_eq!(ids(&two), ["a1", "a2"]);
+
+        let three = simplify_chains(&[
+            chain("a1", &["A"], "C", "1"),
+            chain("a2", &["A", "B"], "C", "2"),
+            chain("a3", &["B"], "D", "3"),
+        ]);
+        assert_eq!(ids(&three), ["a1", "a3"]);
+    }
+
+    #[test]
+    fn simplify_drops_a_chain_whose_premises_are_covered_by_ancestry() {
+        let kept = simplify_chains(&[
+            chain("a1", &["A", "B"], "X", "1"),
+            chain("a2", &["X", "C"], "Y", "2"),
+            chain("a3", &["A", "B", "C"], "Y", "3"),
+        ]);
+        assert_eq!(ids(&kept), ["a1", "a2"]);
+    }
+
+    #[test]
+    fn simplify_leaves_one_line_or_nothing_to_drop_alone() {
+        let single = [chain("a1", &["A", "B", "C"], "Y", "1")];
+        assert_eq!(ids(&simplify_chains(&single)), ["a1"]);
+        let disjoint = [
+            chain("a1", &["A"], "C", "2"),
+            chain("a2", &["B"], "D", "1"),
+        ];
+        assert_eq!(ids(&simplify_chains(&disjoint)), ["a1", "a2"]);
     }
 
     #[test]

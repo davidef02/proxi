@@ -10,10 +10,26 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::engine::{CLAUDE_AUTH_ERROR_MESSAGE, EngineEvent, EngineHandle, is_auth_error};
+use crate::jobs::deliver::job_turn_text;
 use crate::protocol::SessionStatus;
 
 /// Node's WATCHDOG_MS: an interrupted turn that never reports its result is given up.
 pub const WATCHDOG: Duration = Duration::from_secs(10);
+
+/// Node's `JOB_SEP`: owed job results and the learner's text share one turn, separated by this.
+const JOB_SEP: &str = "\n\n---\n\n";
+
+/// A settled, non-map job whose result the teacher has not received yet (`turns.ts:40`).
+pub fn is_owed(job: &Value) -> bool {
+    let kind = job.get("kind").and_then(Value::as_str).unwrap_or_default();
+    let status = job
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    kind != "map"
+        && !crate::js::truthy(job.get("delivered"))
+        && (status == "done" || status == "error")
+}
 
 /// The last turn sent: re-sent on a fresh conversation when the engine refuses the resume token.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -43,6 +59,12 @@ pub trait TurnHost {
     /// Interactive cards blocking the teacher; `cancel_pending` rejects them all.
     fn pending(&self) -> usize;
     fn cancel_pending(&mut self);
+    /// This session's jobs (the one source of what is owed), already filtered by `is_owed`.
+    fn owed_jobs(&self) -> Vec<Value> {
+        Vec::new()
+    }
+    /// The ack once a result went out.
+    fn mark_delivered(&mut self, _id: &str) {}
 }
 
 /// What the caller must do after a turn-module call, outside the session lock.
@@ -50,6 +72,8 @@ pub enum TurnAction {
     None,
     Stop(Box<dyn EngineHandle>),
     RelaunchFresh(String),
+    /// The teacher idled with results owed: hand them over (`Turns::deliver` in Node).
+    Deliver,
 }
 
 pub struct Turns {
@@ -75,6 +99,8 @@ pub struct Turns {
     watchdog_armed: Option<u64>,
     /// Last stderr lines of the current process.
     stderr: VecDeque<String>,
+    /// Owed job ids riding along with the turn being sent: marked once it really goes out.
+    delivering: Vec<String>,
 }
 
 impl Turns {
@@ -96,6 +122,7 @@ impl Turns {
             watchdog_seq: 0,
             watchdog_armed: None,
             stderr: VecDeque::new(),
+            delivering: Vec::new(),
         }
     }
 
@@ -119,7 +146,8 @@ impl Turns {
         self.stopped
     }
 
-    /// Records the turn and, when there is no engine, asks the caller to launch one.
+    /// Records the turn and, when there is no engine, asks the caller to launch one. Owed job
+    /// results ride along with it (`turns.ts:90-120`).
     pub fn begin_send<H: TurnHost + ?Sized>(
         &mut self,
         host: &mut H,
@@ -127,7 +155,8 @@ impl Turns {
         show: Vec<String>,
         attachments: Option<Value>,
     ) -> bool {
-        let turn_text = match attachments.as_ref() {
+        // With attachments the text part is defined even when the learner typed nothing.
+        let text_part = match attachments.as_ref() {
             Some(Value::Array(items)) if !items.is_empty() => {
                 let lines = items
                     .iter()
@@ -141,13 +170,23 @@ impl Turns {
                     .collect::<Vec<_>>()
                     .join("\n");
                 let block = format!("[Allegati forniti dallo studente:\n{lines}]");
-                match &text {
+                Some(match &text {
                     Some(text) => format!("{block}\n\n{text}"),
                     None => block,
-                }
+                })
             }
-            _ => text.clone().unwrap_or_default(),
+            _ => text.clone(),
         };
+        let owed = host.owed_jobs();
+        let mut parts: Vec<String> = owed.iter().map(job_turn_text).collect();
+        if let Some(text_part) = text_part {
+            parts.push(text_part);
+        }
+        let turn_text = parts.join(JOB_SEP);
+        self.delivering = owed
+            .iter()
+            .filter_map(|job| job.get("id").and_then(Value::as_str).map(str::to_string))
+            .collect();
         self.last_turn = Some(LastTurn {
             text,
             show,
@@ -173,6 +212,8 @@ impl Turns {
             return Err("Nessun turno fallito da riprovare");
         }
         self.can_retry_flag = false;
+        // The saved turn is re-sent: the results it carried were already acked (or never went out).
+        self.delivering.clear();
         if self.handle.is_none() {
             self.set_status(host, SessionStatus::Starting, None);
             return Ok(true);
@@ -227,10 +268,21 @@ impl Turns {
             Some(text) => {
                 self.write(&text);
                 self.set_status(host, SessionStatus::Running, None);
+                for id in std::mem::take(&mut self.delivering) {
+                    host.mark_delivered(&id);
+                }
             }
             // Interrupted while starting: the turn never went out, so there is nothing to wait for.
-            None => self.set_status(host, SessionStatus::Idle, None),
+            None => {
+                self.delivering.clear();
+                self.set_status(host, SessionStatus::Idle, None);
+            }
         }
+    }
+
+    /// Whether an owed job result can go to an idle teacher now (`turns.ts:156`).
+    pub fn should_deliver<H: TurnHost + ?Sized>(&self, host: &H) -> bool {
+        !self.stopped && host.status() == SessionStatus::Idle && !host.owed_jobs().is_empty()
     }
 
     /// Aborts the running turn; `Some(ticket)` asks the caller to arm the watchdog with it.
@@ -272,6 +324,7 @@ impl Turns {
 
     /// Re-sends the same text on a fresh engine after a refused resume.
     pub fn resend<H: TurnHost + ?Sized>(&mut self, host: &mut H, text: &str) {
+        self.delivering.clear();
         self.write(text);
         self.set_status(host, SessionStatus::Running, None);
     }
@@ -377,6 +430,9 @@ impl Turns {
                 self.watchdog_armed = None;
                 if host.pending() == 0 && !self.auth_failed {
                     self.set_status(host, SessionStatus::Idle, None);
+                    if self.should_deliver(host) {
+                        return TurnAction::Deliver;
+                    }
                 }
             }
             _ => host.event(event, false),
@@ -526,6 +582,8 @@ mod tests {
         events: usize,
         pending: usize,
         retryable: Vec<bool>,
+        owed: Vec<Value>,
+        delivered: Vec<String>,
     }
 
     impl Host {
@@ -539,6 +597,8 @@ mod tests {
                 events: 0,
                 pending: 0,
                 retryable: Vec::new(),
+                owed: Vec::new(),
+                delivered: Vec::new(),
             }
         }
     }
@@ -577,6 +637,14 @@ mod tests {
 
         fn cancel_pending(&mut self) {
             self.pending = 0;
+        }
+
+        fn owed_jobs(&self) -> Vec<Value> {
+            self.owed.clone()
+        }
+
+        fn mark_delivered(&mut self, id: &str) {
+            self.delivered.push(id.to_string());
         }
     }
 
@@ -655,6 +723,147 @@ mod tests {
             cache_creation_tokens: 0.0,
             cost_usd: 0.0,
         }
+    }
+
+    fn owed_job(id: &str) -> Value {
+        json!({
+            "id": id,
+            "kind": "research",
+            "status": "done",
+            "result": {
+                "kind": "research",
+                "brief": "sintesi",
+                "sources": [{"title": "A", "url": "https://a"}],
+            },
+        })
+    }
+
+    const OWED_TEXT: &str =
+        "[Risultato del subagente research · job j1]\n\nsintesi\n\nFonti:\n- A: https://a";
+
+    #[test]
+    fn is_owed_skips_map_delivered_and_unsettled_jobs() {
+        assert!(is_owed(&owed_job("j1")));
+        assert!(is_owed(&json!({"kind": "research", "status": "error"})));
+
+        let mut delivered = owed_job("j2");
+        delivered["delivered"] = json!(true);
+        assert!(!is_owed(&delivered), "an acked result is not owed again");
+        assert!(
+            !is_owed(&json!({"kind": "map", "status": "done"})),
+            "map jobs are never delivered"
+        );
+        assert!(!is_owed(&json!({"kind": "research", "status": "running"})));
+        assert!(!is_owed(
+            &json!({"kind": "research", "status": "cancelled"})
+        ));
+    }
+
+    #[test]
+    fn owed_results_are_prepended_and_marked_after_the_write() {
+        let (mut turns, mut host, log) = harness(None);
+        host.owed = vec![owed_job("j1")];
+
+        assert!(turns.begin_send(
+            &mut host,
+            Some("ciao".to_string()),
+            vec!["ciao".to_string()],
+            None
+        ));
+        assert!(
+            host.delivered.is_empty(),
+            "nothing is acked before the write"
+        );
+        launch(&mut turns, &log);
+        turns.finish_send(&mut host);
+
+        assert_eq!(
+            log.lock().unwrap().sent,
+            [format!("{OWED_TEXT}\n\n---\n\nciao")]
+        );
+        assert_eq!(learner_texts(&host), ["ciao"], "the ack is not a bubble");
+        assert_eq!(host.delivered, ["j1"]);
+    }
+
+    #[test]
+    fn a_text_less_turn_carries_only_the_owed_results() {
+        let (mut turns, mut host, log) = harness(None);
+        host.owed = vec![owed_job("j1")];
+
+        assert!(turns.begin_send(&mut host, None, Vec::new(), None));
+        launch(&mut turns, &log);
+        turns.finish_send(&mut host);
+
+        assert_eq!(log.lock().unwrap().sent, [OWED_TEXT]);
+        assert!(
+            host.learner.is_empty(),
+            "the result is not a learner bubble"
+        );
+        assert_eq!(host.delivered, ["j1"]);
+    }
+
+    #[test]
+    fn a_failed_launch_leaves_the_results_unmarked() {
+        let (mut turns, mut host, _log) = harness(None);
+        host.owed = vec![owed_job("j1")];
+
+        assert!(turns.begin_send(
+            &mut host,
+            Some("ciao".to_string()),
+            vec!["ciao".to_string()],
+            None
+        ));
+        turns.launch_failed(&mut host, "no binary");
+
+        assert!(host.delivered.is_empty(), "they ride along the next turn");
+        assert_eq!(host.status, SessionStatus::Error);
+    }
+
+    #[test]
+    fn a_retry_re_sends_the_saved_text_without_a_second_ack() {
+        let (mut turns, mut host, log) = harness(None);
+        host.owed = vec![owed_job("j1")];
+        let generation = send(&mut turns, &mut host, &log, "ciao");
+        assert_eq!(host.delivered, ["j1"]);
+
+        turns.on_event(
+            &mut host,
+            generation,
+            &error_result("error_during_execution", Some("boom")),
+        );
+        assert!(turns.can_retry());
+        assert_eq!(turns.begin_retry(&mut host), Ok(false));
+        turns.finish_send(&mut host);
+
+        assert_eq!(host.delivered, ["j1"], "one ack for one delivered result");
+        assert_eq!(
+            log.lock().unwrap().sent,
+            [
+                format!("{OWED_TEXT}\n\n---\n\nciao"),
+                format!("{OWED_TEXT}\n\n---\n\nciao")
+            ]
+        );
+    }
+
+    #[test]
+    fn an_idle_turn_with_owed_results_asks_for_delivery() {
+        let (mut turns, mut host, log) = harness(None);
+        let generation = send(&mut turns, &mut host, &log, "ciao");
+        host.owed = vec![owed_job("j1")];
+
+        assert!(matches!(
+            turns.on_event(&mut host, generation, &result_event()),
+            TurnAction::Deliver
+        ));
+        assert_eq!(host.status, SessionStatus::Idle);
+        assert!(host.delivered.is_empty(), "the pump delivers, not on_event");
+
+        let (mut turns, mut host, log) = harness(None);
+        let generation = send(&mut turns, &mut host, &log, "ciao");
+        assert!(matches!(
+            turns.on_event(&mut host, generation, &result_event()),
+            TurnAction::None
+        ));
     }
 
     #[test]

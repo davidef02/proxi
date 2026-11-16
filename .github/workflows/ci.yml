@@ -29,8 +29,14 @@ jobs:
       - run: rustup toolchain install stable --profile minimal && rustup default stable
       - run: cargo build --release --locked
       - run: npm run test:rust # ported HTTP/SSE tests against target/release/proxi
-      - run: cargo test --locked
+      # also the test browser of the Rust render tests (PROXI_TEST_BROWSER)
       - run: npx playwright install --with-deps chromium
+      - name: cargo test
+        run: |
+          PROXI_TEST_BROWSER="$(node -p "require('playwright-core').chromium.executablePath()")"
+          test -f "$PROXI_TEST_BROWSER" || { echo "::error::Playwright Chromium not found at '$PROXI_TEST_BROWSER'"; exit 1; }
+          export PROXI_TEST_BROWSER
+          cargo test --locked
       - run: npm run e2e
       - uses: actions/upload-artifact@v4
         if: failure()

@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "properties": {
+    "caption": {
+      "description": "One Italian sentence under the figure.",
+      "type": "string"
+    }
+  }
+}

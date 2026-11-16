@@ -180,6 +180,7 @@ pub enum GlobalEvent {
     Graph { revision: u64 },
     Sessions,
     Sync { status: SyncStatus },
+    Job { job: serde_json::Value },
 }
 
 // ───────────────────────────── sessions ─────────────────────────────
@@ -1010,6 +1011,17 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&GlobalEvent::Sessions).unwrap(),
             r#"{"type":"sessions"}"#
+        );
+    }
+
+    #[test]
+    fn job_global_event_wraps_the_record() {
+        assert_eq!(
+            serde_json::to_string(&GlobalEvent::Job {
+                job: json!({"id": "j", "status": "running"}),
+            })
+            .unwrap(),
+            r#"{"type":"job","job":{"id":"j","status":"running"}}"#
         );
     }
 

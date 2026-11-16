@@ -3,18 +3,10 @@
 //! Each starts a background job and acks at once: the result arrives later as a message from the
 //! app. Without a job manager the call is an error (never an ack whose result would never come).
 
-use serde_json::{Map, Value};
+use serde_json::Value;
 
-use crate::sessions::{invalid_type, issue};
-use crate::tools::util::{ack, fail, label};
+use crate::tools::util::{ack, fail, label, string_object, Field};
 use crate::tools::{ToolDef, ToolFuture, ToolHost};
-
-/// One field of a zod object of plain strings: `.min()` counts UTF-16 units, like JS `.length`.
-struct Field {
-    key: &'static str,
-    min: usize,
-    required: bool,
-}
 
 const DEMO_FIELDS: &[Field] = &[
     Field {
@@ -131,51 +123,6 @@ fn start<'a>(
             Err(message) => fail(message),
         }
     })
-}
-
-/// A zod object of plain string fields: issues in schema key order, the cleaned data rebuilt in the
-/// same order with unknown keys dropped (that is what Node stores and what the tool receives).
-fn string_object(input: &Value, fields: &[Field]) -> Result<Value, Vec<String>> {
-    let Some(object) = input.as_object() else {
-        return Err(vec![issue("(input)", &invalid_type("object", Some(input)))]);
-    };
-    let mut issues = Vec::new();
-    let mut out = Map::new();
-    for field in fields {
-        match string_value(object.get(field.key), field) {
-            Ok(Some(text)) => {
-                out.insert(field.key.to_string(), Value::String(text));
-            }
-            Ok(None) => {}
-            Err(issue) => issues.push(issue),
-        }
-    }
-    if issues.is_empty() {
-        Ok(Value::Object(out))
-    } else {
-        Err(issues)
-    }
-}
-
-fn string_value(value: Option<&Value>, field: &Field) -> Result<Option<String>, String> {
-    let text = match value {
-        Some(Value::String(text)) => text,
-        Some(other) => {
-            return Err(issue(field.key, &invalid_type("string", Some(other))));
-        }
-        None if field.required => {
-            return Err(issue(field.key, &invalid_type("string", None)));
-        }
-        None => return Ok(None),
-    };
-    let length = text.encode_utf16().count();
-    if length < field.min {
-        return Err(format!(
-            "{}: Too small: expected string to have >={} characters",
-            field.key, field.min
-        ));
-    }
-    Ok(Some(text.clone()))
 }
 
 #[cfg(test)]

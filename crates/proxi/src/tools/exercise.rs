@@ -506,7 +506,11 @@ async fn run_tool(input: Value, host: &dyn ToolHost) -> ToolOutcome {
     host.upsert_exercise(Value::Object(info));
 
     let (text, is_error) = run_text(&res);
-    ToolOutcome { text, is_error }
+    ToolOutcome {
+        text,
+        is_error,
+        images: Vec::new(),
+    }
 }
 
 /// Node's result text, cut at 4000 UTF-16 units like `text.slice(0, 4000)` (no ellipsis).
