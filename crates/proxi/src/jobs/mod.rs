@@ -193,6 +193,19 @@ pub struct JobManager {
     me: Weak<JobManager>,
 }
 
+struct LiveTicketGuard<'a> {
+    state: &'a Mutex<State>,
+    ticket: u64,
+}
+
+impl<'a> Drop for LiveTicketGuard<'a> {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.live.remove(&self.ticket);
+        }
+    }
+}
+
 impl JobManager {
     pub fn new(opts: JobManagerOptions) -> Arc<Self> {
         let dir = opts.repo_root.join(".learner").join("jobs");
@@ -824,12 +837,15 @@ impl JobManager {
         ticket: u64,
         mut receiver: tokio::sync::mpsc::UnboundedReceiver<EngineMsg>,
     ) {
+        let _guard = LiveTicketGuard {
+            state: &self.state,
+            ticket,
+        };
         while let Some(msg) = receiver.recv().await {
             match msg {
                 EngineMsg::Event(EngineEvent::AuthFailed { message }) => {
                     let err = message.unwrap_or_else(|| crate::engine::CLAUDE_AUTH_ERROR_MESSAGE.to_string());
                     self.set_error_and_settle(id, err, "error");
-                    return;
                 }
                 EngineMsg::Event(EngineEvent::Assistant { tool_uses, .. }) => {
                     if let Some(use_item) = tool_uses.last() {
@@ -837,8 +853,8 @@ impl JobManager {
                         let changed_data = {
                             let mut state = self.state.lock().expect("state lock");
                             let closed = state.closed;
-                            let Some(e) = state.entries.get_mut(id) else { return; };
-                            if e.settled { return; }
+                            let Some(e) = state.entries.get_mut(id) else { continue; };
+                            if e.settled { continue; }
                             e.rec.insert("activity".to_string(), Value::String(act));
                             self.changed_locked(e, closed)
                         };
@@ -848,8 +864,8 @@ impl JobManager {
                 EngineMsg::Event(EngineEvent::Result { cost_usd, is_error, subtype, text, .. }) => {
                     let (has_result, err_to_settle) = {
                         let mut state = self.state.lock().expect("state lock");
-                        let Some(e) = state.entries.get_mut(id) else { return; };
-                        if e.settled { return; }
+                        let Some(e) = state.entries.get_mut(id) else { continue; };
+                        if e.settled { continue; }
                         let prev = js::to_number(e.rec.get("costUsd"));
                         e.rec.insert("costUsd".to_string(), js::number(prev + cost_usd));
                         if e.result.is_some() {
@@ -870,11 +886,8 @@ impl JobManager {
                     };
                     if has_result {
                         self.settle(id, "done");
-                        return;
-                    }
-                    if let Some(st) = err_to_settle {
+                    } else if let Some(st) = err_to_settle {
                         self.settle(id, st);
-                        return;
                     }
                 }
                 EngineMsg::Stderr(line) => {
@@ -1091,32 +1104,11 @@ pub enum McpRefusal {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use serde_json::json;
 
     use super::*;
-
-    struct TempDir(PathBuf);
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
-
-    fn temp_dir(tag: &str) -> TempDir {
-        static COUNTER: AtomicUsize = AtomicUsize::new(0);
-        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let path = std::env::temp_dir().join(format!(
-            "proxi-jobs-{tag}-{}-{nanos}-{n}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&path).expect("create temp dir");
-        TempDir(path)
-    }
+    use crate::tools::fake::{temp_dir, TempDir};
 
     fn repo_root() -> PathBuf {
         let raw = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1357,20 +1349,50 @@ mod tests {
     async fn at_most_two_run_and_third_stays_in_coda() {
         let env = build_test_manager_with("concurrency", 2, Duration::from_secs(600));
         let j1 = env.manager.start("research", json!({ "question": "FAKE:slow:5000" }), "J1", None).unwrap();
-        let _j2 = env.manager.start("research", json!({ "question": "FAKE:slow:5000" }), "J2", None).unwrap();
+        let j2 = env.manager.start("research", json!({ "question": "FAKE:slow:5000" }), "J2", None).unwrap();
         let j3 = env.manager.start("research", json!({ "question": "FAKE:slow:5000" }), "J3", None).unwrap();
 
         let id1 = j1["id"].as_str().unwrap();
+        let id2 = j2["id"].as_str().unwrap();
         let id3 = j3["id"].as_str().unwrap();
 
-        assert_eq!(j3["status"], "running");
-        assert_eq!(j3["activity"], "in coda");
+        // Wait until J1 and J2 show avvio via get()
+        let mut launched = false;
+        for _ in 0..50 {
+            let cur1 = env.manager.get(id1).unwrap();
+            let cur2 = env.manager.get(id2).unwrap();
+            let act1 = cur1["activity"].as_str().unwrap_or("");
+            let act2 = cur2["activity"].as_str().unwrap_or("");
+            if (act1 == "avvio" || (!act1.is_empty() && act1 != "in coda"))
+                && (act2 == "avvio" || (!act2.is_empty() && act2 != "in coda"))
+            {
+                launched = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(launched, "J1 and J2 must launch and leave 'in coda'");
+
+        // Assert J3 is still in coda via get() after a further delay
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let cur3 = env.manager.get(id3).unwrap();
+        assert_eq!(cur3["status"], "running");
+        assert_eq!(cur3["activity"], "in coda");
 
         // Cancel job 1; job 3 should leave queue and start running
         env.manager.cancel(id1);
 
         // Give it a brief moment to pump
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        let mut left_coda = false;
+        for _ in 0..50 {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let cur3 = env.manager.get(id3).unwrap();
+            if cur3["activity"] != "in coda" {
+                left_coda = true;
+                break;
+            }
+        }
+        assert!(left_coda, "J3 must leave coda after J1 cancellation");
 
         let cur3 = env.manager.get(id3).unwrap();
         assert_ne!(cur3["activity"], "in coda");
@@ -1394,15 +1416,27 @@ mod tests {
         let m1 = env.manager.start_map("demo/0001-il-ref", None, true).unwrap().expect("starts map 1");
         let id_m1 = m1["id"].as_str().unwrap();
 
-        // Wait brief moment for m1 to launch
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        let cur_m1 = env.manager.get(id_m1).unwrap();
-        assert_ne!(cur_m1["activity"], "in coda");
+        // Wait until M1 shows avvio via get()
+        let mut m1_launched = false;
+        for _ in 0..50 {
+            let cur_m1 = env.manager.get(id_m1).unwrap();
+            let act_m1 = cur_m1["activity"].as_str().unwrap_or("");
+            if act_m1 == "avvio" || (!act_m1.is_empty() && act_m1 != "in coda") {
+                m1_launched = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(m1_launched, "M1 must launch and leave 'in coda'");
 
         // Map job 2 should stay in coda because mapRunning == 1
         let m2 = env.manager.start_map("demo/0002-second", None, true).unwrap().expect("starts map 2");
         let id_m2 = m2["id"].as_str().unwrap();
+
+        // Assert M2 is still in coda via get() after a further delay
+        tokio::time::sleep(Duration::from_millis(200)).await;
         let cur_m2 = env.manager.get(id_m2).unwrap();
+        assert_eq!(cur_m2["status"], "running");
         assert_eq!(cur_m2["activity"], "in coda");
 
         env.manager.shutdown().await;
@@ -1429,15 +1463,54 @@ mod tests {
         let j = env.manager.start("research", json!({ "question": "FAKE:hello" }), "Hello", None).unwrap();
         let id = j["id"].as_str().unwrap().to_string();
 
+        let mut settled = false;
+        let mut last_rec = env.manager.get(&id).unwrap();
         for _ in 0..50 {
             tokio::time::sleep(Duration::from_millis(50)).await;
-            let cur = env.manager.get(&id).unwrap();
-            if cur["status"] != "running" {
-                assert_eq!(cur["status"], "error");
-                assert_eq!(cur["error"], "il subagente ha terminato senza consegnare");
+            last_rec = env.manager.get(&id).unwrap();
+            if last_rec["status"] != "running" {
+                assert_eq!(last_rec["status"], "error");
+                assert_eq!(last_rec["error"], "il subagente ha terminato senza consegnare");
+                settled = true;
                 break;
             }
         }
+        if !settled {
+            panic!("job did not settle in time, last record: {last_rec:?}");
+        }
+
+        env.manager.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn fake_hello_settles_and_live_pids_becomes_empty() {
+        let env = build_test_manager("live-pids");
+        let j = env.manager.start("research", json!({ "question": "FAKE:hello" }), "Live", None).unwrap();
+        let id = j["id"].as_str().unwrap().to_string();
+
+        let mut settled = false;
+        let mut last_rec = env.manager.get(&id).unwrap();
+        for _ in 0..50 {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            last_rec = env.manager.get(&id).unwrap();
+            if last_rec["status"] != "running" {
+                settled = true;
+                break;
+            }
+        }
+        if !settled {
+            panic!("job did not settle in time, last record: {last_rec:?}");
+        }
+
+        let mut cleared = false;
+        for _ in 0..50 {
+            if env.manager.live_pids().is_empty() {
+                cleared = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(cleared, "live_pids() did not become empty after settle: {:?}", env.manager.live_pids());
 
         env.manager.shutdown().await;
     }

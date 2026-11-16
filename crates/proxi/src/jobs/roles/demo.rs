@@ -13,7 +13,7 @@ use crate::sessions::utf16_len;
 use crate::tools::util::{fail, string_object, Field};
 use crate::tools::{ToolDef, ToolFuture, ToolHost, ToolImage, ToolOutcome};
 
-use super::{error_text, read_prompt, Role, RoleEnv};
+use super::{error_text, not_a_job, read_prompt, Role, RoleEnv};
 
 /// Per-job draft; lives in memory only for the minutes a job runs.
 struct Draft {
@@ -152,7 +152,9 @@ fn run_run_demo<'a>(_input: Value, host: &'a dyn ToolHost) -> ToolFuture<'a> {
             Ok(run) => {
                 let passed = run.errors.is_empty();
                 if let Some(draft) = drafts().lock().expect("draft lock").get_mut(&job_id) {
-                    draft.passed = passed;
+                    if draft.html == html {
+                        draft.passed = passed;
+                    }
                 }
                 let images = vec![ToolImage {
                     data: base64::engine::general_purpose::STANDARD.encode(&run.png),
@@ -214,11 +216,6 @@ fn run_submit_demo<'a>(input: Value, host: &'a dyn ToolHost) -> ToolFuture<'a> {
         ctx.finish(Value::Object(result));
         ToolOutcome::ok("Consegnata. Chiudi qui con una riga.")
     })
-}
-
-/// A job tool called outside a job: a wiring bug, answered instead of panicking.
-fn not_a_job() -> ToolOutcome {
-    fail("Questo strumento funziona solo dentro un subagente.")
 }
 
 fn system_prompt(env: &RoleEnv, _input: &Value) -> Result<String, String> {
@@ -485,6 +482,44 @@ mod tests {
             (ROLE.first_message)(&env, &mut json!({"title": "Slider", "brief": "Uno slider"})),
             "Costruisci questa demo, titolo \"Slider\":\nUno slider"
         );
+    }
+
+    #[tokio::test]
+    async fn run_demo_does_not_mark_draft_passed_if_replaced_during_run() {
+        let dir = temp_dir("demo-replace-during");
+        let renderer = Arc::new(Renderer::new(Some(render::require_test_browser())));
+        let job = FakeJob::new("d-replace", json!({"title": "Slider", "brief": "Uno slider"}), &dir)
+            .with_renderer(Arc::clone(&renderer));
+        call(&WRITE_DEMO, json!({"html": CLEAN}), &job).await;
+
+        let job_clone = FakeJob::new("d-replace", json!({"title": "Slider", "brief": "Uno slider"}), &dir);
+        let run_handle = tokio::spawn(async move {
+            call(&RUN_DEMO, json!({}), &job).await
+        });
+
+        // Wait until run_demo has opened a page (it is now running CLEAN)
+        for _ in 0..100 {
+            if renderer.open_pages() > 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+
+        // Overwrite draft with a new HTML before run_demo finishes and sets passed = true
+        let new_html = "<!doctype html><body><p>nuovo</p></body>";
+        call(&WRITE_DEMO, json!({"html": new_html}), &job_clone).await;
+
+        let out = run_handle.await.unwrap();
+        assert!(!out.is_error, "clean run should pass: {}", out.text);
+
+        // The draft in storage is now new_html, but passed must be false!
+        let drafts = drafts().lock().expect("draft lock");
+        let draft = drafts.get("d-replace").expect("draft exists");
+        assert_eq!(draft.html, new_html);
+        assert!(!draft.passed, "replaced draft must not be marked passed");
+        drop(drafts);
+
+        renderer.close().await;
     }
 }
 

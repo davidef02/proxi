@@ -61,6 +61,11 @@ pub fn error_text(e: impl Display) -> String {
     e.to_string()
 }
 
+/// A job tool called outside a job: a wiring bug, answered instead of panicking.
+pub(crate) fn not_a_job() -> crate::tools::ToolOutcome {
+    crate::tools::util::fail("Questo strumento funziona solo dentro un subagente.")
+}
+
 /// A `ToolHost` that is also the job: what every role test needs and no session has.
 #[cfg(test)]
 pub(crate) mod fake {

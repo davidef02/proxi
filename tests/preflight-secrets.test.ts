@@ -83,11 +83,16 @@ describe("exportTree and scanDirectory", () => {
     const headTree = spawnSync("git", ["rev-parse", "HEAD^{tree}"], { cwd: repoRoot, encoding: "utf8" }).stdout.trim();
     assert.equal(exported.treeHash, headTree);
 
-    // not committed yet: copy the new files into the export so they get scanned too
-    for (const relPath of NEW_FILES) {
-      const target = path.join(destDir, relPath);
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.copyFileSync(path.join(repoRoot, relPath), target);
+    // not committed yet: copy the new and modified files into the export so they get scanned too
+    const diff = spawnSync("git", ["diff", "--name-only", "HEAD"], { cwd: repoRoot, encoding: "utf8" });
+    const dirtyFiles = diff.status === 0 ? diff.stdout.trim().split(/\r?\n/).filter(Boolean) : [];
+    for (const relPath of [...NEW_FILES, ...dirtyFiles]) {
+      const src = path.join(repoRoot, relPath);
+      if (fs.existsSync(src) && !fs.statSync(src).isDirectory()) {
+        const target = path.join(destDir, relPath);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.copyFileSync(src, target);
+      }
     }
 
     const result = scanDirectory(destDir, exported.treeHash);

@@ -1057,45 +1057,13 @@ fn run_submit_findings<'a>(f: Value, host: &'a dyn ToolHost) -> ToolFuture<'a> {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     use serde_json::json;
 
     use super::*;
     use crate::jobs::roles::FakeJob;
+    use crate::tools::fake::{temp_dir, TempDir};
     use crate::tools::JobContext;
-
-    struct TempDir(PathBuf);
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
-
-    impl std::ops::Deref for TempDir {
-        type Target = Path;
-
-        fn deref(&self) -> &Path {
-            &self.0
-        }
-    }
-
-    fn temp_dir(tag: &str) -> TempDir {
-        static COUNTER: AtomicUsize = AtomicUsize::new(0);
-        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let path = std::env::temp_dir().join(format!(
-            "proxi-extract-{tag}-{}-{nanos}-{n}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&path).expect("create temp dir");
-        TempDir(path)
-    }
 
     fn node() -> Value {
         json!({

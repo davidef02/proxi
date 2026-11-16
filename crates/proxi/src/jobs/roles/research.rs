@@ -406,7 +406,7 @@ mod tests {
             "http://example.com",
             "HTTP://X.Y",
             "ftp://x/y",
-            "mailto:x@y.it",
+            "mailto:x@example.com",
             "file:",
             "http:example.com",
             "https:/path",
