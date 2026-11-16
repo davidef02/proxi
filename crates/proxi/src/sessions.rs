@@ -1266,6 +1266,38 @@ impl tools::ToolHost for SessionToolHost {
             .notify(ServerEvent::Exercises { exercises: list });
     }
 
+    fn upsert_exercise(&self, info: Value) {
+        let mut guard = self.session.lock().expect("session lock");
+        let name = js::js_string(info.get("name"));
+        let mut list: Vec<Value> = guard
+            .data
+            .state
+            .exercises
+            .clone()
+            .into_iter()
+            .filter(|entry| js::js_string(entry.get("name")) != name)
+            .collect();
+        list.push(info.clone());
+        list.sort_by(|left, right| {
+            js::locale_compare(
+                &js::js_string(left.get("name")),
+                &js::js_string(right.get("name")),
+            )
+        });
+        guard.data.state.exercises = list.clone();
+        guard
+            .data
+            .notify(ServerEvent::Exercises { exercises: list });
+        emit_locked(
+            &mut guard.data,
+            json!({
+                "id": format!("exercise:{name}"),
+                "kind": "exercise",
+                "exercise": info,
+            }),
+        );
+    }
+
     fn open_problem(&self, item: Value) -> Option<String> {
         let mut guard = self.session.lock().expect("session lock");
         let data = &mut guard.data;
@@ -2861,9 +2893,7 @@ mod tests {
         }
     }
 
-    /// AC4's other half: a dropped `/mcp` call cancels its own cards and nothing else.
-    #[tokio::test]
-    async fn cancel_requests_only_touches_the_ids_it_is_given() {
+    fn test_shared() -> (SessionManager, Arc<Shared>) {
         let shared = Arc::new(Shared {
             opts: ManagerOptions {
                 repo_root: PathBuf::from("repo"),
@@ -2900,7 +2930,13 @@ mod tests {
             sessions: Mutex::new(IndexMap::new()),
             sessions_touch_pending: AtomicBool::new(false),
         });
-        let manager = SessionManager(shared.clone());
+        (SessionManager(shared.clone()), shared)
+    }
+
+    /// AC4's other half: a dropped `/mcp` call cancels its own cards and nothing else.
+    #[tokio::test]
+    async fn cancel_requests_only_touches_the_ids_it_is_given() {
+        let (manager, shared) = test_shared();
         let session = make_session(
             &shared,
             saved_state(),
@@ -2971,5 +3007,56 @@ mod tests {
             matches!(receiver.await, Ok(Err(Cancelled))),
             "the call must wake with Cancelled"
         );
+    }
+
+    #[tokio::test]
+    async fn concurrent_upsert_exercise_keeps_both_entries() {
+        let (manager, shared) = test_shared();
+        let session = make_session(
+            &shared,
+            saved_state(),
+            "claude".to_string(),
+            None,
+            None,
+            false,
+        );
+        shared
+            .sessions
+            .lock()
+            .expect("sessions lock")
+            .insert("s".to_string(), session.clone());
+
+        let host = Arc::new(
+            manager
+                .tool_host("s", Default::default())
+                .expect("the session exists"),
+        );
+        let h1 = host.clone();
+        let h2 = host.clone();
+        let t1 = tokio::spawn(async move {
+            h1.upsert_exercise(json!({"name": "01-first"}));
+        });
+        let t2 = tokio::spawn(async move {
+            h2.upsert_exercise(json!({"name": "02-second"}));
+        });
+        t1.await.unwrap();
+        t2.await.unwrap();
+
+        let list = host.exercises();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0]["name"], json!("01-first"));
+        assert_eq!(list[1]["name"], json!("02-second"));
+
+        let guard = session.lock().expect("session lock");
+        assert_eq!(guard.data.state.exercises, list);
+        let item_ids: Vec<_> = guard
+            .data
+            .state
+            .items
+            .iter()
+            .filter_map(|it| it.get("id").and_then(Value::as_str))
+            .collect();
+        assert!(item_ids.contains(&"exercise:01-first"));
+        assert!(item_ids.contains(&"exercise:02-second"));
     }
 }

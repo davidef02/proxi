@@ -276,25 +276,7 @@ fn track_json(track: &[(String, String)]) -> String {
 
 /// Replace/insert `info` in the session exercise list.
 fn upsert(host: &dyn ToolHost, info: Value) {
-    let name = js::js_string(info.get("name"));
-    let mut list: Vec<Value> = host
-        .exercises()
-        .into_iter()
-        .filter(|entry| js::js_string(entry.get("name")) != name)
-        .collect();
-    list.push(info.clone());
-    list.sort_by(|left, right| {
-        js::locale_compare(
-            &js::js_string(left.get("name")),
-            &js::js_string(right.get("name")),
-        )
-    });
-    host.set_exercises(list);
-    host.emit(json!({
-        "id": format!("exercise:{name}"),
-        "kind": "exercise",
-        "exercise": info,
-    }));
+    host.upsert_exercise(info);
 }
 
 async fn write_tool(input: Value, host: &dyn ToolHost) -> ToolOutcome {
@@ -568,22 +550,7 @@ fn truncate_run(text: &str) -> String {
     if utf16_len(text) <= 4000 {
         return text.to_string();
     }
-    format!("{}\n...(truncated)", slice_utf16(text, 4000))
-}
-
-/// The prefix of whole chars whose UTF-16 width sums to at most `n`. Node's `slice(0, n)` keeps a
-/// lone high surrogate when the cut lands inside a pair; a Rust `str` cannot, so that char is
-/// dropped whole.
-fn slice_utf16(text: &str, n: usize) -> &str {
-    let mut units = 0;
-    for (at, c) in text.char_indices() {
-        let width = c.len_utf16();
-        if units + width > n {
-            return &text[..at];
-        }
-        units += width;
-    }
-    text
+    format!("{}\n...(truncated)", crate::vitest::truncate_utf16(text, 4000))
 }
 
 #[cfg(test)]
@@ -1103,7 +1070,26 @@ mod tests {
         assert_eq!(text, format!("Could not run the tests: {}", "x".repeat(3975)));
 
         // Cutting inside a surrogate pair drops the emoji whole.
-        assert_eq!(slice_utf16("a😀", 2), "a");
-        assert_eq!(slice_utf16("a😀", 3), "a😀");
+        assert_eq!(crate::vitest::truncate_utf16("a😀", 2), "a");
+        assert_eq!(crate::vitest::truncate_utf16("a😀", 3), "a😀");
+    }
+
+    #[tokio::test]
+    async fn two_concurrent_upserts_keep_both_entries() {
+        let host = std::sync::Arc::new(FakeHost::new(teach()));
+        let h1 = host.clone();
+        let h2 = host.clone();
+        let t1 = tokio::spawn(async move {
+            upsert(&*h1, json!({"name": "01-first"}));
+        });
+        let t2 = tokio::spawn(async move {
+            upsert(&*h2, json!({"name": "02-second"}));
+        });
+        t1.await.unwrap();
+        t2.await.unwrap();
+        let list = host.exercises();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0]["name"], json!("01-first"));
+        assert_eq!(list[1]["name"], json!("02-second"));
     }
 }

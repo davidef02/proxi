@@ -245,6 +245,34 @@ impl ToolHost for FakeHost {
             .push(json!({ "type": "exercises", "exercises": list }));
     }
 
+    fn upsert_exercise(&self, info: Value) {
+        let name = js::js_string(info.get("name"));
+        let mut exercises = self.exercises.lock().expect("fake lock");
+        let mut list: Vec<Value> = exercises
+            .clone()
+            .into_iter()
+            .filter(|entry| js::js_string(entry.get("name")) != name)
+            .collect();
+        list.push(info.clone());
+        list.sort_by(|left, right| {
+            js::locale_compare(
+                &js::js_string(left.get("name")),
+                &js::js_string(right.get("name")),
+            )
+        });
+        *exercises = list.clone();
+        drop(exercises);
+        self.events
+            .lock()
+            .expect("fake lock")
+            .push(json!({ "type": "exercises", "exercises": list }));
+        self.emit(json!({
+            "id": format!("exercise:{name}"),
+            "kind": "exercise",
+            "exercise": info,
+        }));
+    }
+
     fn open_problem(&self, item: Value) -> Option<String> {
         let mut problem = self.problem.lock().expect("fake lock");
         if problem.is_some() {

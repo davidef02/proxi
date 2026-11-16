@@ -108,6 +108,9 @@ pub trait ToolHost: Send + Sync {
     fn exercises(&self) -> Vec<Value>;
     /// Stores the list and notifies `{"type":"exercises","exercises":…}`.
     fn set_exercises(&self, list: Vec<Value>);
+    /// Node's `setExercises` + `emit(exercise:<name>)` under one lock: replaces or inserts `info`
+    /// in the session's exercise list, sorted by name, and notifies `exercises` event.
+    fn upsert_exercise(&self, info: Value);
     /// Node's `open` map: `None` while a problem is already open; else shows `item` and remembers
     /// it (`id`, its input) for `conclude`.
     fn open_problem(&self, item: Value) -> Option<String>;

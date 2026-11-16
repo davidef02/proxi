@@ -183,8 +183,10 @@ async fn plan(input: Value, host: &dyn ToolHost) -> ToolOutcome {
 /// Port of `revisePlan` (`app/server/lesson.ts:179-183`): patch the artifact's DAG and goal when the
 /// approved plan differs from what it was created with.
 fn revise_plan(host: &dyn ToolHost, rel: &str, dag: &str, goal: &str) -> Result<(), String> {
-    let Ok(Some(lesson)) = artifact::read_lesson(host.data_root(), rel) else {
-        return Ok(());
+    let lesson = match artifact::read_lesson(host.data_root(), rel) {
+        Ok(Some(lesson)) => lesson,
+        Ok(None) => return Ok(()),
+        Err(m) => return Err(m),
     };
     let metadata = lesson.doc.get("metadata");
     let unchanged = metadata.and_then(|m| m.get("initialDag"))
@@ -422,6 +424,25 @@ mod tests {
             .clone();
         assert_eq!(status.keys().collect::<Vec<_>>(), ["N1", "N2", "N3"]);
         assert_eq!(status["N3"], json!("todo"));
+    }
+
+    #[tokio::test]
+    async fn revising_an_existing_lesson_with_a_corrupt_island_fails() {
+        let rel = "courses/demo/lessons/0001-corrupt.html";
+        let host = host(json!({
+            "kind": "teach", "course": "demo", "model": "haiku",
+            "target": {"mode": "existing", "lessonPath": rel}, "ankiOptIn": false,
+        }));
+        let abs = host.data_root().join(rel);
+        fs::create_dir_all(abs.parent().unwrap()).unwrap();
+        fs::write(
+            &abs,
+            "<html><body><script type=\"application/json\" id=\"lesson-data\">{corrupt</script></body></html>",
+        )
+        .unwrap();
+        host.queue_answer(json!({"approved": true}));
+        let out = host.call(&TOOL, plan_in(json!({}))).await;
+        assert!(out.is_error, "expected error on corrupt island, got: {out:?}");
     }
 
     #[tokio::test]

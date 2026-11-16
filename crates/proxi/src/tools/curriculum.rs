@@ -253,7 +253,7 @@ async fn curriculum(input: Value, host: &dyn ToolHost) -> ToolOutcome {
             .iter()
             .find(|entry| js::js_trim(&entry.title) == js::js_trim(&title));
         let kept = prev
-            .filter(|entry| entry.slug != lesson_slug(&title))
+            .filter(|entry| !entry.slug.is_empty() && entry.slug != lesson_slug(&title))
             .map(|entry| entry.slug.clone());
         let resolved = given.map(str::to_string).or(kept);
 
@@ -490,6 +490,38 @@ mod tests {
             json!("legacy")
         );
         assert_eq!(planned["chapters"][0]["lessons"][1]["slug"], json!("nuova"));
+    }
+
+    #[tokio::test]
+    async fn replanning_succeeds_when_old_entry_lacks_slug() {
+        let host = FakeHost::new(plan_config());
+        let file = curriculum_file(&host);
+        let mut curriculum = read_json(&file);
+        curriculum["chapters"][0]["lessons"][0] = json!({
+            "title": "Lezione senza slug",
+            "plannedNodes": 2,
+        });
+        fs::write(&file, serde_json::to_string(&curriculum).unwrap()).expect("rewrite the plan");
+
+        host.queue_answer(json!({"approved": true}));
+        let ok = host
+            .call(
+                &TOOL,
+                cur(json!([
+                    {"title": "Lezione senza slug"},
+                ])),
+            )
+            .await;
+        assert!(!ok.is_error, "{}", ok.text);
+        let planned = read_json(&file);
+        assert_eq!(
+            planned["chapters"][0]["lessons"][0]["title"],
+            json!("Lezione senza slug")
+        );
+        assert_eq!(
+            planned["chapters"][0]["lessons"][0]["slug"],
+            json!("lezione-senza-slug")
+        );
     }
 
     #[tokio::test]
