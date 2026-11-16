@@ -74,6 +74,7 @@ pub(crate) mod fake {
 
     use crate::events::EventBus;
     use crate::graph::store::GraphStore;
+    use crate::jobs::render::Renderer;
     use crate::tools::{Cancelled, JobContext, NO_JOBS_MESSAGE, ToolHost};
 
     /// The job side of a tool call, with what the tool did to it.
@@ -85,6 +86,7 @@ pub(crate) mod fake {
         activities: Mutex<Vec<String>>,
         finished: Mutex<Option<Value>>,
         failed: Mutex<Option<String>>,
+        renderer: Option<Arc<Renderer>>,
     }
 
     impl FakeJob {
@@ -98,7 +100,14 @@ pub(crate) mod fake {
                 activities: Mutex::new(Vec::new()),
                 finished: Mutex::new(None),
                 failed: Mutex::new(None),
+                renderer: None,
             }
+        }
+
+        /// The same job with a browser to render with (the role browser tests).
+        pub fn with_renderer(mut self, renderer: Arc<Renderer>) -> Self {
+            self.renderer = Some(renderer);
+            self
         }
 
         pub fn activities(&self) -> Vec<String> {
@@ -199,6 +208,10 @@ pub(crate) mod fake {
 
         fn events(&self) -> &EventBus {
             &self.events
+        }
+
+        fn renderer(&self) -> Option<&Renderer> {
+            self.renderer.as_deref()
         }
     }
 }

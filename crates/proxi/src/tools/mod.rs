@@ -154,6 +154,11 @@ pub trait JobContext: Send + Sync {
     /// The `Arc` itself, so a tool can clone it into `spawn_blocking`.
     fn graph(&self) -> &Arc<GraphStore>;
     fn events(&self) -> &EventBus;
+    /// The server's headless browser, for the visual and demo roles; `None` where rendering is
+    /// not wired (tests, a build without jobs).
+    fn renderer(&self) -> Option<&crate::jobs::render::Renderer> {
+        None
+    }
 }
 
 /// The background job seam: implemented by the session (it owns the job's session id).

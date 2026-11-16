@@ -1,11 +1,11 @@
 //! The map extractor's inputs (port of `app/server/graph/extract.ts`): the lesson text the extractor
 //! reads (`htmlToText`, `readLessonText`), the anchor lookup, the coverage ledger and the source list.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use indexmap::IndexMap;
 use regex::Regex;
@@ -13,9 +13,13 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::events;
-use crate::graph::store::GraphStore;
+use crate::graph::store::{validate_findings, GraphStore};
+use crate::jobs::roles::{read_prompt, Role, RoleEnv};
 use crate::js;
 use crate::lesson::artifact::{lesson_rel, read_lesson, read_lesson_html};
+use crate::protocol::GlobalEvent;
+use crate::sessions::{invalid_type, issue};
+use crate::tools::{ToolDef, ToolFuture, ToolHost, ToolOutcome};
 use crate::vitest::truncate_utf16;
 
 /// Node's `ENTITIES` table (`extract.ts:36-38`): the exact case wins, the lowercase spelling is the fallback.
@@ -687,6 +691,369 @@ pub fn existing_ids(digest: &str) -> HashSet<String> {
         .collect()
 }
 
+/// One accepted submission per job: a repeated submit_findings (model retry after a lost reply) must not merge twice.
+static SUBMITTED: LazyLock<std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<Option<ToolOutcome>>>>>> =
+    LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+
+/// Called when the job settles: drops per-job in-memory state.
+pub fn cleanup(job_id: &str) {
+    if let Ok(mut map) = SUBMITTED.lock() {
+        map.remove(job_id);
+    }
+}
+
+/// The map role: 6 turns, no built-in grants, extracts knowledge graph findings from a completed lesson.
+pub static MAP_ROLE: Role = Role {
+    kind: "map",
+    grant: &[],
+    max_turns: 6,
+    system_prompt: map_system_prompt,
+    first_message: map_first_message,
+    tools: map_tools,
+    cleanup,
+};
+
+fn map_system_prompt(env: &RoleEnv, _input: &Value) -> Result<String, String> {
+    let base = read_prompt(env.code_root, "map.md")?;
+    let digest = env.graph.graph_digest();
+    let trimmed = digest.trim();
+    let graph_section = if trimmed.is_empty() {
+        "(vuoto: nessuna proposizione ancora)"
+    } else {
+        trimmed
+    };
+    Ok(format!("{base}\n\n---\n\n# Il grafo finora\n\n{graph_section}\n"))
+}
+
+fn map_first_message(env: &RoleEnv, input: &mut Value) -> String {
+    let source = input.get("source").and_then(Value::as_str).unwrap_or("").to_string();
+    let Some(l) = read_lesson_text(env.data_root, &source) else {
+        return format!("Lezione non trovata: {source}. Consegna liste vuote.");
+    };
+    let fp = fingerprint(&l);
+    let mut isolated_by_source = env.graph.isolated_by_source();
+    let isolated_here = isolated_by_source.swap_remove(&source).unwrap_or_default();
+    if !input.is_object() {
+        *input = Value::Object(Map::new());
+    }
+    if let Some(obj) = input.as_object_mut() {
+        obj.insert("fp".to_string(), Value::String(fp));
+        obj.insert(
+            "isolated".to_string(),
+            Value::Array(
+                isolated_here
+                    .iter()
+                    .map(|(id, _)| Value::String(id.clone()))
+                    .collect(),
+            ),
+        );
+    }
+    let live: HashSet<String> = env
+        .graph
+        .read_node_lines()
+        .iter()
+        .filter_map(|r| r.get("id").and_then(Value::as_str).map(str::to_string))
+        .collect();
+    let anchored: Vec<String> = anchors_by_node(env.data_root, &source)
+        .into_iter()
+        .flat_map(|(nid, list)| {
+            list.into_iter()
+                .filter(|(id, _)| live.contains(id))
+                .map(move |(id, name)| format!("- nodo {nid} \u{2192} {id} | {name}"))
+        })
+        .collect();
+    let anchors_block = if !anchored.is_empty() {
+        format!(
+            "\n\nAncore dichiarate dal tutor (concetti gi\u{e0} nella mappa su cui il nodo costruisce):\n{}",
+            anchored.join("\n")
+        )
+    } else {
+        String::new()
+    };
+    let repair = if !isolated_here.is_empty() {
+        let lines: Vec<String> = isolated_here
+            .iter()
+            .map(|(id, name)| format!("- {id} | {name}"))
+            .collect();
+        format!(
+            "\n\nIdee di questa lezione gi\u{e0} nella mappa ma isolate (nessuna catena le usa). Collegale ora, ciascuna in almeno una catena, citandole col loro id; se una non \u{e8} davvero portante, mettila in remove:\n{}",
+            lines.join("\n")
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        "Lezione: {}\nCorso: {}\nSorgente: {source}\n\n{}{anchors_block}{repair}\n\nEstrai le proposizioni e le catene, poi chiama submit_findings.",
+        l.title, l.course, l.text
+    )
+}
+
+fn map_tools(_input: &Value) -> Vec<&'static ToolDef> {
+    vec![&SUBMIT_FINDINGS]
+}
+
+/// The `submit_findings` tool: deliver the extraction for this lesson.
+pub const SUBMIT_FINDINGS: ToolDef = ToolDef {
+    name: "submit_findings",
+    description: "Deliver the extraction for this lesson (call once). Returns validation errors to fix and resubmit, or confirms the merge.",
+    schema: submit_findings_schema,
+    validate: validate_findings_schema,
+    run: run_submit_findings,
+    writes: false,
+};
+
+fn submit_findings_schema() -> Value {
+    serde_json::from_str(include_str!("../tools/schemas/submit_findings.json"))
+        .expect("submit_findings schema parses")
+}
+
+fn validate_findings_schema(input: &Value) -> Result<Value, Vec<String>> {
+    let Some(object) = input.as_object() else {
+        return Err(vec![issue("", &invalid_type("object", Some(input)))]);
+    };
+    let mut issues = Vec::new();
+    let mut clean = Map::new();
+
+    // propositions: z.array(...)
+    match object.get("propositions") {
+        None => issues.push(issue("propositions", &invalid_type("array", None))),
+        Some(props) => match props.as_array() {
+            None => issues.push(issue("propositions", &invalid_type("array", Some(props)))),
+            Some(items) => {
+                let mut clean_props = Vec::new();
+                for (i, item) in items.iter().enumerate() {
+                    let path = format!("propositions.{i}");
+                    let Some(prop_obj) = item.as_object() else {
+                        issues.push(issue(&path, &invalid_type("object", Some(item))));
+                        continue;
+                    };
+                    let mut clean_prop = Map::new();
+
+                    match prop_obj.get("id") {
+                        Some(Value::String(s)) => {
+                            clean_prop.insert("id".to_string(), Value::String(s.clone()));
+                        }
+                        Some(other) => issues.push(issue(&format!("{path}.id"), &invalid_type("string", Some(other)))),
+                        None => issues.push(issue(&format!("{path}.id"), &invalid_type("string", None))),
+                    }
+
+                    match prop_obj.get("name") {
+                        Some(Value::String(s)) => {
+                            clean_prop.insert("name".to_string(), Value::String(s.clone()));
+                        }
+                        Some(other) => issues.push(issue(&format!("{path}.name"), &invalid_type("string", Some(other)))),
+                        None => issues.push(issue(&format!("{path}.name"), &invalid_type("string", None))),
+                    }
+
+                    match prop_obj.get("statement") {
+                        Some(Value::String(s)) => {
+                            clean_prop.insert("statement".to_string(), Value::String(s.clone()));
+                        }
+                        Some(other) => issues.push(issue(&format!("{path}.statement"), &invalid_type("string", Some(other)))),
+                        None => issues.push(issue(&format!("{path}.statement"), &invalid_type("string", None))),
+                    }
+
+                    match prop_obj.get("aliases") {
+                        Some(Value::Array(arr)) => {
+                            let mut clean_aliases = Vec::new();
+                            for (j, alias) in arr.iter().enumerate() {
+                                match alias {
+                                    Value::String(s) => clean_aliases.push(Value::String(s.clone())),
+                                    other => issues.push(issue(&format!("{path}.aliases.{j}"), &invalid_type("string", Some(other)))),
+                                }
+                            }
+                            clean_prop.insert("aliases".to_string(), Value::Array(clean_aliases));
+                        }
+                        None => {}
+                        Some(other) => issues.push(issue(&format!("{path}.aliases"), &invalid_type("array", Some(other)))),
+                    }
+
+                    match prop_obj.get("nodeId") {
+                        Some(Value::String(s)) => {
+                            clean_prop.insert("nodeId".to_string(), Value::String(s.clone()));
+                        }
+                        None => {}
+                        Some(other) => issues.push(issue(&format!("{path}.nodeId"), &invalid_type("string", Some(other)))),
+                    }
+
+                    match prop_obj.get("linkTo") {
+                        Some(Value::String(s)) => {
+                            clean_prop.insert("linkTo".to_string(), Value::String(s.clone()));
+                        }
+                        None => {}
+                        Some(other) => issues.push(issue(&format!("{path}.linkTo"), &invalid_type("string", Some(other)))),
+                    }
+
+                    clean_props.push(Value::Object(clean_prop));
+                }
+                clean.insert("propositions".to_string(), Value::Array(clean_props));
+            }
+        },
+    }
+
+    // chains: z.array(...)
+    match object.get("chains") {
+        None => issues.push(issue("chains", &invalid_type("array", None))),
+        Some(chains_val) => match chains_val.as_array() {
+            None => issues.push(issue("chains", &invalid_type("array", Some(chains_val)))),
+            Some(items) => {
+                let mut clean_chains = Vec::new();
+                for (i, item) in items.iter().enumerate() {
+                    let path = format!("chains.{i}");
+                    let Some(chain_obj) = item.as_object() else {
+                        issues.push(issue(&path, &invalid_type("object", Some(item))));
+                        continue;
+                    };
+                    let mut clean_chain = Map::new();
+
+                    match chain_obj.get("premises") {
+                        None => issues.push(issue(&format!("{path}.premises"), &invalid_type("array", None))),
+                        Some(premises_val) => match premises_val.as_array() {
+                            None => issues.push(issue(&format!("{path}.premises"), &invalid_type("array", Some(premises_val)))),
+                            Some(p_items) => {
+                                if p_items.is_empty() {
+                                    issues.push(issue(&format!("{path}.premises"), "Too small: expected array to have >=1 items"));
+                                }
+                                let mut clean_premises = Vec::new();
+                                for (j, p_item) in p_items.iter().enumerate() {
+                                    match p_item {
+                                        Value::String(s) => clean_premises.push(Value::String(s.clone())),
+                                        other => issues.push(issue(&format!("{path}.premises.{j}"), &invalid_type("string", Some(other)))),
+                                    }
+                                }
+                                clean_chain.insert("premises".to_string(), Value::Array(clean_premises));
+                            }
+                        },
+                    }
+
+                    match chain_obj.get("conclusion") {
+                        Some(Value::String(s)) => {
+                            clean_chain.insert("conclusion".to_string(), Value::String(s.clone()));
+                        }
+                        Some(other) => issues.push(issue(&format!("{path}.conclusion"), &invalid_type("string", Some(other)))),
+                        None => issues.push(issue(&format!("{path}.conclusion"), &invalid_type("string", None))),
+                    }
+
+                    clean_chains.push(Value::Object(clean_chain));
+                }
+                clean.insert("chains".to_string(), Value::Array(clean_chains));
+            }
+        },
+    }
+
+    // remove: z.array(z.string()).optional()
+    match object.get("remove") {
+        Some(Value::Array(arr)) => {
+            let mut clean_remove = Vec::new();
+            for (i, item) in arr.iter().enumerate() {
+                match item {
+                    Value::String(s) => clean_remove.push(Value::String(s.clone())),
+                    other => issues.push(issue(&format!("remove.{i}"), &invalid_type("string", Some(other)))),
+                }
+            }
+            clean.insert("remove".to_string(), Value::Array(clean_remove));
+        }
+        None => {}
+        Some(other) => issues.push(issue("remove", &invalid_type("array", Some(other)))),
+    }
+
+    if issues.is_empty() {
+        Ok(Value::Object(clean))
+    } else {
+        Err(issues)
+    }
+}
+
+fn run_submit_findings<'a>(f: Value, host: &'a dyn ToolHost) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let Some(ctx) = host.job() else {
+            return ToolOutcome::error("submit_findings called outside a job context");
+        };
+        let input = ctx.input();
+        let source = input.get("source").and_then(Value::as_str).unwrap_or("").to_string();
+        let isolated: Vec<String> = input
+            .get("isolated")
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let live = existing_ids(&ctx.graph().graph_digest());
+        let errors = validate_findings(&f, &live, &isolated);
+        if !errors.is_empty() {
+            return ToolOutcome::error(format!(
+                "Findings rejected, fix these and call submit_findings again:\n- {}",
+                errors.join("\n- ")
+            ));
+        }
+
+        let job_id = ctx.job_id().to_string();
+        let cell = {
+            let mut map = SUBMITTED.lock().unwrap();
+            map.entry(job_id)
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(None)))
+                .clone()
+        };
+        let mut guard = cell.lock().await;
+        if let Some(outcome) = guard.as_ref() {
+            return outcome.clone();
+        }
+
+        let fp = input
+            .get("fp")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                read_lesson_text(host.data_root(), &source)
+                    .map(|l| fingerprint(&l))
+                    .unwrap_or_default()
+            });
+
+        let anchors = anchors_by_node(host.data_root(), &source);
+        let g = with_anchor_chains(&f, &anchors, &live);
+
+        let graph = Arc::clone(ctx.graph());
+        let root = host.data_root().to_path_buf();
+        let (source_clone, fp_clone) = (source.clone(), fp.clone());
+
+        let merge_res = tokio::task::spawn_blocking(move || {
+            graph.merge_findings(&source_clone, &g, || {
+                if !fp_clone.is_empty() {
+                    let _ = append_coverage(&root, &source_clone, &fp_clone);
+                }
+            })
+        })
+        .await;
+
+        let counts = match merge_res {
+            Ok(Ok(counts)) => counts,
+            Ok(Err(io_err)) => return ToolOutcome::error(io_err.to_string()),
+            Err(join_err) => return ToolOutcome::error(join_err.to_string()),
+        };
+
+        ctx.events().emit(&GlobalEvent::Graph {
+            revision: ctx.graph().next_revision(),
+        });
+        ctx.finish(serde_json::json!({
+            "kind": "map",
+            "source": source,
+            "added": counts.added,
+            "linked": counts.linked,
+            "chains": counts.chains,
+        }));
+        let outcome = ToolOutcome::ok(format!(
+            "Merged: {} new, {} linked, {} chains. Done.",
+            counts.added, counts.linked, counts.chains
+        ));
+        *guard = Some(outcome.clone());
+        outcome
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -696,6 +1063,8 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::jobs::roles::FakeJob;
+    use crate::tools::JobContext;
 
     struct TempDir(PathBuf);
 
@@ -1278,5 +1647,513 @@ mod tests {
         assert_eq!(lesson.lesson_number, 1.0);
         assert_eq!(lesson.text, "prosa rotta");
         assert!(anchors_by_node(&root, "demo/0001-il-ref").is_empty());
+    }
+
+    fn code_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..")
+    }
+
+    #[tokio::test]
+    async fn map_role_is_configured_and_builds_its_prompts() {
+        let root = repo("role-config");
+        let store = GraphStore::new(root.to_path_buf());
+        assert_eq!(MAP_ROLE.kind, "map");
+        assert!(MAP_ROLE.grant.is_empty());
+        assert_eq!(MAP_ROLE.max_turns, 6);
+
+        fs::create_dir_all(root.join("graph")).unwrap();
+        fs::write(
+            root.join("graph").join("nodes.jsonl"),
+            json!({
+                "id": "n_aaa111",
+                "name": "Ref",
+                "statement": "Un ref è una scatola.",
+                "aliases": [],
+                "createdAt": "2026-11-01T00:00:00.000Z",
+                "provenance": [{ "chatId": "demo/0000-seed", "messageId": "m1" }],
+            })
+            .to_string()
+                + "\n",
+        )
+        .unwrap();
+
+        let env = RoleEnv {
+            code_root: &code_root(),
+            data_root: &root,
+            graph: &store,
+        };
+        let sys = (MAP_ROLE.system_prompt)(&env, &json!({ "source": "demo/0001-il-ref" })).unwrap();
+        assert!(sys.contains("proposizioni"), "{sys}");
+        assert!(sys.contains("n_aaa111 | Ref | Un ref è una scatola"), "{sys}");
+
+        let mut input = json!({ "source": "demo/0001-il-ref" });
+        let first = (MAP_ROLE.first_message)(&env, &mut input);
+        assert!(first.contains("Il ref è una scatola"), "{first}");
+        assert!(first.contains("Nodo ref-scatola"), "{first}");
+        assert!(first.contains("Risposta corretta: una scatola"), "{first}");
+    }
+
+    #[tokio::test]
+    async fn submit_findings_rejects_invalid_findings_then_merges_records_coverage_emits_graph_and_finishes() {
+        let root = repo("submit-findings");
+        let f = json!({
+            "propositions": [
+                { "id": "p1", "name": "Ref", "statement": "Un ref è una scatola.", "linkTo": "n_aaa111" },
+                { "id": "p2", "name": "Nuovo", "statement": "Altro." },
+            ],
+            "chains": [{ "premises": ["p2", "n_bbb222"], "conclusion": "p1" }],
+        });
+
+        let fake_job = FakeJob::new("j1", json!({ "source": "demo/0001-il-ref" }), &root);
+        let mut rx = fake_job.events().subscribe();
+
+        // 1. Rejected with linkTo non esiste
+        let r1 = (SUBMIT_FINDINGS.run)(f.clone(), &fake_job).await;
+        assert!(r1.is_error);
+        assert!(r1.text.contains("linkTo \"n_aaa111\" non esiste"), "{}", r1.text);
+        assert_eq!(fake_job.finished(), None);
+        assert_eq!(read_coverage(&root).len(), 0);
+
+        // 2. Add n_aaa111 and n_bbb222 to nodes ledger
+        fs::create_dir_all(root.join("graph")).unwrap();
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(root.join("graph").join("nodes.jsonl"))
+            .unwrap();
+        writeln!(
+            file,
+            "{}",
+            json!({
+                "id": "n_aaa111",
+                "name": "Ref",
+                "statement": "Un ref è una scatola.",
+                "aliases": [],
+                "createdAt": "2026-11-01T00:00:00.000Z",
+                "provenance": [{ "chatId": "demo/0000-seed", "messageId": "m1" }],
+            })
+        )
+        .unwrap();
+        writeln!(
+            file,
+            "{}",
+            json!({
+                "id": "n_bbb222",
+                "name": "Base",
+                "statement": "Base.",
+                "aliases": [],
+                "createdAt": "2026-11-01T00:00:00.000Z",
+                "provenance": [{ "chatId": "demo/0000-seed", "messageId": "m2" }],
+            })
+        )
+        .unwrap();
+        drop(file);
+
+        // 3. Merges successfully
+        let r2 = (SUBMIT_FINDINGS.run)(f, &fake_job).await;
+        assert!(!r2.is_error, "{}", r2.text);
+        assert_eq!(
+            fake_job.finished(),
+            Some(json!({
+                "kind": "map",
+                "source": "demo/0001-il-ref",
+                "added": 1,
+                "linked": 1,
+                "chains": 1,
+            }))
+        );
+        let coverage = read_coverage(&root);
+        assert_eq!(coverage.get("demo/0001-il-ref").map(|c| c.fp.len()), Some(64));
+        let event = rx.try_recv().expect("graph event emitted");
+        assert!(event.contains("\"type\":\"graph\""), "{event}");
+    }
+
+    #[tokio::test]
+    async fn submit_findings_serves_over_mcp_with_schema_enforced() {
+        let root = repo("mcp-schema");
+        let fake_job = FakeJob::new("j-mcp", json!({ "source": "demo/0001-il-ref" }), &root);
+        let res = crate::mcp::handle_as(
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "submit_findings",
+                    "arguments": { "propositions": "no" },
+                },
+            }),
+            &[&SUBMIT_FINDINGS],
+            &fake_job,
+            "job",
+        )
+        .await
+        .expect("mcp response");
+        assert_eq!(res["result"]["isError"], true);
+    }
+
+    #[test]
+    fn first_message_lists_the_live_anchors_with_their_ids_never_a_dangling_one() {
+        let root = repo("live-anchors");
+        fs::write(
+            lesson_path(&root, "0001-il-ref.html"),
+            island(&[node_a()], "Il ref è una scatola"),
+        )
+        .unwrap();
+        fs::create_dir_all(root.join("graph")).unwrap();
+        fs::write(
+            root.join("graph").join("nodes.jsonl"),
+            json!({
+                "id": "n_aaa111",
+                "name": "Ref",
+                "statement": "Un ref è una scatola.",
+                "aliases": [],
+                "createdAt": "2026-11-01T00:00:00.000Z",
+                "provenance": [{ "chatId": "demo/0000-seed", "messageId": "m1" }],
+            })
+            .to_string()
+                + "\n",
+        )
+        .unwrap();
+
+        let store = GraphStore::new(root.to_path_buf());
+        let env = RoleEnv {
+            code_root: &code_root(),
+            data_root: &root,
+            graph: &store,
+        };
+        let mut input = json!({ "source": "demo/0001-il-ref" });
+        let msg = (MAP_ROLE.first_message)(&env, &mut input);
+        assert!(msg.contains("nodo ref-scatola \u{2192} n_aaa111 | Ref"), "{msg}");
+        assert!(!msg.contains("n_gone"), "{msg}");
+    }
+
+    #[test]
+    fn first_message_keeps_the_anchors_block_on_the_isolated_repair_path() {
+        let root = repo("anchors-repair");
+        fs::write(
+            lesson_path(&root, "0001-il-ref.html"),
+            island(&[node_a()], "Il ref è una scatola"),
+        )
+        .unwrap();
+        fs::create_dir_all(root.join("graph")).unwrap();
+        fs::write(
+            root.join("graph").join("nodes.jsonl"),
+            json!({
+                "id": "n_aaa111",
+                "name": "Ref",
+                "statement": "Un ref è una scatola.",
+                "aliases": [],
+                "createdAt": "2026-11-01T00:00:00.000Z",
+                "provenance": [{ "chatId": "demo/0000-seed", "messageId": "m1" }],
+            })
+            .to_string()
+                + "\n",
+        )
+        .unwrap();
+
+        let store = GraphStore::new(root.to_path_buf());
+        store
+            .merge_findings(
+                "demo/0001-il-ref",
+                &json!({
+                    "propositions": [
+                        { "id": "p1", "name": "Sola", "statement": "Sola." },
+                        { "id": "p2", "name": "A", "statement": "A." },
+                        { "id": "p3", "name": "B", "statement": "B." },
+                    ],
+                    "chains": [{ "premises": ["p2"], "conclusion": "p3" }],
+                }),
+                || {},
+            )
+            .unwrap();
+
+        let env = RoleEnv {
+            code_root: &code_root(),
+            data_root: &root,
+            graph: &store,
+        };
+        let mut input = json!({ "source": "demo/0001-il-ref" });
+        let msg = (MAP_ROLE.first_message)(&env, &mut input);
+        assert!(msg.contains("Ancore dichiarate dal tutor"), "{msg}");
+        assert!(msg.contains("nodo ref-scatola \u{2192} n_aaa111 | Ref"), "{msg}");
+        assert!(!msg.contains("n_gone"), "{msg}");
+        assert!(msg.contains("gi\u{e0} nella mappa ma isolate"), "{msg}");
+        assert!(msg.contains("| Sola"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn submit_findings_adds_the_anchor_chain_before_merging() {
+        let root = repo("anchor-chain-add");
+        fs::write(
+            lesson_path(&root, "0001-il-ref.html"),
+            island(&[node_a()], "Il ref è una scatola"),
+        )
+        .unwrap();
+        fs::create_dir_all(root.join("graph")).unwrap();
+        fs::write(
+            root.join("graph").join("nodes.jsonl"),
+            json!({
+                "id": "n_aaa111",
+                "name": "Ref",
+                "statement": "Un ref è una scatola.",
+                "aliases": [],
+                "createdAt": "2026-11-01T00:00:00.000Z",
+                "provenance": [{ "chatId": "demo/0000-seed", "messageId": "m1" }],
+            })
+            .to_string()
+                + "\n",
+        )
+        .unwrap();
+
+        let fake_job = FakeJob::new("j-anchors", json!({ "source": "demo/0001-il-ref" }), &root);
+        let r = (SUBMIT_FINDINGS.run)(
+            json!({
+                "propositions": [
+                    { "id": "p1", "name": "N", "statement": "S", "nodeId": "ref-scatola" },
+                    { "id": "p2", "name": "M", "statement": "M." },
+                ],
+                "chains": [{ "premises": ["p2"], "conclusion": "p1" }],
+            }),
+            &fake_job,
+        )
+        .await;
+
+        assert!(!r.is_error, "{}", r.text);
+        let chains = fake_job.graph().read_chain_lines();
+        assert!(chains.iter().any(|c| {
+            c.get("premises")
+                .and_then(Value::as_array)
+                .is_some_and(|p| p.iter().any(|x| x == "n_aaa111"))
+        }));
+        assert!(!chains.iter().any(|c| {
+            c.get("premises")
+                .and_then(Value::as_array)
+                .is_some_and(|p| p.iter().any(|x| x == "n_gone"))
+        }));
+    }
+
+    #[tokio::test]
+    async fn ac3_a_declared_anchor_becomes_a_chain_from_the_live_concept_to_the_new_one() {
+        let root = repo("ac3");
+        let store = GraphStore::new(root.to_path_buf());
+        store
+            .merge_findings(
+                "demo/0000-seed",
+                &json!({
+                    "propositions": [
+                        { "id": "p1", "name": "Ref", "statement": "Un ref è una scatola." },
+                        { "id": "p2", "name": "Base", "statement": "B." },
+                    ],
+                    "chains": [{ "premises": ["p2"], "conclusion": "p1" }],
+                }),
+                || {},
+            )
+            .unwrap();
+
+        let seed_id = store
+            .read_node_lines()
+            .into_iter()
+            .find(|n| n.get("name").and_then(Value::as_str) == Some("Ref"))
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        fs::write(
+            lesson_path(&root, "0001-il-ref.html"),
+            island(
+                &[json!({
+                    "nodeId": "ref-scatola",
+                    "title": "Il ref",
+                    "tier": "axiom",
+                    "content": "<p>content</p>",
+                    "anchors": [{ "id": seed_id, "name": "Ref" }],
+                })],
+                "Il ref è una scatola",
+            ),
+        )
+        .unwrap();
+
+        let fake_job = FakeJob::new("j-ac3", json!({ "source": "demo/0001-il-ref" }), &root);
+        let r = (SUBMIT_FINDINGS.run)(
+            json!({
+                "propositions": [
+                    { "id": "p1", "name": "Nuovo", "statement": "Un nuovo nodo.", "nodeId": "ref-scatola" },
+                    { "id": "p2", "name": "M", "statement": "M." },
+                ],
+                "chains": [{ "premises": ["p2"], "conclusion": "p1" }],
+            }),
+            &fake_job,
+        )
+        .await;
+
+        assert!(!r.is_error, "{}", r.text);
+        let new_id = store
+            .read_node_lines()
+            .into_iter()
+            .find(|n| n.get("name").and_then(Value::as_str) == Some("Nuovo"))
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        assert!(store.read_chain_lines().iter().any(|c| {
+            c.get("premises")
+                .and_then(Value::as_array)
+                .is_some_and(|p| p.iter().any(|x| x == seed_id.as_str()))
+                && c.get("conclusion").and_then(Value::as_str) == Some(new_id.as_str())
+        }));
+    }
+
+    #[tokio::test]
+    async fn ac4_a_deleted_anchored_concept_degrades_to_text() {
+        let root = repo("ac4");
+        let store = GraphStore::new(root.to_path_buf());
+        store
+            .merge_findings(
+                "demo/0000-seed",
+                &json!({
+                    "propositions": [
+                        { "id": "p1", "name": "Ref", "statement": "Un ref è una scatola." },
+                        { "id": "p2", "name": "Base", "statement": "B." },
+                    ],
+                    "chains": [{ "premises": ["p2"], "conclusion": "p1" }],
+                }),
+                || {},
+            )
+            .unwrap();
+
+        let seed_id = store
+            .read_node_lines()
+            .into_iter()
+            .find(|n| n.get("name").and_then(Value::as_str) == Some("Ref"))
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        fs::write(
+            lesson_path(&root, "0001-il-ref.html"),
+            island(
+                &[json!({
+                    "nodeId": "ref-scatola",
+                    "title": "Il ref",
+                    "tier": "axiom",
+                    "content": "<p>content</p>",
+                    "anchors": [{ "id": seed_id, "name": "Ref" }],
+                })],
+                "Il ref è una scatola",
+            ),
+        )
+        .unwrap();
+
+        // First pass links the node to the concept
+        let fake_job1 = FakeJob::new("j-first", json!({ "source": "demo/0001-il-ref" }), &root);
+        let r1 = (SUBMIT_FINDINGS.run)(
+            json!({
+                "propositions": [
+                    { "id": "p1", "name": "Nuovo", "statement": "Un nuovo nodo.", "nodeId": "ref-scatola" },
+                    { "id": "p2", "name": "M", "statement": "M." },
+                ],
+                "chains": [{ "premises": ["p2"], "conclusion": "p1" }],
+            }),
+            &fake_job1,
+        )
+        .await;
+        assert!(!r1.is_error, "{}", r1.text);
+        assert!(store.read_chain_lines().iter().any(|c| {
+            c.get("premises")
+                .and_then(Value::as_array)
+                .is_some_and(|p| p.iter().any(|x| x == seed_id.as_str()))
+        }));
+
+        store.delete_node(&seed_id).unwrap();
+
+        let text = read_lesson_text(&root, "demo/0001-il-ref").unwrap();
+        assert!(text.text.contains("Si appoggia su: Ref"), "{}", text.text);
+
+        let env = RoleEnv {
+            code_root: &code_root(),
+            data_root: &root,
+            graph: &store,
+        };
+        let mut input = json!({ "source": "demo/0001-il-ref" });
+        assert!(!(MAP_ROLE.first_message)(&env, &mut input).contains(&seed_id));
+
+        cleanup("j-first");
+        let fake_job2 = FakeJob::new("j-second", json!({ "source": "demo/0001-il-ref" }), &root);
+        let r2 = (SUBMIT_FINDINGS.run)(
+            json!({
+                "propositions": [
+                    { "id": "p1", "name": "N2", "statement": "S2", "nodeId": "ref-scatola" },
+                    { "id": "p2", "name": "M", "statement": "M." },
+                ],
+                "chains": [{ "premises": ["p2"], "conclusion": "p1" }],
+            }),
+            &fake_job2,
+        )
+        .await;
+        assert!(!r2.is_error, "{}", r2.text);
+        assert!(!store.read_chain_lines().iter().any(|c| {
+            c.get("premises")
+                .and_then(Value::as_array)
+                .is_some_and(|p| p.iter().any(|x| x == seed_id.as_str()))
+                || c.get("conclusion").and_then(Value::as_str) == Some(seed_id.as_str())
+        }));
+    }
+
+    #[tokio::test]
+    async fn submit_findings_is_idempotent_per_job() {
+        let root = repo("idempotent");
+        let fake_job = FakeJob::new("j-idem", json!({ "source": "demo/0001-il-ref" }), &root);
+        let f = json!({
+            "propositions": [
+                { "id": "p1", "name": "A", "statement": "a." },
+                { "id": "p2", "name": "B", "statement": "b." },
+            ],
+            "chains": [{ "premises": ["p1"], "conclusion": "p2" }],
+        });
+        let a = (SUBMIT_FINDINGS.run)(f.clone(), &fake_job).await;
+        assert!(!a.is_error, "{}", a.text);
+        let count1 = fake_job.graph().read_node_lines().len();
+        let b = (SUBMIT_FINDINGS.run)(f, &fake_job).await;
+        let count2 = fake_job.graph().read_node_lines().len();
+        assert_eq!(count1, 2);
+        assert_eq!(count2, 2);
+        assert_eq!(a, b);
+    }
+
+    #[tokio::test]
+    async fn coverage_records_the_fingerprint_seen_at_start_so_mid_job_edit_reads_stale() {
+        let root = repo("stale-edit");
+        let store = GraphStore::new(root.to_path_buf());
+        let env = RoleEnv {
+            code_root: &code_root(),
+            data_root: &root,
+            graph: &store,
+        };
+        let mut input = json!({ "source": "demo/0001-il-ref" });
+        (MAP_ROLE.first_message)(&env, &mut input);
+        let fp = input["fp"].as_str().unwrap().to_string();
+        assert_eq!(fp.len(), 64);
+
+        fs::write(
+            lesson_path(&root, "0001-il-ref.html"),
+            island(
+                &[json!({
+                    "nodeId": "ref-scatola",
+                    "title": "Il ref",
+                    "tier": "axiom",
+                    "content": "<p>cambiato durante il job</p>",
+                })],
+                "Il ref è una scatola",
+            ),
+        )
+        .unwrap();
+
+        let fake_job = FakeJob::new("j-mid", input, &root);
+        (SUBMIT_FINDINGS.run)(json!({ "propositions": [], "chains": [] }), &fake_job).await;
+        let sources = list_sources(&root, &store);
+        assert_eq!(sources[0]["stale"], json!(true));
     }
 }
