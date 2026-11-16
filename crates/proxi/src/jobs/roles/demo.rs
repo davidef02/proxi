@@ -128,15 +128,13 @@ fn run_write_demo<'a>(input: Value, host: &'a dyn ToolHost) -> ToolFuture<'a> {
     })
 }
 
-fn mark_passed(job_id: &str, html: &str, passed: bool) -> bool {
+fn mark_passed(job_id: &str, html: &str, passed: bool) {
     let mut drafts = drafts().lock().expect("draft lock");
     if let Some(draft) = drafts.get_mut(job_id) {
         if draft.html == html {
             draft.passed = passed;
-            return true;
         }
     }
-    false
 }
 
 fn run_run_demo<'a>(_input: Value, host: &'a dyn ToolHost) -> ToolFuture<'a> {
