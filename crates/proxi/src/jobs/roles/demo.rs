@@ -502,14 +502,15 @@ mod tests {
             call(&RUN_DEMO, json!({}), &job).await
         });
 
-        // Wait until run_demo has opened a page (it is now running CLEAN)
+        // Wait until run_demo has opened a page (it is now running CLEAN).
+        // Polling timeout allows sufficient time for cold browser launch in CI.
         let mut saw_open = false;
-        for _ in 0..100 {
+        for _ in 0..300 {
             if renderer.open_pages() > 0 {
                 saw_open = true;
                 break;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
         assert!(saw_open, "expected page to be open during run_demo");
 

@@ -1433,11 +1433,19 @@ mod tests {
     #[tokio::test]
     async fn map_jobs_run_one_at_a_time_beside_the_pool() {
         let env = build_test_manager_with("map-pool", 1, Duration::from_secs(600));
-        seed_demo_course(&env.data.0);
-
-        // Create a second lesson
+        // Create lessons with FAKE:slow:5000 so the map jobs stay running during the concurrency test
         let lessons = env.data.0.join("courses").join("demo").join("lessons");
-        fs::write(lessons.join("0002-second.html"), "<html><head><title>Second</title></head><body><p>Text</p></body></html>").unwrap();
+        fs::create_dir_all(&lessons).unwrap();
+        fs::write(
+            lessons.join("0001-il-ref.html"),
+            "<html><head><title>First</title></head><body><p>FAKE:slow:5000</p></body></html>",
+        )
+        .unwrap();
+        fs::write(
+            lessons.join("0002-second.html"),
+            "<html><head><title>Second</title></head><body><p>FAKE:slow:5000</p></body></html>",
+        )
+        .unwrap();
 
         // Non-map job takes the 1 slot
         let _j1 = env.manager.start("research", json!({ "question": "FAKE:slow:5000" }), "J1", None).unwrap();
