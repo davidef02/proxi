@@ -1,5 +1,6 @@
 // One test server for both backends: the in-process Node server or the spawned `proxi` binary, chosen by PROXI_TEST_SERVER.
 import path from "node:path";
+import fs from "node:fs";
 import { createServer } from "../server/main.ts";
 import { proxiBinary, spawnProxi } from "./binary.ts";
 
@@ -19,6 +20,19 @@ export function serverMode(env: NodeJS.ProcessEnv = process.env): ServerMode {
 export const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
 
 export const FAKE_CLAUDE = path.join(REPO_ROOT, "app", "test", "fake-claude.mjs");
+
+/** Windows: a killed engine child can hold a fixture folder briefly during teardown. */
+export async function removeTree(dir: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 1 });
+      return;
+    } catch (error) {
+      if (attempt === 40) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }
+}
 
 /** The fake engine as a claude bin pair: node running fake-claude.mjs, plus test-hook flags before Claude's args. */
 export function fakeClaude(extra: string[] = []): { cmd: string; args: string[] } {

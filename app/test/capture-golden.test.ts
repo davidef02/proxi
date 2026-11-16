@@ -9,6 +9,7 @@ import { ANKI_ERROR, ANKI_GOLDEN, captureAnkiGolden } from "./capture-anki-golde
 import { captureGolden, GOLDEN_DIR, ISO_RE, normalise, normaliseSession, rootVariants } from "./capture-golden.ts";
 import { captureLessonGolden, LESSON_GOLDEN } from "./capture-lesson-golden.ts";
 import { captureMcpGolden, MCP_GOLDEN } from "./capture-mcp-golden.ts";
+import { captureJobsGolden, JOBS_GOLDEN } from "./capture-jobs-golden.ts";
 import { REPO_ROOT } from "./harness.ts";
 
 const ROUTES = [
@@ -26,7 +27,7 @@ const ROUTES = [
   "sessions-agy",
   "sessions-opencode",
 ];
-const ALL_GOLDENS = [...ROUTES, LESSON_GOLDEN, ANKI_GOLDEN, MCP_GOLDEN];
+const ALL_GOLDENS = [...ROUTES, LESSON_GOLDEN, ANKI_GOLDEN, MCP_GOLDEN, JOBS_GOLDEN];
 
 const dirs: string[] = [];
 function tempDir(prefix: string): string {
@@ -134,6 +135,7 @@ it("committed golden fixtures match a fresh Node capture", async () => {
   await captureLessonGolden(out);
   await captureAnkiGolden(out);
   await captureMcpGolden(out);
+  await captureJobsGolden(out);
   for (const route of ALL_GOLDENS) {
     const committed = path.join(GOLDEN_DIR, `${route}.json`);
     assert.ok(fs.existsSync(committed), `missing ${committed}: run npm run golden:capture`);
@@ -144,6 +146,30 @@ it("committed golden fixtures match a fresh Node capture", async () => {
       `run npm run golden:capture (${route})`,
     );
   }
+});
+
+it("jobs golden holds the job states, the slim list and the HTTP answers", () => {
+  const file = JSON.parse(goldenText(JOBS_GOLDEN)) as {
+    statuses: string[];
+    eventsCarryResult: boolean;
+    job: { status: string; result?: { kind?: string }; costUsd: number; delivered?: boolean; sessionId?: string };
+    list: Array<{ result?: unknown }>;
+    persisted: typeof file.job;
+    mcpUrl: string;
+    cases: Array<{ response: { status: number } }>;
+  };
+  assert.deepEqual(file.statuses, ["running", "done"]);
+  assert.equal(file.eventsCarryResult, false);
+  assert.equal(file.job.status, "done");
+  assert.equal(file.job.result?.kind, "research");
+  assert.ok(file.job.costUsd > 0);
+  assert.equal(file.job.delivered, true);
+  assert.equal(file.job.sessionId, "<session>");
+  assert.deepEqual(file.persisted, file.job);
+  assert.ok(!("result" in file.list[0]));
+  assert.match(file.mcpUrl, /^http:\/\/127\.0\.0\.1:<port>\/mcp\/job\/<uuid>$/);
+  assert.deepEqual(file.cases.map((entry) => entry.response.status), [404, 404, 200, 401, 404, 409]);
+  walkStrings({ job: file.job, list: file.list, persisted: file.persisted }, (value) => assert.doesNotMatch(value, ISO_RE, value));
 });
 
 it("events golden holds the normalised first event", () => {

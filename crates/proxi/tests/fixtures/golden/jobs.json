@@ -1,0 +1,217 @@
+{
+  "route": "jobs",
+  "seed": {
+    ".learner/settings.json": {
+      "autoMap": false
+    }
+  },
+  "dataSeed": {
+    "curriculum.json": "{\"chapters\":[{\"title\":\"Demo\",\"slug\":\"demo\",\"lessons\":[{\"title\":\"Prima lezione\",\"slug\":\"prima-lezione\",\"plannedNodes\":2}]}]}",
+    "courses/demo/MISSION.md": "# Mission\n",
+    "courses/demo/NOTES.md": "# Notes\n",
+    "courses/demo/lessons/.keep": ""
+  },
+  "createBody": {
+    "kind": "teach",
+    "course": "demo",
+    "model": "haiku",
+    "ankiOptIn": false,
+    "target": {
+      "mode": "planned",
+      "title": "Prima lezione"
+    }
+  },
+  "message": {
+    "text": "Verifica questo. FAKE:tool:research:eyJxdWVzdGlvbiI6IkNvcyfDqCB1biByZWYgaW4gVnVlIDMuNT8gRkFLRTpqb2I6VzNzaWRHOXZiQ0k2SW5OMVltMXBkRjl5WlhObFlYSmphQ0lzSW1sdWNIVjBJanA3SW1KeWFXVm1Jam9pVm5WbElETXVOU0J5Wlc1a1pTQnlaV0YwZEdsMmJ5QjFiaUJ5WldZZ2JHVm5aMlZ1Wkc4Z0xuWmhiSFZsSUdSbGJuUnlieUIxYmlCbFptWmxZM1E2SUd4aElHUnBjR1Z1WkdWdWVtRWdkbWxsYm1VZ2NtVm5hWE4wY21GMFlTQmhiQ0J0YjIxbGJuUnZJR1JsYkd4aElHeGxkSFIxY21FdUlFWnZiblJsSUhCeWFXMWhjbWxoT2lCc1lTQmtiMk4xYldWdWRHRjZhVzl1WlNCMVptWnBZMmxoYkdVdUlpd2ljMjkxY21ObGN5STZXM3NpZEdsMGJHVWlPaUpXZFdVZ1pHOWpjeUlzSW5WeWJDSTZJbWgwZEhCek9pOHZkblZsYW5NdWIzSm5MMmQxYVdSbEwyVnpjMlZ1ZEdsaGJITXZjbVZoWTNScGRtbDBlUzFtZFc1a1lXMWxiblJoYkhNdWFIUnRiQ0o5WFgxOVhRPT0ifQ=="
+  },
+  "statuses": [
+    "running",
+    "done"
+  ],
+  "activities": [
+    "avvio",
+    "consegna la ricerca",
+    "in coda",
+    "submit_research"
+  ],
+  "eventsCarryResult": false,
+  "job": {
+    "id": "<uuid>",
+    "kind": "research",
+    "title": "Ricerca: Cos'è un ref in Vue 3.5? FAKE:job:W3sidG9vbCI6InN1Ym1pdF9yZ…",
+    "sessionId": "<session>",
+    "model": "sonnet",
+    "status": "done",
+    "activity": "",
+    "createdAt": "<iso>",
+    "updatedAt": "<iso>",
+    "costUsd": 0.001,
+    "result": {
+      "kind": "research",
+      "brief": "Vue 3.5 rende reattivo un ref leggendo .value dentro un effect: la dipendenza viene registrata al momento della lettura. Fonte primaria: la documentazione ufficiale.",
+      "sources": [
+        {
+          "title": "Vue docs",
+          "url": "https://vuejs.org/guide/essentials/reactivity-fundamentals.html"
+        }
+      ]
+    },
+    "delivered": true
+  },
+  "list": [
+    {
+      "id": "<uuid>",
+      "kind": "research",
+      "title": "Ricerca: Cos'è un ref in Vue 3.5? FAKE:job:W3sidG9vbCI6InN1Ym1pdF9yZ…",
+      "sessionId": "<session>",
+      "model": "sonnet",
+      "status": "done",
+      "activity": "",
+      "createdAt": "<iso>",
+      "updatedAt": "<iso>",
+      "costUsd": 0.001,
+      "delivered": true
+    }
+  ],
+  "persisted": {
+    "id": "<uuid>",
+    "kind": "research",
+    "title": "Ricerca: Cos'è un ref in Vue 3.5? FAKE:job:W3sidG9vbCI6InN1Ym1pdF9yZ…",
+    "sessionId": "<session>",
+    "model": "sonnet",
+    "status": "done",
+    "activity": "",
+    "createdAt": "<iso>",
+    "updatedAt": "<iso>",
+    "costUsd": 0.001,
+    "result": {
+      "kind": "research",
+      "brief": "Vue 3.5 rende reattivo un ref leggendo .value dentro un effect: la dipendenza viene registrata al momento della lettura. Fonte primaria: la documentazione ufficiale.",
+      "sources": [
+        {
+          "title": "Vue docs",
+          "url": "https://vuejs.org/guide/essentials/reactivity-fundamentals.html"
+        }
+      ]
+    },
+    "delivered": true
+  },
+  "mcpUrl": "http://127.0.0.1:<port>/mcp/job/<uuid>",
+  "cases": [
+    {
+      "name": "unknown-job",
+      "request": {
+        "method": "GET",
+        "path": "/api/jobs/nope"
+      },
+      "response": {
+        "status": 404,
+        "body": {
+          "error": "Job not found"
+        }
+      }
+    },
+    {
+      "name": "unknown-cancel",
+      "request": {
+        "method": "POST",
+        "path": "/api/jobs/nope/cancel",
+        "headers": {
+          "x-learner-client": "1"
+        },
+        "body": {}
+      },
+      "response": {
+        "status": 404,
+        "body": {
+          "error": "Job not found"
+        }
+      }
+    },
+    {
+      "name": "list",
+      "request": {
+        "method": "GET",
+        "path": "/api/jobs"
+      },
+      "response": {
+        "status": 200,
+        "body": [
+          {
+            "id": "<uuid>",
+            "kind": "research",
+            "title": "Ricerca: Cos'è un ref in Vue 3.5? FAKE:job:W3sidG9vbCI6InN1Ym1pdF9yZ…",
+            "sessionId": "<session>",
+            "model": "sonnet",
+            "status": "done",
+            "activity": "",
+            "createdAt": "<iso>",
+            "updatedAt": "<iso>",
+            "costUsd": 0.001,
+            "delivered": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "mcp-unauthorized",
+      "request": {
+        "method": "POST",
+        "path": "/mcp/job/<job>",
+        "body": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "method": "tools/list"
+        }
+      },
+      "response": {
+        "status": 401,
+        "body": {
+          "error": "Unauthorized"
+        }
+      }
+    },
+    {
+      "name": "mcp-unknown",
+      "request": {
+        "method": "POST",
+        "path": "/mcp/job/nope",
+        "headers": {
+          "x-learner-token": "<token>"
+        },
+        "body": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "method": "tools/list"
+        }
+      },
+      "response": {
+        "status": 404,
+        "body": {
+          "error": "Job not found"
+        }
+      }
+    },
+    {
+      "name": "settled-mcp",
+      "request": {
+        "method": "POST",
+        "path": "/mcp/job/<job>",
+        "headers": {
+          "x-learner-token": "<token>"
+        },
+        "body": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "method": "tools/list"
+        }
+      },
+      "response": {
+        "status": 409,
+        "body": {
+          "error": "Job is not running"
+        }
+      }
+    }
+  ]
+}

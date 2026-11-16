@@ -20,7 +20,6 @@ use common::sessions::{
 };
 use proxi::lesson::doc::{self, AppendOptions, InitOptions};
 use proxi::server::{RunningServer, start};
-use proxi::tools::NO_JOBS_MESSAGE;
 use proxi::tools::util::CANCELLED;
 
 fn url(server: &RunningServer, path: &str) -> String {
@@ -650,7 +649,7 @@ async fn write_node_matches_lesson_append() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn demo_without_a_job_runner_is_an_error() {
+async fn demo_starts_a_job() {
     require_fake_engine();
     let fixture = Fixture::new("mcp-api-demo");
     let server = start(fixture.options()).await.expect("start server");
@@ -669,10 +668,23 @@ async fn demo_without_a_job_runner_is_an_error() {
     )
     .await;
 
-    assert_eq!(
-        tool_result(&reply),
-        (NO_JOBS_MESSAGE.to_string(), true)
-    );
+    let (text, is_error) = tool_result(&reply);
+    assert!(!is_error, "{text}");
+    let jobs = body_json(
+        client
+            .get(format!("{}/api/jobs", server.url))
+            .send()
+            .await
+            .expect("GET jobs"),
+    )
+    .await;
+    let job = jobs
+        .as_array()
+        .and_then(|jobs| jobs.first())
+        .expect("one demo job");
+    assert_eq!(job["kind"], "demo");
+    assert_eq!(job["title"], "Demo: La caduta");
+    assert!(text.contains(job["id"].as_str().expect("job id")));
     server.shutdown().await;
 }
 

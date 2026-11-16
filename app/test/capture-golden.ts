@@ -851,7 +851,7 @@ function send(base: string, request: GoldenRequest): Promise<Response> {
 }
 
 /** SSE client on `/api/events` (or `path`): `ready` resolves once the headers arrive, `first` waits for the first data event. */
-function openEvents(base: string, path = "/api/events") {
+export function openEvents(base: string, path = "/api/events") {
   const events: unknown[] = [];
   const ac = new AbortController();
   let started!: () => void;

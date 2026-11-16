@@ -23,6 +23,7 @@ use crate::tools::{Cancelled, JobContext, JobStarter, ToolDef, ToolHost};
 
 pub mod deliver;
 pub mod render;
+pub mod routes;
 pub mod roles;
 pub mod sanitize;
 
