@@ -25,12 +25,16 @@
   "inScope": [
     "quiz",
     "ask",
+    "propose_plan",
     "write_node",
     "research",
     "visual",
     "demo",
     "finish_lesson",
-    "read_lesson"
+    "read_lesson",
+    "search_concepts",
+    "open_concept",
+    "browse_concepts"
   ],
   "cases": [
     {
@@ -520,6 +524,49 @@
                 }
               },
               {
+                "name": "propose_plan",
+                "description": "Show the learner the lesson approach and dependency DAG and wait for approval (blocks). On approval the lesson artifact is created and nodes can be written with write_node.",
+                "inputSchema": {
+                  "type": "object",
+                  "properties": {
+                    "topic": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Lesson topic; also names the Anki deck."
+                    },
+                    "title": {
+                      "description": "Only for a free lesson: the title, naming the insight. Ignored when the lesson is planned or existing.",
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "approach": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "The approach in prose (markdown)."
+                    },
+                    "dag": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Mermaid \"graph TD\". Every node: N1[\"Nodo 1: complete Italian clause\"]; unconditional truths at the roots, goal at the sink."
+                    },
+                    "goal": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "The learner's goal for the lesson."
+                    }
+                  },
+                  "required": [
+                    "topic",
+                    "approach",
+                    "dag",
+                    "goal"
+                  ]
+                },
+                "_meta": {
+                  "antigravity/alwaysLoad": true
+                }
+              },
+              {
                 "name": "write_node",
                 "description": "Write (or replace, same nodeId) one node into the lesson artifact and show it to the learner. Requires an approved plan. Every new idea carries `anchors` (n_… ids and names from the concept tools) and its prose names those concepts.",
                 "inputSchema": {
@@ -966,18 +1013,86 @@
                 "_meta": {
                   "antigravity/alwaysLoad": true
                 }
+              },
+              {
+                "name": "search_concepts",
+                "description": "Search his knowledge graph by meaning (Italian or English) over name, statement and aliases; falls back to lexical matching when the local model is missing. Returns at most 10 concepts, one per line: id | name | status (solido, fragile, insegnato, mancato) | course | lesson.",
+                "inputSchema": {
+                  "type": "object",
+                  "properties": {
+                    "query": {
+                      "type": "string",
+                      "description": "What the concept is about, in Italian or English (words or a short phrase)."
+                    },
+                    "limit": {
+                      "description": "Max results, default and cap 10.",
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 10
+                    }
+                  },
+                  "required": [
+                    "query"
+                  ]
+                },
+                "_meta": {
+                  "antigravity/alwaysLoad": true
+                }
+              },
+              {
+                "name": "open_concept",
+                "description": "Open one concept of his knowledge graph: statement, status, courses, lessons, MapNode keys, premises and consequences.",
+                "inputSchema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "description": "Concept id from search_concepts or browse_concepts (n_...)."
+                    }
+                  },
+                  "required": [
+                    "id"
+                  ]
+                },
+                "_meta": {
+                  "antigravity/alwaysLoad": true
+                }
+              },
+              {
+                "name": "browse_concepts",
+                "description": "Browse his knowledge graph: no input lists courses, course lists its lessons, course + lesson lists that lesson's concepts with their status.",
+                "inputSchema": {
+                  "type": "object",
+                  "properties": {
+                    "course": {
+                      "description": "Course slug; omit to list courses.",
+                      "type": "string"
+                    },
+                    "lesson": {
+                      "description": "Lesson id <course>/<NNNN-slug> or <NNNN-slug>; needs course.",
+                      "type": "string"
+                    }
+                  }
+                },
+                "_meta": {
+                  "antigravity/alwaysLoad": true
+                }
               }
             ]
           },
           "filteredTo": [
             "quiz",
             "ask",
+            "propose_plan",
             "write_node",
             "research",
             "visual",
             "demo",
             "finish_lesson",
-            "read_lesson"
+            "read_lesson",
+            "search_concepts",
+            "open_concept",
+            "browse_concepts"
           ]
         }
       }

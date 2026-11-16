@@ -299,6 +299,9 @@ pub enum ServerEvent {
     Plan {
         plan: serde_json::Value,
     },
+    Exercises {
+        exercises: Vec<serde_json::Value>,
+    },
 }
 
 /// A number as JS prints it: `JSON.stringify(4)` is `4`, serde prints `4.0` for an f64.
@@ -977,6 +980,17 @@ mod tests {
             })
             .unwrap(),
             r#"{"type":"plan","plan":{"topic":"t"}}"#
+        );
+    }
+
+    #[test]
+    fn exercises_event_matches_node() {
+        assert_eq!(
+            serde_json::to_string(&ServerEvent::Exercises {
+                exercises: vec![json!({"name": "e"})]
+            })
+            .unwrap(),
+            r#"{"type":"exercises","exercises":[{"name":"e"}]}"#
         );
     }
 

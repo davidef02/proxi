@@ -9,17 +9,20 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{Map, Value, json};
 use tokio::sync::oneshot;
 
 use crate::data_root::resolve_path;
+use crate::embeddings::EmbeddingConfig;
 use crate::events::iso_now;
+use crate::exercises::{Installs, NpmCommand, RunConfig};
 use crate::js;
 use crate::lesson::doc;
 use crate::planstate;
+use crate::semantic::SemanticSearch;
 use crate::tools::util;
 use crate::tools::{Cancelled, ToolDef, ToolHost, ToolOutcome, invoke};
 
@@ -45,6 +48,12 @@ pub struct FakeHost {
     maps: Mutex<Vec<String>>,
     fail_jobs: Mutex<bool>,
     changed: Mutex<usize>,
+    exercises: Mutex<Vec<Value>>,
+    problem: Mutex<Option<(String, Value)>>,
+    node: Mutex<Option<PathBuf>>,
+    installs: Installs,
+    anki_url: Mutex<Option<String>>,
+    semantic: Mutex<Arc<SemanticSearch>>,
 }
 
 impl FakeHost {
@@ -52,6 +61,11 @@ impl FakeHost {
     pub fn new(config: Value) -> FakeHost {
         let dir = temp_dir("host");
         copy_dir(&fixture_repo(), &dir);
+        // No model in the temp repo: `rank` answers MODEL_MISSING, the worst case each tool handles.
+        let semantic = Arc::new(SemanticSearch::for_repo(
+            &dir.0,
+            EmbeddingConfig::load(&dir.0).expect("embedding config"),
+        ));
         FakeHost {
             dir,
             config,
@@ -66,6 +80,13 @@ impl FakeHost {
             maps: Mutex::new(Vec::new()),
             fail_jobs: Mutex::new(false),
             changed: Mutex::new(0),
+            exercises: Mutex::new(Vec::new()),
+            problem: Mutex::new(None),
+            node: Mutex::new(None),
+            installs: Installs::default(),
+            // A closed port: no test ever reaches a real Anki.
+            anki_url: Mutex::new(Some("http://127.0.0.1:1".to_string())),
+            semantic: Mutex::new(semantic),
         }
     }
 
@@ -154,6 +175,19 @@ impl FakeHost {
     pub fn courses_changed_count(&self) -> usize {
         *self.changed.lock().expect("fake lock")
     }
+
+    /// The node binary `run_config` hands to `run_exercise` (`None` is Node's missing-Node case).
+    pub fn set_node(&self, node: Option<PathBuf>) {
+        *self.node.lock().expect("fake lock") = node;
+    }
+
+    pub fn set_anki_url(&self, url: Option<String>) {
+        *self.anki_url.lock().expect("fake lock") = url;
+    }
+
+    pub fn set_semantic(&self, semantic: Arc<SemanticSearch>) {
+        *self.semantic.lock().expect("fake lock") = semantic;
+    }
 }
 
 impl ToolHost for FakeHost {
@@ -197,6 +231,53 @@ impl ToolHost for FakeHost {
             .lock()
             .expect("fake lock")
             .push(Value::Object(event));
+    }
+
+    fn exercises(&self) -> Vec<Value> {
+        self.exercises.lock().expect("fake lock").clone()
+    }
+
+    fn upsert_exercise(&self, info: Value) {
+        let name = js::js_string(info.get("name"));
+        let mut exercises = self.exercises.lock().expect("fake lock");
+        let mut list: Vec<Value> = exercises
+            .clone()
+            .into_iter()
+            .filter(|entry| js::js_string(entry.get("name")) != name)
+            .collect();
+        list.push(info.clone());
+        list.sort_by(|left, right| {
+            js::locale_compare(
+                &js::js_string(left.get("name")),
+                &js::js_string(right.get("name")),
+            )
+        });
+        *exercises = list.clone();
+        drop(exercises);
+        self.events
+            .lock()
+            .expect("fake lock")
+            .push(json!({ "type": "exercises", "exercises": list }));
+        self.emit(json!({
+            "id": format!("exercise:{name}"),
+            "kind": "exercise",
+            "exercise": info,
+        }));
+    }
+
+    fn open_problem(&self, item: Value) -> Option<String> {
+        let mut problem = self.problem.lock().expect("fake lock");
+        if problem.is_some() {
+            return None;
+        }
+        let input = item.get("input").cloned().unwrap_or(Value::Null);
+        let id = self.emit(item);
+        *problem = Some((id.clone(), input));
+        Some(id)
+    }
+
+    fn take_problem(&self) -> Option<(String, Value)> {
+        self.problem.lock().expect("fake lock").take()
     }
 
     fn request(&self, item: Value) -> Result<oneshot::Receiver<Result<Value, Cancelled>>, Cancelled> {
@@ -269,6 +350,23 @@ impl ToolHost for FakeHost {
             .expect("fake lock")
             .push(target.to_string());
         Ok(())
+    }
+
+    fn run_config(&self) -> RunConfig {
+        let node = self.node.lock().expect("fake lock").clone();
+        RunConfig::new(node, NpmCommand::Default)
+    }
+
+    fn installs(&self) -> Installs {
+        self.installs.clone()
+    }
+
+    fn anki_url(&self) -> Option<String> {
+        self.anki_url.lock().expect("fake lock").clone()
+    }
+
+    fn semantic(&self) -> Arc<SemanticSearch> {
+        self.semantic.lock().expect("fake lock").clone()
     }
 
     fn courses_changed(&self) {
@@ -406,5 +504,50 @@ mod tests {
 
         host.courses_changed();
         assert_eq!(host.courses_changed_count(), 1);
+    }
+
+    #[test]
+    fn one_open_problem_at_a_time_and_take_returns_it() {
+        let host = FakeHost::new(json!({"kind": "practice", "course": "demo"}));
+        let item = json!({"kind": "problem", "input": {"statement": "S", "mode": "recall"}});
+        assert_eq!(host.open_problem(item.clone()).as_deref(), Some("item-1"));
+        assert_eq!(host.open_problem(item), None);
+        assert_eq!(
+            host.take_problem(),
+            Some(("item-1".to_string(), json!({"statement": "S", "mode": "recall"})))
+        );
+        assert_eq!(host.take_problem(), None);
+        assert_eq!(host.items().len(), 1);
+    }
+
+    #[test]
+    fn upsert_exercise_stores_the_list_notifies_and_emits() {
+        let host = FakeHost::new(json!({"kind": "practice", "course": "demo"}));
+        let info = json!({"name": "01-demo"});
+        host.upsert_exercise(info.clone());
+        assert_eq!(host.exercises(), vec![info.clone()]);
+        assert_eq!(
+            host.events(),
+            vec![json!({"type": "exercises", "exercises": vec![info.clone()]})]
+        );
+        assert_eq!(
+            host.items(),
+            vec![json!({
+                "id": "exercise:01-demo",
+                "kind": "exercise",
+                "exercise": info,
+            })]
+        );
+    }
+
+    #[test]
+    fn the_fake_runs_on_a_closed_anki_port_and_no_node() {
+        let host = FakeHost::new(json!({"kind": "teach", "course": "demo"}));
+        assert_eq!(host.anki_url().as_deref(), Some("http://127.0.0.1:1"));
+        assert!(host.run_config().node.is_none());
+        assert_eq!(
+            host.semantic().rank("x", &[]).unwrap_err(),
+            crate::semantic::MODEL_MISSING
+        );
     }
 }

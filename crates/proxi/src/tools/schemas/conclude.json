@@ -1,0 +1,66 @@
+{
+  "type": "object",
+  "properties": {
+    "outcome": {
+      "type": "string",
+      "enum": [
+        "solved",
+        "solvedWithHints",
+        "movedOn",
+        "surrendered"
+      ]
+    },
+    "verdict": {
+      "type": "string",
+      "minLength": 1
+    },
+    "rung": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "R0",
+            "R1",
+            "R2",
+            "R3",
+            "R4",
+            "R5"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Highest hint rung used, or null."
+    },
+    "missClass": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "cue",
+            "discrimination",
+            "execution",
+            "careless",
+            "structural"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Why he missed, or null when solved cleanly."
+    },
+    "retest": {
+      "type": "boolean",
+      "description": "Whether to bring this node back later."
+    }
+  },
+  "required": [
+    "outcome",
+    "verdict",
+    "rung",
+    "missClass",
+    "retest"
+  ]
+}

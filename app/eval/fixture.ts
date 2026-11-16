@@ -1,18 +1,25 @@
 // The fixed Vue graph the eval runs against: a learner solid on reactivity, taught but unverified on
 // the component contract, shaky on effects, missed the lifecycle. Real data paths only (lesson HTML,
 // graph findings, progress records) so the app reads it exactly as it reads his own folder.
+import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { initLesson, appendNode } from "../../extensions/html-lesson.ts";
 import { lessonSlug } from "../../extensions/slug.ts";
-import { appendProgress } from "../server/knowledge.ts";
-import { mergeFindings } from "../server/graph/store.ts";
-import type { Findings } from "../server/types.ts";
 
 export const VUE_COURSE = "vue-base";
 export const VUE_CHAPTER = "Fondamenti di Vue";
 
 const REPO = path.resolve(import.meta.dirname, "../..");
+
+/** Same rows the Node store appends, written straight here: the eval must not import the server. */
+function appendJsonl(file: string, rows: object[]): void {
+  if (rows.length === 0) return;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.appendFileSync(file, rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
+}
+
+const hex = () => randomBytes(6).toString("hex");
 
 interface FixtureNode {
   id: string;
@@ -144,24 +151,44 @@ export async function buildFixture(dataRoot: string, opts: { graph: boolean }): 
 
     // Provenance is matched by (course, lesson file stem) + node id, so the stem is the source id.
     const sourceId = `${VUE_COURSE}/${path.basename(file.filePath).replace(/\.html$/, "")}`;
-    const findings: Findings = {
-      propositions: lesson.nodes.map((n, i) => ({ id: `p${i + 1}`, name: n.name, statement: n.statement, nodeId: n.id })),
-      chains: lesson.chains,
-    };
-    await mergeFindings(dataRoot, sourceId, findings);
+    const now = new Date().toISOString();
+    const ids = new Map(lesson.nodes.map((n, i) => [`p${i + 1}`, `n_${hex()}`]));
+    appendJsonl(
+      path.join(dataRoot, "graph", "nodes.jsonl"),
+      lesson.nodes.map((n, i) => ({
+        id: ids.get(`p${i + 1}`)!,
+        name: n.name,
+        statement: n.statement,
+        aliases: [],
+        createdAt: now,
+        provenance: [{ chatId: sourceId, messageId: n.id }],
+      })),
+    );
+    appendJsonl(
+      path.join(dataRoot, "graph", "chains.jsonl"),
+      lesson.chains.map((c) => ({
+        id: `arg_${hex()}`,
+        premises: c.premises.map((p) => ids.get(p)!),
+        conclusion: ids.get(c.conclusion)!,
+        createdAt: now,
+        provenance: [{ chatId: sourceId, messageId: "" }],
+      })),
+    );
 
     for (const node of lesson.nodes) {
       if (!node.record) continue;
-      await appendProgress(dataRoot, {
-        at: new Date().toISOString(),
-        sessionId: "eval",
-        course: VUE_COURSE,
-        lessonSlug: slug,
-        nodeRefs: [`${VUE_COURSE}/${slug}#${node.id}`],
-        kind: "check",
-        correct: node.record.correct,
-        ...(node.record.confidence !== undefined ? { confidence: node.record.confidence } : {}),
-      });
+      appendJsonl(path.join(dataRoot, "courses", VUE_COURSE, "progress.jsonl"), [
+        {
+          at: new Date().toISOString(),
+          sessionId: "eval",
+          course: VUE_COURSE,
+          lessonSlug: slug,
+          nodeRefs: [`${VUE_COURSE}/${slug}#${node.id}`],
+          kind: "check",
+          correct: node.record.correct,
+          ...(node.record.confidence !== undefined ? { confidence: node.record.confidence } : {}),
+        },
+      ]);
     }
   }
 }

@@ -176,6 +176,36 @@ pub(crate) mod fake {
             Err(NO_JOBS_MESSAGE.to_string())
         }
 
+        fn exercises(&self) -> Vec<Value> {
+            Vec::new()
+        }
+
+        fn upsert_exercise(&self, _info: Value) {}
+
+        fn open_problem(&self, _item: Value) -> Option<String> {
+            None
+        }
+
+        fn take_problem(&self) -> Option<(String, Value)> {
+            None
+        }
+
+        fn run_config(&self) -> crate::exercises::RunConfig {
+            crate::exercises::default_run_config(None)
+        }
+
+        fn installs(&self) -> crate::exercises::Installs {
+            crate::exercises::Installs::default()
+        }
+
+        fn anki_url(&self) -> Option<String> {
+            None
+        }
+
+        fn semantic(&self) -> Arc<crate::semantic::SemanticSearch> {
+            panic!("semantic is not available to a subagent")
+        }
+
         fn courses_changed(&self) {}
 
         fn job(&self) -> Option<&dyn JobContext> {

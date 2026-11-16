@@ -28,7 +28,6 @@ use crate::agy;
 use crate::anki_client::{self, AnkiClient};
 use crate::anki_import::ImportRegistry;
 use crate::anki_status::{start_review, status_all, status_for_course, ReviewStart};
-use crate::child;
 use crate::claude::{self, ClaudeBin};
 use crate::claude_status;
 use crate::course_data::{course_deck_name_for, valid_course};
@@ -49,6 +48,7 @@ use crate::protocol::{
     ClaudeStatusResponse, GlobalEvent, LearnerSettings, SettingsResponse, SyncStatus,
     UpdateStatusResponse, DEFAULT_PORT,
 };
+use crate::semantic::SemanticSearch;
 use crate::sessions::{AttachmentUpload, CallRequests, ManagerOptions, SessionManager};
 use crate::settings::{self, SettingsError};
 use crate::stt;
@@ -330,6 +330,8 @@ pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
     ];
     let limits = Arc::new(LimitsCache::new());
     let imports = ImportRegistry::new();
+    // One registry for the routes and the `run_exercise` tool: a second install would race the first.
+    let installs = exercises::Installs::default();
     let claude_cmd = claude.cmd.clone();
     let manager_opts = ManagerOptions {
         repo_root: repo_root.clone(),
@@ -346,6 +348,12 @@ pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
         anki: anki.clone(),
         imports: imports.clone(),
         jobs: Arc::new(crate::tools::NoJobs),
+        npm_bin: opts.bins.npm.clone(),
+        installs: installs.clone(),
+        semantic: Arc::new(SemanticSearch::for_repo(
+            &repo_root,
+            EmbeddingConfig::load(&repo_root).map_err(std::io::Error::other)?,
+        )),
     };
     let sessions = tokio::task::spawn_blocking(move || SessionManager::new(manager_opts))
         .await
@@ -376,7 +384,7 @@ pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
         agy_models: OnceCell::new(),
         opencode_models: OnceCell::new(),
         npm_bin: opts.bins.npm,
-        installs: exercises::Installs::default(),
+        installs,
         touched: std::sync::Mutex::new(HashMap::new()),
     });
 
@@ -1519,13 +1527,7 @@ async fn post_exercise(
             if let Err(response) = exercise_dir(&state, &course, &name) {
                 return response;
             }
-            let cfg = exercises::RunConfig::new(
-                child::node_on_path(),
-                exercises::npm_command(
-                    state.npm_bin.as_deref(),
-                    std::env::var_os("LEARNER_NPM_BIN").as_deref(),
-                ),
-            );
+            let cfg = exercises::default_run_config(state.npm_bin.as_deref());
             // Awaited here: a dropped request drops this future and kills the vitest tree.
             Json(
                 exercises::run_exercise(&state.data_root, &course, &name, &cfg, &state.installs)

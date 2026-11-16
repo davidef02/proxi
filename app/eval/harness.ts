@@ -1,10 +1,10 @@
-// Drives the real engine through a scenario: temp repo + temp data folder, the server in-process, the
-// scripted learner on the other side of the tool cards. Outside CI: it costs a real engine run.
+// Drives the real engine through a scenario: temp repo + temp data folder, the `proxi` binary over HTTP/SSE,
+// the scripted learner on the other side of the tool cards. Outside CI: it costs a real engine run.
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createServer, type RunningServer } from "../server/main.ts";
-import type { AskAnswer, InteractiveItem, Provider, QuizAnswer, QuizInput, SessionState } from "../shared/protocol.ts";
+import type { AnswerBody, AskAnswer, InteractiveItem, Provider, QuizAnswer, QuizInput, SessionState } from "../shared/protocol.ts";
+import { spawnProxi, type RunningProxi } from "../test/binary.ts";
 import { isPureVue, targetsOf, type ProbeLog } from "./checks.ts";
 import { buildFixture } from "./fixture.ts";
 import type { Scenario } from "./scenarios.ts";
@@ -14,22 +14,79 @@ export interface RunResult {
   curriculumTitles?: string[];
   reachedStop: boolean;
   transcript: string[];
+  /** SSE events received (the snapshot alone counts). */
+  events: number;
 }
 
 const REPO = path.resolve(import.meta.dirname, "../..");
 const NUDGE = "Vai avanti tu: scegli il prossimo passo.";
 const ASK_TEXT = "Voglio saper costruire una piccola app Nuxt con pagine, layout e dati caricati dal server.";
 
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** Copy the learner's settings into the temp repo; `--engine` patches only the copy. */
+export function writeEvalSettings(repoRoot: string, settingsFile: string, engine?: Provider): void {
+  const base = fs.existsSync(settingsFile) ? JSON.parse(fs.readFileSync(settingsFile, "utf-8")) : undefined;
+  if (base === undefined && !engine) return;
+  const settings: Record<string, unknown> = { ...(base ?? {}), ...(engine ? { provider: engine } : {}) };
+  // The binary syncs on startup when syncProvider is set and the keychain holds a token: the temp
+  // data folder must never reach the learner's real remote.
+  delete settings.syncProvider;
+  const dest = path.join(repoRoot, ".learner", "settings.json");
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.writeFileSync(dest, JSON.stringify(settings, null, 2) + "\n");
+}
+
+/** `proxi serve` for one scenario: the temp folder pair, no update check, an Anki port nobody listens on. */
+export function evalServeArgs(repoRoot: string, dataRoot: string, claude?: { cmd: string; args: string[] }): string[] {
+  const args = [
+    "serve",
+    "--port", "0",
+    "--repo-root", repoRoot,
+    "--data-root", dataRoot,
+    "--no-update-check",
+    "--anki-url", "http://127.0.0.1:9",
+  ];
+  if (claude) {
+    args.push("--claude-bin", claude.cmd);
+    for (const arg of claude.args) args.push("--claude-bin-arg", arg);
+  }
+  return args;
+}
+
 export async function runScenario(
   s: Scenario,
-  opts: { engine?: Provider; settingsFile: string; timeoutMs: number; log: (line: string) => void }
+  opts: {
+    bin: string;
+    engine?: Provider;
+    settingsFile: string;
+    timeoutMs: number;
+    claude?: { cmd: string; args: string[] };
+    log: (line: string) => void;
+  }
 ): Promise<RunResult> {
-  process.env.LEARNER_ANKI_URL ??= "http://127.0.0.1:9"; // a real Anki must never answer the eval
-
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "eval-repo-"));
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "eval-data-"));
-  let srv: RunningServer | undefined;
+  let srv: RunningProxi | undefined;
   let id: string | undefined;
+  let base = "";
+  const stream = new AbortController();
+
+  const post = (p: string, body: unknown = {}) =>
+    fetch(base + p, {
+      method: "POST",
+      headers: { "x-learner-client": "1", "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  const postOk = async (p: string, body: AnswerBody) => {
+    const res = await post(p, body);
+    if (!res.ok) throw new Error(`${p.split("/").pop()} ${res.status}: ${(await res.json().catch(() => ({}))).error ?? ""}`);
+  };
+  const getState = async (sessionId: string): Promise<SessionState> => {
+    const res = await fetch(`${base}/api/sessions/${sessionId}`);
+    if (!res.ok) throw new Error(res.status === 404 ? "session disappeared" : `session ${res.status}`);
+    return (await res.json()) as SessionState;
+  };
 
   try {
     for (const rel of ["docs/agents/pedagogy.md", "docs/agents/anki-cards.md", "assets/lesson-template.html"]) {
@@ -38,21 +95,44 @@ export async function runScenario(
       fs.copyFileSync(path.join(REPO, rel), dest);
     }
     // The engine is whatever the app is configured with; --engine only patches the temp copy.
-    const base = fs.existsSync(opts.settingsFile) ? JSON.parse(fs.readFileSync(opts.settingsFile, "utf-8")) : undefined;
-    const settings = { ...(base ?? {}), ...(opts.engine ? { provider: opts.engine } : {}) };
-    if (base !== undefined || opts.engine) {
-      const dest = path.join(repoRoot, ".learner", "settings.json");
-      fs.mkdirSync(path.dirname(dest), { recursive: true });
-      fs.writeFileSync(dest, JSON.stringify(settings, null, 2) + "\n");
-    }
+    writeEvalSettings(repoRoot, opts.settingsFile, opts.engine);
     opts.log(`repo ${repoRoot}`);
     opts.log(`data ${dataRoot}`);
 
     await buildFixture(dataRoot, { graph: s.graph });
-    srv = await createServer({ repoRoot, dataRoot, port: 0, openBrowser: false });
-    const server = srv;
-    id = await server.manager.create(s.config);
+    srv = await spawnProxi(evalServeArgs(repoRoot, dataRoot, opts.claude), opts.bin);
+    base = srv.url;
+
+    const created = await post("/api/sessions", s.config);
+    if (!created.ok) throw new Error(`create ${created.status}: ${(await created.json().catch(() => ({}))).error ?? ""}`);
+    id = ((await created.json()) as { id: string }).id;
     const sessionId = id;
+    opts.log(`session ${sessionId}`);
+
+    // The stream only wakes the loop early: the GET below stays authoritative.
+    let events = 0;
+    let wake: () => void = () => {};
+    const nextEvent = () =>
+      new Promise<void>((resolve) => {
+        wake = () => resolve();
+      });
+    void (async () => {
+      const res = await fetch(`${base}/api/sessions/${sessionId}/events`, { signal: stream.signal });
+      const dec = new TextDecoder();
+      let buf = "";
+      for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
+        buf += dec.decode(chunk, { stream: true });
+        let i: number;
+        while ((i = buf.indexOf("\n\n")) >= 0) {
+          const block = buf.slice(0, i);
+          buf = buf.slice(i + 2);
+          const data = block.split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trim()).join("");
+          if (!data) continue;
+          events++;
+          wake();
+        }
+      }
+    })().catch(() => {});
 
     const probes: ProbeLog[] = [];
     const transcript: string[] = [];
@@ -84,8 +164,7 @@ export async function runScenario(
     const deadline = Date.now() + opts.timeoutMs;
     while (!reachedStop) {
       if (Date.now() > deadline) throw new Error("timeout");
-      const st: SessionState | undefined = server.manager.get(sessionId);
-      if (!st) throw new Error("session disappeared");
+      const st = await getState(sessionId);
       if (st.status === "error") throw new Error(st.lastError ?? "engine error");
       if (st.status === "closed") break;
 
@@ -113,19 +192,23 @@ export async function runScenario(
             const where = targetsOf(item.input.question).map((c) => c.id).join(",") || "nuxt";
             opts.log(`PROBE ${probes.length} [${where}] ${item.input.question.replace(/\s+/g, " ")} -> ${label}`);
           }
-          server.manager.answer(sessionId, { requestId: item.requestId, kind: "quiz", answer });
+          await postOk(`/api/sessions/${sessionId}/answer`, { requestId: item.requestId, kind: "quiz", answer });
         } else if (item.kind === "ask") {
           const first = item.input.options?.[0];
           const answer: AskAnswer = first
             ? { selected: [first.value ?? first.label] }
             : { selected: [], other: ASK_TEXT };
-          server.manager.answer(sessionId, { requestId: item.requestId, kind: "ask", answer });
+          await postOk(`/api/sessions/${sessionId}/answer`, { requestId: item.requestId, kind: "ask", answer });
         } else if (item.kind === "plan") {
           if (s.stopAt === "plan") {
             reachedStop = true;
             break;
           }
-          server.manager.answer(sessionId, { requestId: item.requestId, kind: "plan", answer: { approved: true } });
+          await postOk(`/api/sessions/${sessionId}/answer`, {
+            requestId: item.requestId,
+            kind: "plan",
+            answer: { approved: true },
+          });
         } else {
           curriculumTitles = item.input.lessons.map((l) => l.title);
           opts.log(`CURRICULUM ${curriculumTitles.join(" | ")}`);
@@ -136,16 +219,18 @@ export async function runScenario(
         if (nudges >= 6) break;
         nudges++;
         opts.log(`nudge ${nudges}/6`);
-        await server.manager.message(sessionId, NUDGE).catch(() => {});
+        await post(`/api/sessions/${sessionId}/message`, { text: NUDGE }).catch(() => {});
       }
 
       if (reachedStop) break;
-      await new Promise((r) => setTimeout(r, 500));
+      await Promise.race([sleep(500), nextEvent()]);
     }
 
-    return { probes, curriculumTitles, reachedStop, transcript };
+    opts.log(`sse events: ${events}`);
+    return { probes, curriculumTitles, reachedStop, transcript, events };
   } finally {
-    if (srv && id) await srv.manager.close(id).catch(() => {});
+    stream.abort();
+    if (srv && id) await post(`/api/sessions/${id}/close`).then((r) => r.ok && opts.log(`closed ${id}`)).catch(() => {});
     if (srv) await srv.close().catch(() => {});
     if (process.env.EVAL_KEEP) {
       opts.log(`kept ${repoRoot} and ${dataRoot}`);

@@ -1,0 +1,36 @@
+{
+  "type": "object",
+  "properties": {
+    "topic": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Lesson topic; also names the Anki deck."
+    },
+    "title": {
+      "description": "Only for a free lesson: the title, naming the insight. Ignored when the lesson is planned or existing.",
+      "type": "string",
+      "minLength": 1
+    },
+    "approach": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The approach in prose (markdown)."
+    },
+    "dag": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Mermaid \"graph TD\". Every node: N1[\"Nodo 1: complete Italian clause\"]; unconditional truths at the roots, goal at the sink."
+    },
+    "goal": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The learner's goal for the lesson."
+    }
+  },
+  "required": [
+    "topic",
+    "approach",
+    "dag",
+    "goal"
+  ]
+}

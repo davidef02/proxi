@@ -77,6 +77,12 @@ pub struct ManagerOptions {
     pub anki: AnkiClient,
     pub imports: ImportRegistry,
     pub jobs: Arc<dyn JobStarter>,
+    /// The pinned npm flag: the exercise tool runs with the same config as the route.
+    pub npm_bin: Option<PathBuf>,
+    /// The one-install registry shared with the routes, so a tool run and a UI run share `npm install`.
+    pub installs: crate::exercises::Installs,
+    /// One per server: the ONNX session and the vector cache load once.
+    pub semantic: Arc<crate::semantic::SemanticSearch>,
 }
 
 /// Interactive tools: their card is the representation, no chip.
@@ -119,6 +125,9 @@ struct SessionData {
     save_pending: bool,
     /// Deleted: a flush that runs late must not recreate the dir.
     deleted: bool,
+    /// The practice problem `problem` opened and `conclude` has not closed: in memory only, like
+    /// Node's `WeakMap` (a restart forgets it).
+    open_problem: Option<(String, Value)>,
     manager: Weak<Shared>,
 }
 
@@ -697,7 +706,8 @@ impl SessionData {
             .position(|item| item.get("id").and_then(Value::as_str) == Some(id))
     }
 
-    /// Appends, or merges into the stored item so its key order survives (Node mutates one object).
+    /// Node's `upsert`: an item already in the list is replaced (so its new key order wins), an
+    /// unknown one is appended.
     fn upsert(&mut self, item: Value) {
         let id = item.get("id").cloned().unwrap_or(Value::Null);
         let index = self
@@ -705,25 +715,11 @@ impl SessionData {
             .items
             .iter()
             .position(|existing| existing.get("id") == Some(&id));
-        let stored = match index {
-            Some(index) => {
-                if let (Some(existing), Some(incoming)) =
-                    (self.state.items[index].as_object_mut(), item.as_object())
-                {
-                    for (key, value) in incoming {
-                        existing.insert(key.clone(), value.clone());
-                    }
-                } else {
-                    self.state.items[index] = item;
-                }
-                self.state.items[index].clone()
-            }
-            None => {
-                self.state.items.push(item.clone());
-                item
-            }
-        };
-        self.notify(ServerEvent::Item { item: stored });
+        match index {
+            Some(index) => self.state.items[index] = item.clone(),
+            None => self.state.items.push(item.clone()),
+        }
+        self.notify(ServerEvent::Item { item });
     }
 
     fn notify(&mut self, event: ServerEvent) {
@@ -1150,6 +1146,20 @@ fn spread(item: Value, fields: Vec<(&str, Value)>) -> Value {
     Value::Object(full)
 }
 
+/// Node's `emit`, with the session lock already held.
+fn emit_locked(data: &mut SessionData, item: Value) -> String {
+    let id = match item.get("id").and_then(Value::as_str) {
+        Some(id) => id.to_string(),
+        None => engine::uuid_v4(),
+    };
+    let item = spread(
+        item,
+        vec![("id", json!(id)), ("at", json!(events::iso_now()))],
+    );
+    data.upsert(item);
+    id
+}
+
 impl tools::ToolHost for SessionToolHost {
     fn data_root(&self) -> &Path {
         &self.shared.opts.data_root
@@ -1253,16 +1263,71 @@ impl tools::ToolHost for SessionToolHost {
     }
 
     fn emit(&self, item: Value) -> String {
-        let id = match item.get("id").and_then(Value::as_str) {
-            Some(id) => id.to_string(),
-            None => engine::uuid_v4(),
-        };
-        let item = spread(
-            item,
-            vec![("id", json!(id)), ("at", json!(events::iso_now()))],
+        let mut guard = self.session.lock().expect("session lock");
+        emit_locked(&mut guard.data, item)
+    }
+
+    fn exercises(&self) -> Vec<Value> {
+        self.session
+            .lock()
+            .expect("session lock")
+            .data
+            .state
+            .exercises
+            .clone()
+    }
+
+    fn upsert_exercise(&self, info: Value) {
+        let mut guard = self.session.lock().expect("session lock");
+        let name = js::js_string(info.get("name"));
+        let mut list: Vec<Value> = guard
+            .data
+            .state
+            .exercises
+            .clone()
+            .into_iter()
+            .filter(|entry| js::js_string(entry.get("name")) != name)
+            .collect();
+        list.push(info.clone());
+        list.sort_by(|left, right| {
+            js::locale_compare(
+                &js::js_string(left.get("name")),
+                &js::js_string(right.get("name")),
+            )
+        });
+        guard.data.state.exercises = list.clone();
+        guard
+            .data
+            .notify(ServerEvent::Exercises { exercises: list });
+        emit_locked(
+            &mut guard.data,
+            json!({
+                "id": format!("exercise:{name}"),
+                "kind": "exercise",
+                "exercise": info,
+            }),
         );
-        self.session.lock().expect("session lock").data.upsert(item);
-        id
+    }
+
+    fn open_problem(&self, item: Value) -> Option<String> {
+        let mut guard = self.session.lock().expect("session lock");
+        let data = &mut guard.data;
+        if data.open_problem.is_some() {
+            return None;
+        }
+        let input = item.get("input").cloned().unwrap_or(Value::Null);
+        let id = emit_locked(data, item);
+        data.open_problem = Some((id.clone(), input));
+        Some(id)
+    }
+
+    fn take_problem(&self) -> Option<(String, Value)> {
+        self.session
+            .lock()
+            .expect("session lock")
+            .data
+            .open_problem
+            .take()
     }
 
     fn log_progress(&self, record: Map<String, Value>) -> Result<(), String> {
@@ -1291,6 +1356,22 @@ impl tools::ToolHost for SessionToolHost {
 
     fn start_map(&self, target: &str) -> Result<(), String> {
         self.shared.opts.jobs.start_map(target, &self.id)
+    }
+
+    fn run_config(&self) -> crate::exercises::RunConfig {
+        crate::exercises::default_run_config(self.shared.opts.npm_bin.as_deref())
+    }
+
+    fn installs(&self) -> crate::exercises::Installs {
+        self.shared.opts.installs.clone()
+    }
+
+    fn anki_url(&self) -> Option<String> {
+        Some(self.shared.opts.anki.url().to_string())
+    }
+
+    fn semantic(&self) -> Arc<crate::semantic::SemanticSearch> {
+        self.shared.opts.semantic.clone()
     }
 
     fn courses_changed(&self) {
@@ -1349,6 +1430,7 @@ fn make_session(
         finalised: HashMap::new(),
         save_pending: false,
         deleted: false,
+        open_problem: None,
         manager: Arc::downgrade(shared),
     };
     Arc::new(Mutex::new(Session { data, turns }))
@@ -2915,9 +2997,7 @@ mod tests {
         }
     }
 
-    /// AC4's other half: a dropped `/mcp` call cancels its own cards and nothing else.
-    #[tokio::test]
-    async fn cancel_requests_only_touches_the_ids_it_is_given() {
+    fn test_shared() -> (SessionManager, Arc<Shared>) {
         let shared = Arc::new(Shared {
             opts: ManagerOptions {
                 repo_root: PathBuf::from("repo"),
@@ -2943,11 +3023,24 @@ mod tests {
                 anki: AnkiClient::new("http://127.0.0.1:1").expect("anki client"),
                 imports: ImportRegistry::new(),
                 jobs: Arc::new(tools::NoJobs),
+                npm_bin: None,
+                installs: Default::default(),
+                semantic: Arc::new(crate::semantic::SemanticSearch::for_repo(
+                    Path::new("repo"),
+                    crate::embeddings::EmbeddingConfig::load(Path::new("repo"))
+                        .expect("embedding config"),
+                )),
             },
             sessions: Mutex::new(IndexMap::new()),
             sessions_touch_pending: AtomicBool::new(false),
         });
-        let manager = SessionManager(shared.clone());
+        (SessionManager(shared.clone()), shared)
+    }
+
+    /// AC4's other half: a dropped `/mcp` call cancels its own cards and nothing else.
+    #[tokio::test]
+    async fn cancel_requests_only_touches_the_ids_it_is_given() {
+        let (manager, shared) = test_shared();
         let session = make_session(
             &shared,
             saved_state(),
@@ -3018,5 +3111,56 @@ mod tests {
             matches!(receiver.await, Ok(Err(Cancelled))),
             "the call must wake with Cancelled"
         );
+    }
+
+    #[tokio::test]
+    async fn concurrent_upsert_exercise_keeps_both_entries() {
+        let (manager, shared) = test_shared();
+        let session = make_session(
+            &shared,
+            saved_state(),
+            "claude".to_string(),
+            None,
+            None,
+            false,
+        );
+        shared
+            .sessions
+            .lock()
+            .expect("sessions lock")
+            .insert("s".to_string(), session.clone());
+
+        let host = Arc::new(
+            manager
+                .tool_host("s", Default::default())
+                .expect("the session exists"),
+        );
+        let h1 = host.clone();
+        let h2 = host.clone();
+        let t1 = tokio::spawn(async move {
+            h1.upsert_exercise(json!({"name": "01-first"}));
+        });
+        let t2 = tokio::spawn(async move {
+            h2.upsert_exercise(json!({"name": "02-second"}));
+        });
+        t1.await.unwrap();
+        t2.await.unwrap();
+
+        let list = host.exercises();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0]["name"], json!("01-first"));
+        assert_eq!(list[1]["name"], json!("02-second"));
+
+        let guard = session.lock().expect("session lock");
+        assert_eq!(guard.data.state.exercises, list);
+        let item_ids: Vec<_> = guard
+            .data
+            .state
+            .items
+            .iter()
+            .filter_map(|it| it.get("id").and_then(Value::as_str))
+            .collect();
+        assert!(item_ids.contains(&"exercise:01-first"));
+        assert!(item_ids.contains(&"exercise:02-second"));
     }
 }

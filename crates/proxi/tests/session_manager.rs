@@ -18,9 +18,11 @@ use common::sessions::{
 use proxi::anki_client::AnkiClient;
 use proxi::anki_import::ImportRegistry;
 use proxi::claude::ClaudeBin;
+use proxi::embeddings::EmbeddingConfig;
 use proxi::events::EventBus;
 use proxi::limits::LimitsCache;
 use proxi::protocol::{ANKI_OPT_IN_QUESTION, SessionState, SessionStatus};
+use proxi::semantic::SemanticSearch;
 use proxi::sessions::{AttachmentUpload, HttpError, ManagerOptions, SessionManager};
 use proxi::tools::JobStarter;
 use serde_json::{Value, json};
@@ -100,6 +102,12 @@ fn options_for(
         anki: AnkiClient::new("http://127.0.0.1:1").expect("anki client"),
         imports: ImportRegistry::new(),
         jobs: Arc::new(proxi::tools::NoJobs),
+        npm_bin: None,
+        installs: Default::default(),
+        semantic: Arc::new(SemanticSearch::for_repo(
+            repo,
+            EmbeddingConfig::load(repo).expect("embedding config"),
+        )),
     }
 }
 

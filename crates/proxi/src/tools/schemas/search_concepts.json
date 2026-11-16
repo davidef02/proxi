@@ -1,0 +1,18 @@
+{
+  "type": "object",
+  "properties": {
+    "query": {
+      "type": "string",
+      "description": "What the concept is about, in Italian or English (words or a short phrase)."
+    },
+    "limit": {
+      "description": "Max results, default and cap 10.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10
+    }
+  },
+  "required": [
+    "query"
+  ]
+}

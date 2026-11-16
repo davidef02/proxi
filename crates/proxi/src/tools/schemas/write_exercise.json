@@ -1,0 +1,54 @@
+{
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^\\d{2}-[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "description": "Directory name under courses/<course>/exercises."
+    },
+    "instructions": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Markdown shown on the exercise card; also written to ISTRUZIONI.md."
+    },
+    "files": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "content"
+        ]
+      },
+      "description": "Paths relative to the exercise dir (.vue .js .ts .json .css .md)."
+    },
+    "hints": {
+      "description": "Progressive hints, weakest first (nudge, concept/API, near-solution). Italian markdown. The learner reveals them one at a time.",
+      "minItems": 2,
+      "maxItems": 4,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "final": {
+      "description": "True for the lesson's final semi-guided exercise.",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "name",
+    "instructions",
+    "files"
+  ]
+}

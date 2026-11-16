@@ -536,6 +536,47 @@ async fn response_body(response: Response) -> Value {
     }
 }
 
+/// One `/mcp/<session>` POST with the server's token; owned arguments so a blocking call can run
+/// detached while the test answers its card.
+async fn mcp_request(
+    client: Client,
+    url: String,
+    path: String,
+    body: String,
+    token: String,
+) -> Response {
+    client
+        .post(format!("{url}{path}"))
+        .header(CONTENT_TYPE, "application/json")
+        .header("x-learner-token", token)
+        .body(body)
+        .send()
+        .await
+        .unwrap_or_else(|error| panic!("POST {path}: {error}"))
+}
+
+/// Polls `GET /api/sessions/:id` every 50 ms until the blocking tool's card is pending (10 s cap),
+/// like the capture's `pendingCard`: the answer needs its live requestId.
+async fn pending_card(client: &Client, url: &str, session_id: &str) -> String {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let response = client
+            .get(format!("{url}/api/sessions/{session_id}"))
+            .send()
+            .await
+            .expect("GET session");
+        let state = body_json(response).await;
+        if let Some(id) = state["pendingRequestId"].as_str() {
+            return id.to_string();
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no pending card within 10 s: {state}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 /// AC1/AC2/AC6: the `/mcp` surface replayed from the Node capture (app/test/capture-mcp-golden.ts).
 ///
 /// Every case is the request the capture sent, against the same seeds: statuses, bodies and key order
@@ -703,6 +744,192 @@ async fn mcp_matches_the_node_golden() {
             &roots,
             &session_id,
         );
+    }
+
+    server.shutdown().await;
+}
+
+/// AC1/AC2/AC3/AC5: the whole registry replayed from the Node capture
+/// (app/test/capture-mcp-tools-golden.ts): one server and data root, a plan, a teach and a practice
+/// session, the blocking cards answered through `/api/sessions/:id/answer`.
+///
+/// Per case: status and body (key order too), then for a tools/call the data-folder changes after
+/// the board debounce and the session slice the tools touch.
+#[tokio::test(flavor = "multi_thread")]
+async fn mcp_tools_match_the_node_golden() {
+    require_fake_engine();
+    let golden = cli_golden::golden("mcp-tools");
+    assert_eq!(golden["route"].as_str(), Some("mcp-tools"), "golden route");
+
+    let dir = common::temp_dir("mcp-tools-parity");
+    let repo = dir.0.join("repo");
+    let data = dir.0.join("data");
+    fs::create_dir_all(&repo).expect("create repo");
+    fs::create_dir_all(&data).expect("create data");
+    write_seed(&repo, &golden["seed"]);
+    write_data_seed(&data, &golden["dataSeed"]);
+    // Rust's `load_template` has no module-dir fallback (Node's third path), so the temp repo gets
+    // the engine's template as an installed app has it next to the repo.
+    let template = common::repo_root()
+        .join("assets")
+        .join("lesson-template.html");
+    fs::create_dir_all(repo.join("assets")).expect("create the repo assets dir");
+    fs::copy(&template, repo.join("assets").join("lesson-template.html"))
+        .unwrap_or_else(|error| panic!("copy {}: {error}", template.display()));
+
+    let roots = Roots {
+        repo: root_variants(&repo),
+        data: root_variants(&data),
+    };
+
+    let options = fake_engine_options(&repo, &data);
+    let server = start(options).await.expect("start Rust server");
+    let client = Client::new();
+    let token = server.sessions.token();
+
+    for session in golden["sessions"].as_array().expect("sessions array") {
+        let label = session["name"].as_str().expect("session name");
+        let response = post(
+            &client,
+            &server,
+            "/api/sessions",
+            &session["createBody"].to_string(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK, "{label}: POST /api/sessions");
+        let created = body_json(response).await;
+        let session_id = created["id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{label}: no id in {created}"))
+            .to_string();
+        wait_for(&client, &server, &session_id, "idle").await;
+
+        for case in session["cases"].as_array().expect("cases array") {
+            let name = case["name"].as_str().expect("case name");
+            let request = &case["request"];
+            let path = request["path"]
+                .as_str()
+                .expect("case path")
+                .replace("<session>", &session_id);
+            let body = request["body"].to_string();
+            // Only a tools/call writes; the list cases leave no files or session slice to check.
+            let before = case.get("files").map(|_| cli_golden::snapshot(&data));
+
+            let reply = match case.get("answer") {
+                None => {
+                    let response = mcp_request(
+                        client.clone(),
+                        server.url.clone(),
+                        path,
+                        body,
+                        token.clone(),
+                    )
+                    .await;
+                    assert_eq!(
+                        u64::from(response.status().as_u16()),
+                        case["response"]["status"].as_u64().expect("golden status"),
+                        "{name}: status"
+                    );
+                    response_body(response).await
+                }
+                Some(answer) => {
+                    // The call waits on its card: send it detached, answer, then read the reply.
+                    let pending = tokio::spawn(mcp_request(
+                        client.clone(),
+                        server.url.clone(),
+                        path,
+                        body,
+                        token.clone(),
+                    ));
+                    let request_id = pending_card(&client, &server.url, &session_id).await;
+                    let mut payload = serde_json::Map::new();
+                    payload.insert("requestId".to_string(), json!(request_id));
+                    for (key, value) in answer.as_object().expect("answer object") {
+                        payload.insert(key.clone(), value.clone());
+                    }
+                    let response = post(
+                        &client,
+                        &server,
+                        &format!("/api/sessions/{session_id}/answer"),
+                        &Value::Object(payload).to_string(),
+                    )
+                    .await;
+                    assert_eq!(response.status(), StatusCode::OK, "{name}: POST answer");
+                    let response = pending.await.expect("the blocking call never finished");
+                    assert_eq!(
+                        u64::from(response.status().as_u16()),
+                        case["response"]["status"].as_u64().expect("golden status"),
+                        "{name}: status"
+                    );
+                    response_body(response).await
+                }
+            };
+
+            if name == "tools-list" {
+                let tools = &reply["result"]["tools"];
+                let expected = &case["response"]["body"]["result"]["tools"];
+                assert_eq!(tools, expected, "{name}: tools");
+                assert_eq!(
+                    serde_json::to_string(tools).expect("serialise Rust tools"),
+                    serde_json::to_string(expected).expect("serialise golden tools"),
+                    "{name}: key order"
+                );
+                continue;
+            }
+            assert_same(name, &reply, &case["response"]["body"], &roots, &session_id);
+
+            let Some(before) = before else { continue };
+            // The capture waits the board debounce out (300 ms) before its after-snapshot.
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            let after = cli_golden::snapshot(&data);
+            let mut files = cli_golden::changes(&before, &after);
+            files
+                .as_object_mut()
+                .expect("changes object")
+                .remove("courses/demo/progress.jsonl");
+            let expected = &case["files"];
+            if let Some(detail) = cli_golden::describe_files(expected, &files) {
+                panic!("{name}: files differ: {detail}");
+            }
+            assert_eq!(&files, expected, "{name}: files");
+
+            let response = client
+                .get(format!("{}/api/sessions/{session_id}", server.url))
+                .send()
+                .await
+                .unwrap_or_else(|error| panic!("{name}: GET session: {error}"));
+            assert_eq!(response.status(), StatusCode::OK, "{name}: GET session");
+            let state = body_json(response).await;
+            let items: Vec<Value> = state["items"]
+                .as_array()
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter(|item| {
+                            matches!(
+                                item["kind"].as_str(),
+                                Some("plan" | "curriculum" | "exercise" | "problem" | "notice")
+                            )
+                        })
+                        .cloned()
+                        .collect()
+                })
+                .unwrap_or_default();
+            let got = json!({
+                "lessonPath": state["lessonPath"].clone(),
+                "plan": state["plan"].clone(),
+                "pendingRequestId": state["pendingRequestId"].clone(),
+                "exercises": state["exercises"].clone(),
+                "items": items,
+            });
+            assert_same(
+                &format!("{name} session"),
+                &got,
+                &case["session"],
+                &roots,
+                &session_id,
+            );
+        }
     }
 
     server.shutdown().await;

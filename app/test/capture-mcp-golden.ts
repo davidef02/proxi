@@ -11,8 +11,21 @@ import { fakeClaude, startServer } from "./harness.ts";
 
 export const MCP_GOLDEN = "mcp";
 
-/** The lesson tools the Rust port serves (D11), in Node's order; out-of-scope tools stay unlisted. */
-export const IN_SCOPE = ["quiz", "ask", "write_node", "research", "visual", "demo", "finish_lesson", "read_lesson"];
+/** Every tool the Rust port serves, in Node's order: the whole list, nothing filtered (D11/D10, #21). */
+export const IN_SCOPE = [
+  "quiz",
+  "ask",
+  "propose_plan",
+  "write_node",
+  "research",
+  "visual",
+  "demo",
+  "finish_lesson",
+  "read_lesson",
+  "search_concepts",
+  "open_concept",
+  "browse_concepts",
+];
 
 /** The one lesson the golden continues: an existing-mode teach session reads it back from disk. */
 const LESSON_REL = "courses/demo/lessons/0001-prima-lezione.html";
@@ -150,7 +163,7 @@ async function seedLesson(): Promise<string> {
 }
 
 /** Changed, added and deleted files between two snapshots, text normalised; the progress log never joins the golden. */
-function diff(before: Map<string, string>, after: Map<string, string>): Record<string, string | null> {
+export function diff(before: Map<string, string>, after: Map<string, string>): Record<string, string | null> {
   const out: Record<string, string | null> = {};
   const names = [...new Set([...before.keys(), ...after.keys()])].sort();
   for (const name of names) {
@@ -163,7 +176,7 @@ function diff(before: Map<string, string>, after: Map<string, string>): Record<s
   return out;
 }
 
-async function post(base: string, pathname: string, body: string, token?: string): Promise<{ status: number; text: string }> {
+export async function post(base: string, pathname: string, body: string, token?: string): Promise<{ status: number; text: string }> {
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (token) headers["x-learner-token"] = token;
   const res = await fetch(base + pathname, { method: "POST", headers, body });
@@ -211,6 +224,13 @@ export async function captureMcpGolden(outDir: string = GOLDEN_DIR): Promise<str
       let body: unknown = sent.text === "" ? "" : normaliseSession(JSON.parse(sent.text), roots, id);
       if (c.name === "tools-list") {
         const r = body as { result: { tools: Array<{ name: string }> } };
+        // Every Node tool is ported now: the whole list must be IN_SCOPE, in Node's order. Nothing may hide silently.
+        const names = r.result.tools.map((t) => t.name);
+        const unexpected = names.filter((name) => !IN_SCOPE.includes(name));
+        if (unexpected.length) throw new Error(`tools-list: Node lists unported tools: ${unexpected.join(", ")}`);
+        if (names.join(",") !== IN_SCOPE.join(",")) {
+          throw new Error(`tools-list: Node order ${names.join(", ")} differs from IN_SCOPE ${IN_SCOPE.join(", ")}`);
+        }
         body = { ...r, result: { ...r.result, tools: r.result.tools.filter((t) => IN_SCOPE.includes(t.name)) }, filteredTo: IN_SCOPE };
       } else if (c.name === "unknown-tool") {
         // The Node list names the out-of-scope tools: pin only the error and its prefix (D11).
