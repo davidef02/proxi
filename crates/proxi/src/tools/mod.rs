@@ -106,8 +106,6 @@ pub trait ToolHost: Send + Sync {
     fn set_lesson(&self, lesson_path: String, node_id: Option<String>);
     /// Node's `getExercises`: the session's exercise list.
     fn exercises(&self) -> Vec<Value>;
-    /// Stores the list and notifies `{"type":"exercises","exercises":…}`.
-    fn set_exercises(&self, list: Vec<Value>);
     /// Node's `setExercises` + `emit(exercise:<name>)` under one lock: replaces or inserts `info`
     /// in the session's exercise list, sorted by name, and notifies `exercises` event.
     fn upsert_exercise(&self, info: Value);

@@ -274,11 +274,6 @@ fn track_json(track: &[(String, String)]) -> String {
     text
 }
 
-/// Replace/insert `info` in the session exercise list.
-fn upsert(host: &dyn ToolHost, info: Value) {
-    host.upsert_exercise(info);
-}
-
 async fn write_tool(input: Value, host: &dyn ToolHost) -> ToolOutcome {
     let course = match util::course_dir(host) {
         Ok(dir) => dir,
@@ -447,7 +442,7 @@ async fn write_tool(input: Value, host: &dyn ToolHost) -> ToolOutcome {
         );
         info.insert("final".to_string(), Value::Bool(final_));
     }
-    upsert(host, Value::Object(info));
+    host.upsert_exercise(Value::Object(info));
 
     util::json(&json!({
         "dir": dir,
@@ -508,7 +503,7 @@ async fn run_tool(input: Value, host: &dyn ToolHost) -> ToolOutcome {
         }
     }
     info.insert("lastRun".to_string(), res.clone());
-    upsert(host, Value::Object(info));
+    host.upsert_exercise(Value::Object(info));
 
     let (text, is_error) = run_text(&res);
     ToolOutcome { text, is_error }
@@ -1080,10 +1075,10 @@ mod tests {
         let h1 = host.clone();
         let h2 = host.clone();
         let t1 = tokio::spawn(async move {
-            upsert(&*h1, json!({"name": "01-first"}));
+            h1.upsert_exercise(json!({"name": "01-first"}));
         });
         let t2 = tokio::spawn(async move {
-            upsert(&*h2, json!({"name": "02-second"}));
+            h2.upsert_exercise(json!({"name": "02-second"}));
         });
         t1.await.unwrap();
         t2.await.unwrap();

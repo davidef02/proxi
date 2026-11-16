@@ -237,14 +237,6 @@ impl ToolHost for FakeHost {
         self.exercises.lock().expect("fake lock").clone()
     }
 
-    fn set_exercises(&self, list: Vec<Value>) {
-        *self.exercises.lock().expect("fake lock") = list.clone();
-        self.events
-            .lock()
-            .expect("fake lock")
-            .push(json!({ "type": "exercises", "exercises": list }));
-    }
-
     fn upsert_exercise(&self, info: Value) {
         let name = js::js_string(info.get("name"));
         let mut exercises = self.exercises.lock().expect("fake lock");
@@ -529,14 +521,22 @@ mod tests {
     }
 
     #[test]
-    fn set_exercises_stores_the_list_and_notifies() {
+    fn upsert_exercise_stores_the_list_notifies_and_emits() {
         let host = FakeHost::new(json!({"kind": "practice", "course": "demo"}));
-        let list = vec![json!({"name": "01-demo"})];
-        host.set_exercises(list.clone());
-        assert_eq!(host.exercises(), list);
+        let info = json!({"name": "01-demo"});
+        host.upsert_exercise(info.clone());
+        assert_eq!(host.exercises(), vec![info.clone()]);
         assert_eq!(
             host.events(),
-            vec![json!({"type": "exercises", "exercises": list})]
+            vec![json!({"type": "exercises", "exercises": vec![info.clone()]})]
+        );
+        assert_eq!(
+            host.items(),
+            vec![json!({
+                "id": "exercise:01-demo",
+                "kind": "exercise",
+                "exercise": info,
+            })]
         );
     }
 

@@ -1258,14 +1258,6 @@ impl tools::ToolHost for SessionToolHost {
             .clone()
     }
 
-    fn set_exercises(&self, list: Vec<Value>) {
-        let mut guard = self.session.lock().expect("session lock");
-        guard.data.state.exercises = list.clone();
-        guard
-            .data
-            .notify(ServerEvent::Exercises { exercises: list });
-    }
-
     fn upsert_exercise(&self, info: Value) {
         let mut guard = self.session.lock().expect("session lock");
         let name = js::js_string(info.get("name"));
