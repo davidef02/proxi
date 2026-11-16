@@ -1,0 +1,36 @@
+{
+  "type": "object",
+  "properties": {
+    "brief": {
+      "type": "string",
+      "minLength": 80,
+      "description": "Markdown in Italian with the sections ## Sintesi, ## Risultati, ## Fonti, ## Lacune."
+    },
+    "sources": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
+        "required": [
+          "title",
+          "url"
+        ]
+      },
+      "description": "Every page the brief relies on."
+    }
+  },
+  "required": [
+    "brief",
+    "sources"
+  ]
+}

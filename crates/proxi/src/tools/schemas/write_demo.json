@@ -1,0 +1,13 @@
+{
+  "type": "object",
+  "properties": {
+    "html": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The complete HTML document with inline CSS and JS."
+    }
+  },
+  "required": [
+    "html"
+  ]
+}

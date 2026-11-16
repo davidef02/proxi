@@ -1,0 +1,80 @@
+{
+  "type": "object",
+  "properties": {
+    "propositions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Local id \"p1\", \"p2\", … unique in this submission."
+          },
+          "name": {
+            "type": "string",
+            "description": "Short handle (2-6 words)."
+          },
+          "statement": {
+            "type": "string",
+            "description": "The full true statement, self-contained, one idea."
+          },
+          "aliases": {
+            "description": "Other ways of saying it.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "nodeId": {
+            "description": "Lesson node id the idea comes from.",
+            "type": "string"
+          },
+          "linkTo": {
+            "description": "Existing \"n_…\" id when this is the same idea: link instead of creating.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "statement"
+        ]
+      },
+      "description": "New ideas, plus existing ones being linked via linkTo."
+    },
+    "chains": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "premises": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "conclusion": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "premises",
+          "conclusion"
+        ]
+      },
+      "description": "Premises that jointly entail the conclusion. Ids: local \"pN\" or existing \"n_…\". [] when none."
+    },
+    "remove": {
+      "description": "Only for the isolated \"n_…\" ideas listed in the message: the ones that are not load-bearing leave the map.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "propositions",
+    "chains"
+  ]
+}

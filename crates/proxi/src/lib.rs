@@ -27,6 +27,7 @@ pub mod home;
 pub mod homepage;
 pub mod html_lesson;
 pub mod identity;
+pub mod jobs;
 pub mod js;
 pub mod knowledge;
 pub mod lesson;

@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "properties": {
+    "notes": {
+      "description": "Italian: what to try, in two or three sentences.",
+      "type": "string"
+    }
+  }
+}

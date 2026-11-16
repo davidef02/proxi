@@ -1,28 +1,41 @@
 //! JSON-RPC 2.0 MCP handler (port of app/server/mcp.ts).
 //!
 //! Plain JSON-RPC over POST, hand-written: the tool registry is the only thing that changes between
-//! sessions, so `handle` takes it as a slice and knows nothing about the tools themselves.
+//! calls, so `handle` (sessions, server name `"app"`) and `handle_as` (job tools, `"job"`) take it
+//! as a slice and know nothing about the tools themselves.
 
 use futures_util::future::join_all;
 use serde_json::{Map, Value, json};
 
 use crate::js;
-use crate::tools::{ToolDef, ToolHost, invoke};
+use crate::tools::{ToolDef, ToolHost, ToolImage, invoke};
 
 /// Node's tool-name prefix, kept for parity: nothing here builds engine tool names yet.
 pub const MCP_PREFIX: &str = "mcp__app__";
 
 /// The JSON-RPC answer, or `None` for a notification (HTTP 202).
 pub async fn handle(body: &Value, tools: &[&ToolDef], host: &dyn ToolHost) -> Option<Value> {
+    handle_as(body, tools, host, "app").await
+}
+
+/// Node's `handleMcp(body, tools, ctx, serverName)`: the job tools answer under `"job"`, the
+/// session tools under `"app"`.
+pub async fn handle_as(
+    body: &Value,
+    tools: &[&ToolDef],
+    host: &dyn ToolHost,
+    server_name: &str,
+) -> Option<Value> {
     let Value::Array(items) = body else {
-        return one(body, tools, host).await;
+        return one(body, tools, host, server_name).await;
     };
     // Node's `Promise.all`: all of them run, the notifications drop out of the answer.
-    let answers: Vec<Value> = join_all(items.iter().map(|item| one(item, tools, host)))
-        .await
-        .into_iter()
-        .flatten()
-        .collect();
+    let answers: Vec<Value> =
+        join_all(items.iter().map(|item| one(item, tools, host, server_name)))
+            .await
+            .into_iter()
+            .flatten()
+            .collect();
     if answers.is_empty() {
         None
     } else {
@@ -30,7 +43,12 @@ pub async fn handle(body: &Value, tools: &[&ToolDef], host: &dyn ToolHost) -> Op
     }
 }
 
-async fn one(req: &Value, tools: &[&ToolDef], host: &dyn ToolHost) -> Option<Value> {
+async fn one(
+    req: &Value,
+    tools: &[&ToolDef],
+    host: &dyn ToolHost,
+    server_name: &str,
+) -> Option<Value> {
     let object = req.as_object();
     let Some(method) = object
         .and_then(|object| object.get("method"))
@@ -45,7 +63,7 @@ async fn one(req: &Value, tools: &[&ToolDef], host: &dyn ToolHost) -> Option<Val
         return None;
     }
     match method {
-        "initialize" => Some(ok(id, initialized(req.get("params")))),
+        "initialize" => Some(ok(id, initialized(req.get("params"), server_name))),
         "ping" => Some(ok(id, json!({}))),
         "tools/list" => Some(ok(id, json!({ "tools": tool_listing(tools) }))),
         "tools/call" => Some(ok(id, call_tool(req, tools, host).await)),
@@ -55,7 +73,7 @@ async fn one(req: &Value, tools: &[&ToolDef], host: &dyn ToolHost) -> Option<Val
 }
 
 /// Node's `initialize` result: the client's protocol version wins, else the one this build speaks.
-fn initialized(params: Option<&Value>) -> Value {
+fn initialized(params: Option<&Value>, server_name: &str) -> Value {
     let version = params
         .and_then(Value::as_object)
         .and_then(|params| params.get("protocolVersion"))
@@ -65,7 +83,7 @@ fn initialized(params: Option<&Value>) -> Value {
     json!({
         "protocolVersion": version,
         "capabilities": {"tools": {}},
-        "serverInfo": {"name": "app", "version": "1"},
+        "serverInfo": {"name": server_name, "version": "1"},
     })
 }
 
@@ -100,6 +118,7 @@ async fn call_tool(req: &Value, tools: &[&ToolDef], host: &dyn ToolHost) -> Valu
                 available.join(", ")
             ),
             true,
+            &[],
         );
     };
     // `?? {}` in Node: missing and null arguments are an empty object.
@@ -114,18 +133,25 @@ async fn call_tool(req: &Value, tools: &[&ToolDef], host: &dyn ToolHost) -> Valu
                 issues.join("; ")
             ),
             true,
+            &[],
         ),
         Ok(input) => {
             let out = invoke(def, input, host).await;
-            content(out.text, out.is_error)
+            content(out.text, out.is_error, &out.images)
         }
     }
 }
 
-/// Node's `content(text, isError)`; no in-scope tool returns images.
-fn content(text: String, is_error: bool) -> Value {
+/// Node's `content(text, isError, images)`: the text first, then one `image` entry per image.
+fn content(text: String, is_error: bool, images: &[ToolImage]) -> Value {
+    let mut entries = vec![json!({"type": "text", "text": text})];
+    entries.extend(
+        images
+            .iter()
+            .map(|image| json!({"type": "image", "data": image.data, "mimeType": image.mime_type})),
+    );
     json!({
-        "content": [{"type": "text", "text": text}],
+        "content": entries,
         "isError": is_error,
     })
 }
@@ -265,6 +291,16 @@ mod tests {
         Box::pin(async { ToolOutcome::error("nope") })
     }
 
+    /// A job tool's render: one text line plus the PNG it produced.
+    fn images_run(_input: Value, _host: &dyn ToolHost) -> ToolFuture<'_> {
+        Box::pin(async {
+            ToolOutcome::ok("t").with_images(vec![ToolImage {
+                data: "QUJD".to_string(),
+                mime_type: "image/png".to_string(),
+            }])
+        })
+    }
+
     /// The `{jsonrpc, id, method, params}` body Node's `rpc` helper builds; `None` omits a key.
     fn request(method: &str, params: Option<Value>, id: Option<Value>) -> Value {
         let mut body = Map::new();
@@ -303,6 +339,21 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&r).unwrap(),
             r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabilities":{"tools":{}},"serverInfo":{"name":"app","version":"1"}}}"#
+        );
+    }
+
+    #[tokio::test]
+    async fn initialize_names_the_server_it_was_given() {
+        // The job tools answer under "job" (`/mcp/job`), the session tools under "app".
+        let host = host();
+        let fake = echo_tool();
+        let body = request("initialize", None, Some(json!(1)));
+        let r = handle_as(&body, &[&fake], &host, "job")
+            .await
+            .expect("a response");
+        assert_eq!(
+            serde_json::to_string(&r).unwrap(),
+            r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"job","version":"1"}}}"#
         );
     }
 
@@ -376,6 +427,31 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&r["result"]).unwrap(),
             r#"{"content":[{"type":"text","text":"got hi"}],"isError":false}"#
+        );
+    }
+
+    #[tokio::test]
+    async fn an_image_follows_the_text_in_the_content_list() {
+        // Node's `content(text, isError, images)`: one `image` entry per image, after the text.
+        let host = host();
+        let render = ToolDef {
+            name: "render_svg",
+            description: "renders an SVG",
+            schema: no_input_schema,
+            validate: accept,
+            run: images_run,
+            writes: false,
+        };
+        let r = rpc(
+            &host,
+            &render,
+            "tools/call",
+            Some(json!({"name": "render_svg"})),
+        )
+        .await;
+        assert_eq!(
+            serde_json::to_string(&r["result"]).unwrap(),
+            r#"{"content":[{"type":"text","text":"t"},{"type":"image","data":"QUJD","mimeType":"image/png"}],"isError":false}"#
         );
     }
 
