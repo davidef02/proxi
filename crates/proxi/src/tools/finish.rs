@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value, json};
 
 use crate::anki::sync::{self, SyncOptions};
-use crate::anki_client;
 use crate::js;
 use crate::lesson::artifact;
 use crate::lesson::reference::{self, CompileReferenceOptions};
@@ -301,7 +300,7 @@ fn auto_map(host: &dyn ToolHost, abs: Option<&Path>) {
 }
 
 /// Node's `syncLesson`: never fails, its text is the `anki` field of the result.
-async fn sync_lesson(host: &dyn ToolHost) -> String {
+pub(crate) async fn sync_lesson(host: &dyn ToolHost) -> String {
     let Some(rel) = host.lesson_path() else {
         return "No lesson artifact: nothing to sync.".to_string();
     };
@@ -312,9 +311,7 @@ async fn sync_lesson(host: &dyn ToolHost) -> String {
     let options = SyncOptions {
         lesson_path: Some(abs.to_string_lossy().into_owned()),
         base_dir: Some(host.data_root().to_string_lossy().into_owned()),
-        anki_url: std::env::var(anki_client::ANKI_URL_ENV)
-            .ok()
-            .filter(|url| !url.is_empty()),
+        anki_url: host.anki_url(),
         ..Default::default()
     };
     // AnkiConnect is a blocking client: it must not run on a tokio worker.

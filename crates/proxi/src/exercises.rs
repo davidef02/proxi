@@ -492,6 +492,15 @@ impl RunConfig {
     }
 }
 
+/// The runner the `/api/exercises/run` route and the `run_exercise` tool share: the pinned flag,
+/// then the env override.
+pub fn default_run_config(npm_bin: Option<&Path>) -> RunConfig {
+    RunConfig::new(
+        crate::child::node_on_path(),
+        npm_command(npm_bin, std::env::var_os("LEARNER_NPM_BIN").as_deref()),
+    )
+}
+
 /// The same shape Node returns for a run that never started: `error` comes last.
 pub fn run_failure(error: &str) -> Value {
     let mut map = Map::new();

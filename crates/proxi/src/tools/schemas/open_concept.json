@@ -1,0 +1,12 @@
+{
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Concept id from search_concepts or browse_concepts (n_...)."
+    }
+  },
+  "required": [
+    "id"
+  ]
+}

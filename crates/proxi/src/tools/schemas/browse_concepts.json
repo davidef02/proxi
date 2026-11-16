@@ -1,0 +1,13 @@
+{
+  "type": "object",
+  "properties": {
+    "course": {
+      "description": "Course slug; omit to list courses.",
+      "type": "string"
+    },
+    "lesson": {
+      "description": "Lesson id <course>/<NNNN-slug> or <NNNN-slug>; needs course.",
+      "type": "string"
+    }
+  }
+}

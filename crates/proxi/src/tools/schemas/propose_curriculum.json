@@ -1,0 +1,56 @@
+{
+  "type": "object",
+  "properties": {
+    "chapter": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Chapter (course) title."
+    },
+    "slug": {
+      "type": "string",
+      "description": "Course directory name under courses/, kebab-case."
+    },
+    "destination": {
+      "type": "string",
+      "minLength": 1,
+      "description": "1-2 sentences: where the learner ends up."
+    },
+    "mission": {
+      "description": "Full MISSION.md (Why / Success looks like / Constraints / Out of scope). Required when the course directory is new.",
+      "type": "string"
+    },
+    "lessons": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Names the insight, not the topic."
+          },
+          "plannedNodes": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "slug": {
+            "description": "Legacy only: file slug of an already-taught lesson whose name differs from its title. Normally omit.",
+            "type": "string",
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+          }
+        },
+        "required": [
+          "title"
+        ]
+      }
+    }
+  },
+  "required": [
+    "chapter",
+    "slug",
+    "destination",
+    "lessons"
+  ]
+}
