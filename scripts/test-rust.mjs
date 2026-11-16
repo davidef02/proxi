@@ -28,6 +28,8 @@ export const RUST_PORTED = [
   "app/test/api-engines.test.ts",
   "app/test/api-engine-models.test.ts",
   "app/test/eval-binary.test.ts",
+  "app/test/api-jobs.test.ts",
+  "app/test/api-extract.test.ts",
 ];
 
 export function rustTestEnv(base = process.env) {
