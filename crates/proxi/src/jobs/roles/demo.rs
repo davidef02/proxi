@@ -128,6 +128,17 @@ fn run_write_demo<'a>(input: Value, host: &'a dyn ToolHost) -> ToolFuture<'a> {
     })
 }
 
+fn mark_passed(job_id: &str, html: &str, passed: bool) -> bool {
+    let mut drafts = drafts().lock().expect("draft lock");
+    if let Some(draft) = drafts.get_mut(job_id) {
+        if draft.html == html {
+            draft.passed = passed;
+            return true;
+        }
+    }
+    false
+}
+
 fn run_run_demo<'a>(_input: Value, host: &'a dyn ToolHost) -> ToolFuture<'a> {
     Box::pin(async move {
         let Some(ctx) = host.job() else {
@@ -151,11 +162,7 @@ fn run_run_demo<'a>(_input: Value, host: &'a dyn ToolHost) -> ToolFuture<'a> {
         {
             Ok(run) => {
                 let passed = run.errors.is_empty();
-                if let Some(draft) = drafts().lock().expect("draft lock").get_mut(&job_id) {
-                    if draft.html == html {
-                        draft.passed = passed;
-                    }
-                }
+                mark_passed(&job_id, &html, passed);
                 let images = vec![ToolImage {
                     data: base64::engine::general_purpose::STANDARD.encode(&run.png),
                     mime_type: "image/png".to_string(),
@@ -498,16 +505,23 @@ mod tests {
         });
 
         // Wait until run_demo has opened a page (it is now running CLEAN)
+        let mut saw_open = false;
         for _ in 0..100 {
             if renderer.open_pages() > 0 {
+                saw_open = true;
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
+        assert!(saw_open, "expected page to be open during run_demo");
 
         // Overwrite draft with a new HTML before run_demo finishes and sets passed = true
         let new_html = "<!doctype html><body><p>nuovo</p></body>";
         call(&WRITE_DEMO, json!({"html": new_html}), &job_clone).await;
+        assert!(
+            renderer.open_pages() > 0,
+            "run_demo should still be in flight after overwrite"
+        );
 
         let out = run_handle.await.unwrap();
         assert!(!out.is_error, "clean run should pass: {}", out.text);

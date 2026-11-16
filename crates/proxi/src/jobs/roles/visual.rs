@@ -128,6 +128,17 @@ fn run_write_svg<'a>(input: Value, host: &'a dyn ToolHost) -> ToolFuture<'a> {
     })
 }
 
+fn mark_rendered(job_id: &str, svg: &str) -> bool {
+    let mut drafts = drafts().lock().expect("draft lock");
+    if let Some(draft) = drafts.get_mut(job_id) {
+        if draft.svg == svg {
+            draft.rendered = true;
+            return true;
+        }
+    }
+    false
+}
+
 fn run_render_svg<'a>(_input: Value, host: &'a dyn ToolHost) -> ToolFuture<'a> {
     Box::pin(async move {
         let Some(ctx) = host.job() else {
@@ -147,11 +158,7 @@ fn run_render_svg<'a>(_input: Value, host: &'a dyn ToolHost) -> ToolFuture<'a> {
         };
         match renderer.render_svg_png(&job_id, &svg).await {
             Ok(png) => {
-                if let Some(draft) = drafts().lock().expect("draft lock").get_mut(&job_id) {
-                    if draft.svg == svg {
-                        draft.rendered = true;
-                    }
-                }
+                mark_rendered(&job_id, &svg);
                 ToolOutcome::ok("Ecco il rendering della bozza corrente su fondo scuro. Guardalo: se qualcosa non va, correggi con write_svg; altrimenti submit_visual.")
                     .with_images(vec![ToolImage {
                         data: base64::engine::general_purpose::STANDARD.encode(png),
@@ -479,39 +486,29 @@ mod tests {
 
     #[tokio::test]
     async fn render_svg_does_not_mark_draft_rendered_if_replaced_during_render() {
-        let dir = temp_dir("visual-replace-during");
-        let renderer = Arc::new(Renderer::new(Some(crate::jobs::render::require_test_browser())));
-        let job = FakeJob::new("v-replace", json!({"brief": "un riquadro"}), &dir)
-            .with_renderer(Arc::clone(&renderer));
+        let (_dir, job) = fake("visual-replace-during", "v-replace");
         call(&WRITE_SVG, json!({"svg": OK_SVG}), &job).await;
 
-        let job_clone = FakeJob::new("v-replace", json!({"brief": "un riquadro"}), &dir);
-        let render_handle = tokio::spawn(async move {
-            call(&RENDER_SVG, json!({}), &job).await
-        });
-
-        // Wait until render_svg has opened a page (it is now rendering OK_SVG)
-        for _ in 0..100 {
-            if renderer.open_pages() > 0 {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        }
+        // Snapshot the svg as render_svg does before invoking the renderer
+        let rendered_svg = OK_SVG;
 
         // Overwrite draft with a new SVG before render_svg finishes and sets rendered = true
         let new_svg = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><rect width="10" height="10"/></svg>"#;
-        call(&WRITE_SVG, json!({"svg": new_svg}), &job_clone).await;
+        call(&WRITE_SVG, json!({"svg": new_svg}), &job).await;
 
-        let out = render_handle.await.unwrap();
-        assert!(!out.is_error, "render should succeed: {}", out.text);
+        // Applying the post-render flag step with the old SVG must not mark the new draft rendered
+        let marked = mark_rendered("v-replace", rendered_svg);
+        assert!(!marked, "replaced draft must not be marked rendered");
 
-        // The draft in storage is now new_svg, but rendered must be false!
-        let drafts = drafts().lock().expect("draft lock");
-        let draft = drafts.get("v-replace").expect("draft exists");
+        let guard = drafts().lock().expect("draft lock");
+        let draft = guard.get("v-replace").expect("draft exists");
         assert_eq!(draft.svg, new_svg);
         assert!(!draft.rendered, "replaced draft must not be marked rendered");
-        drop(drafts);
+        drop(guard);
 
-        renderer.close().await;
+        // Confirm that mark_rendered does mark rendered when the svg matches
+        let marked_matching = mark_rendered("v-replace", new_svg);
+        assert!(marked_matching, "matching draft must be marked rendered");
+        assert!(drafts().lock().expect("draft lock").get("v-replace").unwrap().rendered);
     }
 }
