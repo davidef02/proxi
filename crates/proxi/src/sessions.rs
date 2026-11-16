@@ -706,7 +706,8 @@ impl SessionData {
             .position(|item| item.get("id").and_then(Value::as_str) == Some(id))
     }
 
-    /// Appends, or merges into the stored item so its key order survives (Node mutates one object).
+    /// Node's `upsert`: an item already in the list is replaced (so its new key order wins), an
+    /// unknown one is appended.
     fn upsert(&mut self, item: Value) {
         let id = item.get("id").cloned().unwrap_or(Value::Null);
         let index = self
@@ -714,25 +715,11 @@ impl SessionData {
             .items
             .iter()
             .position(|existing| existing.get("id") == Some(&id));
-        let stored = match index {
-            Some(index) => {
-                if let (Some(existing), Some(incoming)) =
-                    (self.state.items[index].as_object_mut(), item.as_object())
-                {
-                    for (key, value) in incoming {
-                        existing.insert(key.clone(), value.clone());
-                    }
-                } else {
-                    self.state.items[index] = item;
-                }
-                self.state.items[index].clone()
-            }
-            None => {
-                self.state.items.push(item.clone());
-                item
-            }
-        };
-        self.notify(ServerEvent::Item { item: stored });
+        match index {
+            Some(index) => self.state.items[index] = item.clone(),
+            None => self.state.items.push(item.clone()),
+        }
+        self.notify(ServerEvent::Item { item });
     }
 
     fn notify(&mut self, event: ServerEvent) {

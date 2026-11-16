@@ -22,6 +22,9 @@ use std::sync::Arc;
 use serde_json::{Map, Value};
 use tokio::sync::oneshot;
 
+use crate::course_data;
+use crate::js;
+
 pub mod anki;
 pub mod ask;
 pub mod board;
@@ -166,85 +169,210 @@ pub async fn invoke(def: &ToolDef, input: Value, host: &dyn ToolHost) -> ToolOut
     out
 }
 
-/// The tools a session of this kind may call, in Node's order (`toolsFor` in `tools/index.ts`),
-/// minus the ones this build does not serve (D11: they are not listed at all).
+/// The tools a session of this kind may call, in Node's order (`toolsFor` in `tools/index.ts`).
 ///
-/// `data_root` is where the exercise tools would look for their package: no such tool is served
-/// yet, so it is only passed through for the day they land.
-pub fn tools_for(config: &Map<String, Value>, _data_root: &Path) -> Vec<&'static ToolDef> {
-    let lesson: Vec<&'static ToolDef> = vec![
-        &quiz::TOOL,
-        &ask::TOOL,
-        &node::TOOL,
-        &dispatch::RESEARCH,
-        &dispatch::VISUAL,
-        &dispatch::DEMO,
-        &finish::TOOL,
-        &lessontext::TOOL,
-    ];
-    match config.get("kind").and_then(Value::as_str) {
-        // `[quiz, ask, propose_curriculum, research]` plus the shared `read_lesson`.
+/// Exercise tools join only when the course has an `exercises/package.json`; the concept tools are
+/// shared by every kind. Node's `raising` wrapper is `invoke` here.
+pub fn tools_for(config: &Map<String, Value>, data_root: &Path) -> Vec<&'static ToolDef> {
+    let course = js::js_string(config.get("course"));
+    let has_exercises = course_data::valid_course(&course)
+        && data_root
+            .join("courses")
+            .join(&course)
+            .join("exercises")
+            .join("package.json")
+            .exists();
+    let exercise: Vec<&'static ToolDef> = if has_exercises {
+        vec![&exercise::WRITE, &exercise::RUN]
+    } else {
+        Vec::new()
+    };
+    let mut tools: Vec<&'static ToolDef> = match config.get("kind").and_then(Value::as_str) {
         Some("plan") => vec![
             &quiz::TOOL,
             &ask::TOOL,
+            &curriculum::TOOL,
             &dispatch::RESEARCH,
-            &lessontext::TOOL,
         ],
-        // `[quiz, ask, problem, conclude, research, visual, …]` plus the shared `read_lesson`.
-        Some("practice") => vec![
-            &quiz::TOOL,
-            &ask::TOOL,
-            &dispatch::RESEARCH,
-            &dispatch::VISUAL,
-            &lessontext::TOOL,
-        ],
+        Some("practice") => {
+            let mut list = vec![
+                &quiz::TOOL,
+                &ask::TOOL,
+                &practice::PROBLEM,
+                &practice::CONCLUDE,
+                &dispatch::RESEARCH,
+                &dispatch::VISUAL,
+            ];
+            list.extend(exercise);
+            list
+        }
         // Node's `default`: the lesson tools, whatever `kind` is missing or unknown.
-        _ => lesson,
-    }
+        _ => {
+            let mut list = vec![
+                &quiz::TOOL,
+                &ask::TOOL,
+                &plan::TOOL,
+                &node::TOOL,
+                &dispatch::RESEARCH,
+                &dispatch::VISUAL,
+                &dispatch::DEMO,
+            ];
+            if js::truthy(config.get("ankiOptIn")) {
+                list.push(&anki::TOOL);
+            }
+            list.extend(exercise);
+            list.push(&finish::TOOL);
+            list
+        }
+    };
+    tools.extend([
+        &lessontext::TOOL,
+        &concepts::SEARCH,
+        &concepts::OPEN,
+        &concepts::BROWSE,
+    ]);
+    tools
 }
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use serde_json::json;
 
     use super::*;
+    use crate::tools::fake;
 
-    fn names(config: Value) -> Vec<&'static str> {
+    /// A temp data root; `package` writes `courses/demo/exercises/package.json` like Node's fixture
+    /// repo has it.
+    fn data_root(package: bool) -> fake::TempDir {
+        let dir = fake::temp_dir("registry");
+        if package {
+            let exercises = dir.join("courses").join("demo").join("exercises");
+            fs::create_dir_all(&exercises).expect("create the exercises dir");
+            fs::write(exercises.join("package.json"), "{\n  \"name\": \"demo\"\n}\n")
+                .expect("write the exercises package");
+        }
+        dir
+    }
+
+    fn names(config: Value, data: &Path) -> Vec<&'static str> {
         let config = config.as_object().expect("a session config").clone();
-        tools_for(&config, Path::new("/data"))
+        tools_for(&config, data)
             .into_iter()
             .map(|def| def.name)
             .collect()
     }
 
     #[test]
-    fn the_registry_is_nodes_list_without_the_out_of_scope_tools() {
-        // The lesson tools of `toolsOf`, in Node's order, then the shared `read_lesson`.
+    fn selects_by_kind_anki_opt_in_and_exercises_package() {
+        let with_package = data_root(true);
         assert_eq!(
-            names(json!({"kind": "teach", "course": "demo"})),
+            names(
+                json!({"kind": "teach", "course": "demo", "ankiOptIn": false}),
+                &with_package
+            ),
             [
                 "quiz",
                 "ask",
+                "propose_plan",
                 "write_node",
                 "research",
                 "visual",
                 "demo",
+                "write_exercise",
+                "run_exercise",
                 "finish_lesson",
-                "read_lesson"
+                "read_lesson",
+                "search_concepts",
+                "open_concept",
+                "browse_concepts"
             ]
         );
-        // A practice session has no write_node, demo or finish_lesson in Node either.
+
+        // The Anki tool sits right after `demo`, before the exercise pair.
+        let with_anki = names(json!({"kind": "teach", "course": "demo", "ankiOptIn": true}), &with_package);
+        assert_eq!(with_anki.len(), 15, "{with_anki:?}");
+        let demo = with_anki
+            .iter()
+            .position(|name| *name == "demo")
+            .expect("demo is listed");
+        assert_eq!(with_anki.get(demo + 1), Some(&"sync_anki"), "{with_anki:?}");
+
         assert_eq!(
-            names(json!({"kind": "practice", "course": "demo"})),
-            ["quiz", "ask", "research", "visual", "read_lesson"]
+            names(json!({"kind": "plan", "course": "demo"}), &with_package),
+            [
+                "quiz",
+                "ask",
+                "propose_curriculum",
+                "research",
+                "read_lesson",
+                "search_concepts",
+                "open_concept",
+                "browse_concepts"
+            ]
         );
-        // The plan tools: propose_curriculum is out of scope, read_lesson is shared.
         assert_eq!(
-            names(json!({"kind": "plan", "course": "demo"})),
-            ["quiz", "ask", "research", "read_lesson"]
+            names(json!({"kind": "practice", "course": "demo"}), &with_package),
+            [
+                "quiz",
+                "ask",
+                "problem",
+                "conclude",
+                "research",
+                "visual",
+                "write_exercise",
+                "run_exercise",
+                "read_lesson",
+                "search_concepts",
+                "open_concept",
+                "browse_concepts"
+            ]
         );
-        // A missing kind falls into Node's `default` branch.
-        assert_eq!(names(json!({})), names(json!({"kind": "teach"})));
-        assert_eq!(names(json!({"kind": "nope"})), names(json!({"kind": "teach"})));
+
+        // No package: the exercise pair drops out, the rest keeps Node's order.
+        let without = data_root(false);
+        let teach = names(json!({"kind": "teach", "course": "demo"}), &without);
+        assert!(!teach.contains(&"write_exercise"), "{teach:?}");
+        assert!(!teach.contains(&"run_exercise"), "{teach:?}");
+        assert_eq!(
+            names(json!({"kind": "practice", "course": "demo"}), &without),
+            [
+                "quiz",
+                "ask",
+                "problem",
+                "conclude",
+                "research",
+                "visual",
+                "read_lesson",
+                "search_concepts",
+                "open_concept",
+                "browse_concepts"
+            ]
+        );
+    }
+
+    #[test]
+    fn missing_and_unknown_kinds_fall_into_the_lesson_tools() {
+        let data = data_root(true);
+        let teach = names(json!({"kind": "teach", "course": "demo"}), &data);
+        assert_eq!(names(json!({"course": "demo"}), &data), teach);
+        assert_eq!(names(json!({"kind": "nope", "course": "demo"}), &data), teach);
+    }
+
+    #[test]
+    fn the_concept_tools_are_listed_for_every_session_kind() {
+        let data = data_root(true);
+        for config in [
+            json!({"kind": "teach", "course": "demo"}),
+            json!({"kind": "teach", "course": "lezioni-singole", "target": {"mode": "free"}}),
+            json!({"kind": "plan", "course": "demo", "chapterTitle": "Demo"}),
+            json!({"kind": "practice", "course": "demo"}),
+        ] {
+            let listed = names(config.clone(), &data);
+            for name in ["search_concepts", "open_concept", "browse_concepts"] {
+                assert!(listed.contains(&name), "{name} missing for {config}");
+            }
+        }
     }
 }
