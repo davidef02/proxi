@@ -1,0 +1,60 @@
+{
+  "schema": 1,
+  "app": "electron+rust",
+  "date": "2026-11-17T20:29:38.688Z",
+  "commit": "e807c5429016f25967123352c69b87032e8a99f2",
+  "base_commit": "fff7f04152c686c854cd42efd29ffb0f567bb490",
+  "dirty": true,
+  "machine": {
+    "cpu": "AMD Ryzen 7 5700X 8-Core Processor",
+    "cores": 16,
+    "ram_gb": 32
+  },
+  "os": {
+    "platform": "win32",
+    "release": "10.0.26100",
+    "version": "Windows 11 IoT Enterprise LTSC 2024",
+    "arch": "x64"
+  },
+  "runtime": {
+    "electron": "45.0.0"
+  },
+  "method": {
+    "fixture": "demo",
+    "open_hash": "#/c/demo",
+    "settle_ms": 10000,
+    "warmup_runs": 1,
+    "ram_metric": "Win32 WorkingSetPrivate summed over the Electron process tree (MB = 2^20 bytes)",
+    "interactive": "[data-testid=next-action] visible and enabled on #/c/demo",
+    "cold_start": "launch to interactive, prebuilt UI"
+  },
+  "runs": [
+    {
+      "ram_idle_mb": 169.6,
+      "cold_start_ms": 777,
+      "processes": 7
+    },
+    {
+      "ram_idle_mb": 173,
+      "cold_start_ms": 740,
+      "processes": 7
+    },
+    {
+      "ram_idle_mb": 170.1,
+      "cold_start_ms": 716,
+      "processes": 7
+    },
+    {
+      "ram_idle_mb": 161.8,
+      "cold_start_ms": 737,
+      "processes": 7
+    },
+    {
+      "ram_idle_mb": 170.3,
+      "cold_start_ms": 741,
+      "processes": 7
+    }
+  ],
+  "ram_idle_mb": 170.1,
+  "cold_start_ms": 740
+}
