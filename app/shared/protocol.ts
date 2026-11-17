@@ -1,4 +1,4 @@
-// The one contract between the server (app/server) and the web UI (app/web).
+// The one contract between the server (crates/proxi) and the web UI (app/web).
 // Types only, plus a few constants. Both sides import this file; change it deliberately.
 import { DATA_DIR_NAME } from "./identity.mjs";
 import type { CognitiveNodePayload, CognitiveStepPayload, FullLessonDocument, PedagogicalTier, SintesiDocument, SintesiNode, SintesiMisconception } from "../../extensions/html-lesson.ts";
@@ -582,7 +582,7 @@ export const DATA_REPO: string = DATA_DIR_NAME;
 export const DRIVE_FOLDER: string = DATA_DIR_NAME;
 
 // ───────────────────────────── settings ─────────────────────────────
-// Stored in <repo>/.learner/settings.json (runtime, gitignored). Read with readSettings() (app/server/settings.ts).
+// Stored in <repo>/.learner/settings.json (runtime, gitignored). Read by the Rust server (crates/proxi/src/settings.rs).
 
 export const PROVIDERS = ["claude", "agy", "opencode"] as const;
 export type Provider = (typeof PROVIDERS)[number];

@@ -17,7 +17,7 @@ const BASE_SHA = "b".repeat(40);
 /** A document that passes validateBaseline; individual tests break one field at a time. */
 const validBaseline = () => ({
   schema: 1,
-  app: "electron+node",
+  app: "electron+rust",
   date: "2026-11-12T10:00:00.000Z",
   commit: SHA,
   base_commit: BASE_SHA,
@@ -109,6 +109,7 @@ test("buildBaseline: medians of the runs, key order, and a valid document", asyn
   const { buildBaseline, validateBaseline } = await bench();
   const runs = validBaseline().runs;
   const baseline = buildBaseline({
+    app: "electron+rust",
     runs,
     date: "2026-11-12T10:00:00.000Z",
     commit: SHA,
@@ -119,6 +120,7 @@ test("buildBaseline: medians of the runs, key order, and a valid document", asyn
     electron: "45.0.0",
     warmupRuns: 1,
   });
+  assert.equal(baseline.app, "electron+rust");
   assert.equal(baseline.ram_idle_mb, 305.2);
   assert.equal(baseline.cold_start_ms, 2100);
   assert.deepEqual(Object.keys(baseline), [
@@ -309,6 +311,7 @@ test("validateCompareFile: accepts a baseline with any run count", async () => {
   const { buildBaseline, validateCompareFile } = await bench();
   assert.deepEqual(validateCompareFile(validBaseline()), []);
   const one = buildBaseline({
+    app: "electron+rust",
     runs: [validBaseline().runs[0]],
     date: "2026-11-12T10:00:00.000Z",
     commit: SHA,

@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
-import { MockAnki } from "../../tests/mock-anki.ts";
+import { MockAnki } from "./mock-anki.ts";
 import { startServer, type TestServer } from "./harness.ts";
 
 const FIXTURE = path.join(import.meta.dirname, "fixtures", "anki", "import-progress.jsonl");

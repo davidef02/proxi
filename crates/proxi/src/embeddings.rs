@@ -12,7 +12,7 @@ use sha1::{Digest, Sha1};
 pub const MODEL_FILE: [&str; 4] = ["app", "server", "graph", "embedding-model.json"];
 
 // The same file, compiled in: a temp repo (tests) has no model file to read.
-const BUNDLED_MODEL_FILE: &str = include_str!("../../../app/server/graph/embedding-model.json");
+const BUNDLED_MODEL_FILE: &str = include_str!("embedding-model.json");
 
 /// The model file, also read by Node (`app/server/graph/embeddings.ts`), which throws at import.
 #[derive(Debug, Clone, PartialEq)]

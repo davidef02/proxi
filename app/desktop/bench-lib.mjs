@@ -52,10 +52,10 @@ $rows = @(Get-CimInstance Win32_PerfRawData_PerfProc_Process | Where-Object { $t
 ConvertTo-Json -InputObject $rows -Compress`;
 }
 
-export function buildBaseline({ runs, date, commit, baseCommit, dirty, machine, os, electron, warmupRuns }) {
+export function buildBaseline({ app, runs, date, commit, baseCommit, dirty, machine, os, electron, warmupRuns }) {
   return {
     schema: 1,
-    app: "electron+node",
+    app,
     date,
     commit,
     base_commit: baseCommit ?? null,

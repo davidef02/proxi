@@ -107,7 +107,7 @@ async function status(server: TestServer): Promise<SyncStatusBody> {
   return (await r.json()) as SyncStatusBody;
 }
 
-/** The loopback callback page of app/server/sync/service.ts, escaped the same way. */
+/** The loopback callback page of crates/proxi/src/sync/service.rs, escaped the same way. */
 function page(text: string): string {
   return (
     `<!doctype html><html lang="it"><head><meta charset="utf-8"><title>Proxi</title></head><body>` +

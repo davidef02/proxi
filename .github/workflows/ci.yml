@@ -21,13 +21,11 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npm run typecheck
       - run: npm run typecheck:app
-      - run: npm test
-      - run: npm run app:build # test:app expects app/web/dist
-      - run: npm run test:app
       - run: rustup toolchain install stable --profile minimal && rustup default stable
       - run: cargo build --release --locked
+      - run: npm run app:build # test:app expects app/web/dist
+      - run: npm run test:app # needs the binary built first
       - run: npm run test:rust # ported HTTP/SSE tests against target/release/proxi
       # also the test browser of the Rust render tests (PROXI_TEST_BROWSER)
       - run: npx playwright install --with-deps chromium

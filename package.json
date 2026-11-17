@@ -7,21 +7,10 @@
   "type": "module",
   "scripts": {
     "postinstall": "node scripts/fetch-embedding-model.mjs",
-    "test": "node --import tsx --test tests/**/*.test.ts",
-    "test:watch": "node --import tsx --test --watch tests/**/*.test.ts",
-    "typecheck": "tsc --noEmit",
-    "lesson": "node --import tsx extensions/html-lesson.ts",
-    "anki": "node --import tsx extensions/anki-sync.ts",
-    "home": "node --import tsx extensions/homepage.ts",
-    "data": "node --import tsx extensions/data-root.ts",
-    "embed-bench": "node --import tsx extensions/embed-bench.ts",
-    "app": "vite build --config app/web/vite.config.ts && node --import tsx app/server/main.ts",
-    "app:serve": "node --import tsx app/server/main.ts",
     "app:web": "vite --config app/web/vite.config.ts",
     "app:build": "vite build --config app/web/vite.config.ts",
     "test:app": "node --import tsx --test app/test/*.test.ts",
     "test:rust": "node scripts/test-rust.mjs",
-    "golden:capture": "node --import tsx app/test/capture-golden.ts && node --import tsx app/test/capture-lesson-golden.ts && node --import tsx app/test/capture-anki-golden.ts && node --import tsx app/test/capture-mcp-golden.ts && node --import tsx app/test/capture-mcp-tools-golden.ts && node --import tsx app/test/capture-jobs-golden.ts",
     "typecheck:app": "tsc -p app/tsconfig.json --noEmit",
     "e2e": "playwright test -c app/e2e/playwright.config.ts",
     "eval": "node --import tsx app/eval/run.ts",
@@ -29,7 +18,7 @@
     "desktop:install": "node app/desktop/install-shortcuts.mjs",
     "desktop:uninstall": "node app/desktop/install-shortcuts.mjs --uninstall",
     "desktop:smoke": "node app/desktop/smoke.mjs",
-    "bench:baseline": "node app/desktop/bench-baseline.mjs"
+    "bench:baseline": "node app/desktop/bench-baseline.mjs --out docs/benchmark-rust.json --compare docs/benchmark-baseline.json"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.1",

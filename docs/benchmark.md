@@ -1,12 +1,13 @@
 # Benchmark baseline
 
-`docs/benchmark-baseline.json` is the Electron + Node baseline for M05 and M06. Compare a run only with a baseline
+`docs/benchmark-rust.json` is the Electron + Rust baseline for M05 and M06. Compare a run only with a baseline
 generated on the same machine: the `machine` and `os` fields record what it ran on.
 
 ## Metric
 
 Idle RAM is the sum of the Windows Private Working Set (`WorkingSetPrivate`, from
-`Win32_PerfRawData_PerfProc_Process`) over the Electron main process and all its descendants. The driver samples it
+`Win32_PerfRawData_PerfProc_Process`) over the Electron main process and all its descendants — including the
+spawned `proxi` backend. The driver samples it
 `10 s` after the course page becomes interactive. MB = bytes / 2^20 (1 decimal). `app.getAppMetrics()` is used only
 to check that every Electron process is inside the sampled tree; its `privateBytes` and `workingSetSize` are never
 summed.
@@ -32,7 +33,8 @@ On Windows, with other heavy apps closed (about 2 minutes):
 npm run bench:baseline
 ```
 
-This writes `docs/benchmark-baseline.json`. To check repeatability, run twice and compare the medians:
+This writes `docs/benchmark-rust.json` and compares it against the committed reference
+`docs/benchmark-baseline.json`, printing the drift. To check repeatability, run twice and compare the medians:
 
 ```bash
 npm run bench:baseline -- --out <tmp>/first.json

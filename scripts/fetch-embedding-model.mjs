@@ -1,7 +1,7 @@
 // Downloads the embedding model into .learner/models so search works offline afterwards.
 // Layout used by transformers 4.3.2 (both env.cacheDir and env.localModelPath):
 // <dir>/<model>/{config.json, tokenizer*, onnx/*.onnx}. The idempotence check below
-// must match the one in app/server/graph/embeddings.ts modelPresent().
+// must match the one in crates/proxi/src/embeddings.rs model_file().
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,7 +33,7 @@ async function download(cfg) {
 }
 
 try {
-  const cfg = JSON.parse(fs.readFileSync(path.join(ROOT, "app/server/graph/embedding-model.json"), "utf8"));
+  const cfg = JSON.parse(fs.readFileSync(path.join(ROOT, "crates/proxi/src/embedding-model.json"), "utf8"));
   if (process.env[SKIP_MODEL_ENV] === "1") {
     console.log(`${APP_NAME}: ${SKIP_MODEL_ENV}=1, embedding model download skipped`);
   } else if (!present(cfg)) {

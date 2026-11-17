@@ -2,7 +2,7 @@
  * Local fake HTTP servers for the external services, shared by the Node and binary test modes.
  */
 import * as http from "node:http";
-import { MockAnki } from "../../tests/mock-anki.ts";
+import { MockAnki } from "./mock-anki.ts";
 
 export interface RecordedRequest {
   method: string;

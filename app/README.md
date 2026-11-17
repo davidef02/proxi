@@ -18,9 +18,6 @@ PATH and creates the "Proxi" shortcuts (Start menu and Desktop). The window rebu
 sources changed, so after a `git pull` you just reopen it. Closing the window stops every engine process it
 started. Details: `docs/desktop.md`.
 
-Browser instead: `npm run app` (build + http://127.0.0.1:4317) or `npm run app:serve`; stop with Ctrl+C.
-Dev: `npm run app:serve` + `npm run app:web` (Vite on :5173 with proxy).
-
 ## Use
 
 - **Mappa** (home) is LearnHarness's knowledge map: the true ideas of every lesson as propositions, linked by
@@ -64,11 +61,11 @@ rest of Proxi, which is distributed under the same licence (root `LICENSE` and `
 ## Semantic concept search
 
 The tutor's concept search (`search_concepts`) ranks concepts by meaning, in Italian or English, with a local
-multilingual embedding model (`Xenova/paraphrase-multilingual-MiniLM-L12-v2`; model, dtype and thresholds live in
-`app/server/graph/embedding-model.json`). `npm install` downloads it once into `.learner/models`
+multilingual embedding model (`Xenova/paraphrase-multilingual-MiniLM-L12-v2`; model, dtype and thresholds are
+compiled into the `proxi` binary). `npm install` downloads it once into `.learner/models`
 (about 129 MB); after that search runs offline. With no model on disk, search falls back to lexical
 matching and says so in the result (`(Semantic search unavailable: …)`); the app retries the download
-in the background at start. `PROXI_SKIP_MODEL=1` skips the download, and `npm run embed-bench`
+in the background at start. `PROXI_SKIP_MODEL=1` skips the download, and `proxi embed-bench`
 re-runs the benchmark to revisit the choice.
 
 The in-app update sets `PROXI_SKIP_MODEL=1` for its `npm install`, so the download never eats its
@@ -86,7 +83,6 @@ time budget: the app fetches the model in the background after the restart.
 | `LEARNER_ADD_DIRS` | `[<parent of repo>]` | extra read-only dirs for the teacher (work repos) |
 | `LEARNER_NPM_BIN` | `npm` | tests: a node script run instead of `npm install` when an exercise's dependencies are missing; the Rust binary also takes `--npm-bin <exe>` (an npm-like executable, wins over the env) and needs `node` on PATH to run exercises |
 | `LEARNER_ANKI_URL` | `http://127.0.0.1:8765` | AnkiConnect |
-| `LEARNER_NO_OPEN` | unset | `1` = don't open the browser |
 
 ## Data and sync
 
@@ -105,16 +101,16 @@ Sync is chosen in Settings → Sincronizzazione, one provider at a time:
 
 Each sync is a manifest diff: only changed files move, deletions propagate and land in `.learner/trash/<ms>/` (kept
 30 days), and a conflict keeps the losing copy in `.learner/drive-conflicts/`. More than 30% of files deleted at once
-stops the pass until you confirm. The tokens are in `.learner/secrets.json`: encrypted with Electron `safeStorage` in
-the desktop app; plaintext under plain Node (the UI shows a warning). They are never written under `dataRoot`.
+stops the pass until you confirm. The tokens live in the OS keychain (managed by the `proxi` binary);
+a legacy `.learner/secrets.json` is migrated to the keychain on first use. They are never written under `dataRoot`.
 
 Human prerequisites (once, by the owner of the app):
 
 - **GitHub**: register an OAuth App with **Device flow** enabled; put its Client ID in the constant
-  `GITHUB_CLIENT_ID` in `app/server/sync/github.ts`, or set `githubClientId` in `.learner/settings.json`.
+  `GITHUB_CLIENT_ID` in `crates/proxi/src/sync/github.rs`, or set `githubClientId` in `.learner/settings.json`.
 - **Google**: a Google Cloud project with the **Drive API** enabled, a **Desktop** OAuth client, and the consent
   screen published to production; put the id and secret in the constants `GOOGLE_CLIENT_ID` and
-  `GOOGLE_CLIENT_SECRET` in `app/server/sync/gdrive.ts`, or set `googleClientId` and `googleClientSecret` in
+  `GOOGLE_CLIENT_SECRET` in `crates/proxi/src/sync/gdrive.rs`, or set `googleClientId` and `googleClientSecret` in
   `.learner/settings.json`.
 
 Empty constants make "Connetti" fail with a clear Italian error that names both places.
@@ -122,9 +118,9 @@ Empty constants make "Connetti" fail with a clear Italian error that names both 
 ## Checks
 
 ```bash
-npm run typecheck && npm run typecheck:app
-npm test && npm run test:app
-npm run app:build && npm run e2e
+npm run typecheck:app
+cargo build --release --locked
+npm run app:build && npm run test:app && npm run test:rust && npm run e2e
 ```
 
 Tests never call the real `claude` (they use `app/test/fake-claude.mjs`) and never touch the real

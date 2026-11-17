@@ -9,6 +9,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { performance } from "node:perf_hooks";
 import { uiIsStale } from "./startup.mjs";
+import { proxiBinaryPath } from "./backend.mjs";
 import {
   INTERACTIVE_SELECTOR,
   OPEN_HASH,
@@ -38,6 +39,9 @@ try {
 
   const electronExe = path.join(root, "node_modules", "electron", "dist", "electron.exe");
   if (!fs.existsSync(electronExe)) throw new Error("Electron missing: run `npm install` first.");
+
+  // Fails fast with the `cargo build --release --locked` message instead of a mid-run Electron error.
+  proxiBinaryPath(root);
 
   let prev;
   if (opts.compare) {
@@ -136,6 +140,7 @@ try {
   const dirty = git("status", "--porcelain") !== "";
 
   const baseline = buildBaseline({
+    app: "electron+rust",
     runs: measured.map(({ ram_idle_mb, cold_start_ms, processes }) => ({ ram_idle_mb, cold_start_ms, processes })),
     date: new Date().toISOString(),
     commit,

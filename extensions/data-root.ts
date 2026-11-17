@@ -13,9 +13,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseArgs } from "node:util";
 import { APP_NAME, DATA_DIR_NAME } from "../app/shared/identity.mjs";
-import { main } from "./cli.ts";
 
 export const DATA_ROOT_ENV = "LEARNER_DATA_ROOT";
 
@@ -110,35 +108,3 @@ export function enterDataRoot(): string {
   process.chdir(dataRoot);
   return dataRoot;
 }
-
-const USAGE = `Usage: npm run data -- <command>
-
-  where                  print the data folder and where it was resolved from
-  help                   show this message
-
-Resolution: LEARNER_DATA_ROOT, then .learner/config.json, then ~/Documents/${DATA_DIR_NAME}.`;
-
-export async function runCli(argv: string[]): Promise<number> {
-  try {
-    const { positionals } = parseArgs({ args: argv, allowPositionals: true, options: {} });
-    const command = positionals[0] ?? "help";
-
-    if (command === "where") {
-      const { dataRoot, source } = resolveDataRoot();
-      console.log(`${dataRoot} (${source})`);
-      return 0;
-    }
-    if (command === "help") {
-      console.log(USAGE);
-      return 0;
-    }
-    console.error(`Unknown command: ${command}`);
-    console.error(USAGE);
-    return 1;
-  } catch (err: any) {
-    console.error("Error: " + err.message);
-    return 1;
-  }
-}
-
-main(import.meta.url, runCli);
