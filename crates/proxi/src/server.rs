@@ -94,6 +94,8 @@ pub struct ServerOptions {
     pub data_root: Option<PathBuf>,
     pub port: u16,
     pub dist_dir: Option<PathBuf>,
+    /// None = the repo's parent, the Node default.
+    pub add_dirs: Option<Vec<PathBuf>>,
     pub keep_alive: Duration,
     pub endpoints: Endpoints,
     pub bins: EngineBins,
@@ -116,6 +118,7 @@ impl ServerOptions {
             data_root: None,
             port: 0,
             dist_dir: None,
+            add_dirs: None,
             keep_alive: events::KEEP_ALIVE,
             endpoints: Endpoints::default(),
             bins: EngineBins::default(),
@@ -328,12 +331,12 @@ pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
         args: opts.bins.opencode_args.clone(),
     };
     // The engine may read the folder that holds this repo (sibling checkouts); a repo pinned at a
-    // filesystem root is its own add-dir.
-    let add_dirs = vec![
-        repo_root
+    // filesystem root is its own add-dir. The flag/env override wins when set.
+    let add_dirs = opts.add_dirs.clone().unwrap_or_else(|| {
+        vec![repo_root
             .parent()
-            .map_or_else(|| repo_root.clone(), std::path::Path::to_path_buf),
-    ];
+            .map_or_else(|| repo_root.clone(), std::path::Path::to_path_buf)]
+    });
     let limits = Arc::new(LimitsCache::new());
     let graph = Arc::new(GraphStore::new(data_root.clone()));
     let renderer = Arc::new(Renderer::new(opts.browser.clone()));
@@ -1691,6 +1694,12 @@ pub struct ServeArgs {
     /// Port; 0 = a free port (default: LEARNER_PORT, then 4317)
     #[arg(long, value_name = "PORT")]
     pub port: Option<u16>,
+    /// Built UI folder (default: <repo root>/app/web/dist)
+    #[arg(long, value_name = "PATH")]
+    pub dist_dir: Option<PathBuf>,
+    /// Extra folder the engine may read (repeatable; default: LEARNER_ADD_DIRS, then the repo's parent)
+    #[arg(long, value_name = "PATH")]
+    pub add_dir: Vec<PathBuf>,
     /// Claude executable (tests: a fake)
     #[arg(long, value_name = "PATH")]
     pub claude_bin: Option<PathBuf>,
@@ -1749,6 +1758,7 @@ pub struct ServeEnv {
     pub claude_bin_args: Option<String>,
     pub agy_bin: Option<String>,
     pub agy_bin_args: Option<String>,
+    pub add_dirs: Option<String>,
 }
 
 impl ServeEnv {
@@ -1759,6 +1769,7 @@ impl ServeEnv {
             claude_bin_args: read("LEARNER_CLAUDE_BIN_ARGS"),
             agy_bin: read("LEARNER_AGY_BIN"),
             agy_bin_args: read("LEARNER_AGY_BIN_ARGS"),
+            add_dirs: read("LEARNER_ADD_DIRS"),
         }
     }
 }
@@ -1787,9 +1798,26 @@ impl ServeArgs {
                 .filter(|raw| !raw.is_empty())
                 .map(PathBuf::from)
         });
+        // Flags win over the env (Node's `LEARNER_ADD_DIRS`, main.mjs); `None` keeps the
+        // repo-parent default in `start`.
+        let add_dirs = if !self.add_dir.is_empty() {
+            Some(self.add_dir)
+        } else {
+            match env.add_dirs.as_deref() {
+                Some(raw) if !raw.is_empty() => Some(
+                    parse_bin_args_env("LEARNER_ADD_DIRS", raw)?
+                        .into_iter()
+                        .map(PathBuf::from)
+                        .collect(),
+                ),
+                _ => None,
+            }
+        };
         let mut options = ServerOptions::new(self.repo_root.unwrap_or_else(data_root::repo_root));
         // `None` here keeps the env/config resolution in `start`.
         options.data_root = self.data_root;
+        options.dist_dir = self.dist_dir;
+        options.add_dirs = add_dirs;
         options.port = port;
         options.endpoints = Endpoints {
             anki: self.anki_url,
@@ -2146,6 +2174,76 @@ mod tests {
             .expect("into options");
         assert_eq!(opts.bins.agy, None);
         assert!(opts.bins.agy_args.is_empty());
+    }
+
+    #[test]
+    fn serve_args_dist_dir_flag() {
+        let args = parse_serve_args(&["--dist-dir", "ui"]).expect("parse --dist-dir");
+        let opts = args
+            .into_options(&ServeEnv::default())
+            .expect("into options");
+        assert_eq!(opts.dist_dir, Some(PathBuf::from("ui")));
+
+        let args = parse_serve_args(&[]).expect("parse no flags");
+        let opts = args
+            .into_options(&ServeEnv::default())
+            .expect("into options");
+        assert_eq!(opts.dist_dir, None);
+    }
+
+    #[test]
+    fn serve_args_add_dir_flags_win_over_the_env() {
+        let args = parse_serve_args(&["--add-dir", "/flag"]).expect("parse --add-dir");
+        let opts = args
+            .into_options(&ServeEnv {
+                add_dirs: Some(r#"["/from-env"]"#.to_string()),
+                ..Default::default()
+            })
+            .expect("into options");
+        assert_eq!(opts.add_dirs, Some(vec![PathBuf::from("/flag")]));
+    }
+
+    #[test]
+    fn serve_args_add_dirs_fall_back_to_the_env_json() {
+        let args = parse_serve_args(&[]).expect("parse no flags");
+        let opts = args
+            .into_options(&ServeEnv {
+                add_dirs: Some(r#"["/a","/b"]"#.to_string()),
+                ..Default::default()
+            })
+            .expect("into options");
+        assert_eq!(
+            opts.add_dirs,
+            Some(vec![PathBuf::from("/a"), PathBuf::from("/b")])
+        );
+
+        // An empty env value is unset: the repo-parent default stays.
+        let args = parse_serve_args(&[]).expect("parse no flags");
+        let opts = args
+            .into_options(&ServeEnv {
+                add_dirs: Some(String::new()),
+                ..Default::default()
+            })
+            .expect("into options");
+        assert_eq!(opts.add_dirs, None);
+    }
+
+    #[test]
+    fn serve_args_invalid_add_dirs_env_is_an_error() {
+        for raw in ["not json", r#"{"dirs":["x"]}"#, r#"["x",1]"#] {
+            let args = parse_serve_args(&[]).expect("parse no flags");
+            let Err(message) = args.into_options(&ServeEnv {
+                add_dirs: Some(raw.to_string()),
+                ..Default::default()
+            }) else {
+                panic!("expected an invalid LEARNER_ADD_DIRS error for {raw}");
+            };
+            assert!(
+                message.starts_with("LEARNER_ADD_DIRS non valido:"),
+                "{message}"
+            );
+            assert!(message.contains(raw), "{message}");
+        }
     }
 
     #[test]

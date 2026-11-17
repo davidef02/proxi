@@ -953,12 +953,7 @@ mod tests {
     }
 
     #[test]
-    fn search_constants_match_the_node_ranking() {
-        let source = include_str!("../../../app/server/graph/concepts.ts");
-        assert!(source.contains("export const SEARCH_LIMIT = 10;"));
-        assert!(source.contains("export const BROWSE_LIMIT = 100;"));
-        assert!(source.contains("export const LEXICAL_BONUS = 0.15;"));
-        assert!(source.contains("the embedding model is not downloaded yet. Lexical results only.)"));
+    fn search_constants_keep_the_node_ranking_values() {
         assert_eq!(SEARCH_LIMIT, 10);
         assert_eq!(BROWSE_LIMIT, 100);
         assert_eq!(LEXICAL_BONUS, 0.15);

@@ -6,7 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, describe, it } from "node:test";
-import { AGY_MODELS_FALLBACK } from "../server/agy.ts";
+import { AGY_MODELS_FALLBACK } from "../shared/protocol.ts";
 import { fakeAgy, fakeOpencode, startServer, type StartOptions, type TestServer } from "./harness.ts";
 
 const dirs: string[] = [];
@@ -52,7 +52,7 @@ describe("engine model lists", () => {
       // Node already cached the fallback above for the whole process: only a per-server cache can list the
       // fake's own models here, which is what the binary does.
       const agy = await get(srv.url + "/api/agy/models");
-      assert.equal(agy, JSON.stringify(srv.mode === "binary" ? ["gemini-3.8-flash-high", "claude-sonnet-4-6"] : AGY_MODELS_FALLBACK));
+      assert.equal(agy, JSON.stringify(["gemini-3.8-flash-high", "claude-sonnet-4-6"]));
       assert.equal(
         await get(srv.url + "/api/opencode/models"),
         JSON.stringify(["omniroute/auto/best-coding", "omniroute/auto/fast", "google/gemini-2.5-pro", "opencode/big-pickle"]),
@@ -68,7 +68,7 @@ describe("engine model lists", () => {
       const first = await get(srv.url + "/api/opencode/models");
       // Node caches the list for the whole process (the fake's, from the test above): only the binary can
       // be shown reading this server's script. Both must keep the first answer after the rewrite.
-      if (srv.mode === "binary") assert.equal(first, JSON.stringify(["opencode-a", "opencode-b"]));
+      assert.equal(first, JSON.stringify(["opencode-a", "opencode-b"]));
       write("opencode-z\n");
       assert.equal(await get(srv.url + "/api/opencode/models"), first);
     });

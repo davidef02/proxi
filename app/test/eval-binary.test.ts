@@ -5,7 +5,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, describe, it } from "node:test";
-import { FAKE_CLAUDE, REPO_ROOT, serverMode } from "./harness.ts";
+import { FAKE_CLAUDE, REPO_ROOT } from "./harness.ts";
 
 const dirs: string[] = [];
 after(() => {
@@ -28,7 +28,7 @@ function runEval(args: string[], extraEnv: NodeJS.ProcessEnv = {}) {
   });
 }
 
-describe("eval against the binary", { skip: serverMode() !== "binary" ? "binary mode only: npm run test:rust" : false }, () => {
+describe("eval against the binary", () => {
   it("runs one session over HTTP and stops at the plan (AC1)", () => {
     const r = runEval(["lezione-singola-nuxt", "--engine", "claude", "--settings", missingSettings(), "--timeout", "2"]);
     const output = `${r.stdout}\n${r.stderr}`;

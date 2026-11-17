@@ -1,12 +1,12 @@
-// Proxi desktop shell (Electron 45, ESM main). Starts the Hono server in-process and shows the UI in a window.
+// Proxi desktop shell (Electron 45, ESM main). Spawns the `proxi` binary and shows the UI in a window.
 // No top-level await: Electron waits for an ESM main to finish loading before it fires `ready`, so awaiting
 // app.whenReady() at the top level deadlocks. Everything async lives in start().
-import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, safeStorage, screen, session, shell } from "electron";
-import { execFile } from "node:child_process";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, screen, session, shell } from "electron";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { APP_ID, APP_NAME, APP_USER_MODEL_ID } from "../shared/identity.mjs";
+import { killTreeSync, locateEngineBin, proxiBinaryPath, probeEngine, serveArgs, spawnBackend } from "./backend.mjs";
 import { DEFAULT_CHROME, OVERLAY_HEIGHT, parseChrome, resolveChrome } from "./chrome.mjs";
 import { startUrl, uiIsStale } from "./startup.mjs";
 
@@ -29,8 +29,6 @@ const extra = [path.join(env.USERPROFILE || "", ".local", "bin"), path.join(env.
 env.PATH = [...extra, env.PATH].filter(Boolean).join(path.delimiter);
 
 let srv;
-let killTreesSync = () => {};
-let locateClaudeBinary;
 let mainWin;
 let quitting = false;
 let appOrigin; // origin of the Proxi server the windows show; unset until it is known (deny every pop-up before)
@@ -59,16 +57,7 @@ async function ensureUi() {
   }
 }
 
-function probeEngine(bin, binArgs) {
-  // .exe files run directly: cmd.exe does not quote the path, so a node.exe under "Program Files" never runs.
-  // Only .cmd/.bat shims, and bare names cmd.exe must resolve, go through the shell (quoted).
-  const shell = process.platform === "win32" && !/\.(exe|com)$/i.test(bin);
-  const quote = (s) => `"${s}"`;
-  const args = [...binArgs, "--version"];
-  return new Promise((resolve) => {
-    execFile(shell ? quote(bin) : bin, shell ? args.map(quote) : args, { timeout: 15000, windowsHide: true, shell }, (err) => resolve(!err));
-  });
-}
+// Copy buttons (GitHub device code, data folder path): the main process writes the clipboard whether or not the page has focus.
 
 function boundsFile() {
   return path.join(app.getPath("userData"), "window.json");
@@ -200,58 +189,22 @@ async function isLearner(base) {
   }
 }
 
-/** Token cipher for <repo>/.learner/secrets.json (see app/server/sync/secrets.ts). Keys live in the OS keychain.
- *  Call only after app.whenReady(). */
-function secretCipher() {
-  const asyncApi = typeof safeStorage.isAsyncEncryptionAvailable === "function";
-  return {
-    available: async () => {
-      // Linux without a keyring: safeStorage would use a hard-coded key, so treat it as unavailable.
-      if (process.platform === "linux" && safeStorage.getSelectedStorageBackend?.() === "basic_text") return false;
-      return asyncApi ? await safeStorage.isAsyncEncryptionAvailable() : safeStorage.isEncryptionAvailable();
-    },
-    encrypt: async (plain) => {
-      const buf = asyncApi ? await safeStorage.encryptStringAsync(plain) : safeStorage.encryptString(plain);
-      return Buffer.from(buf).toString("base64");
-    },
-    decrypt: async (b64) => {
-      const buf = Buffer.from(b64, "base64");
-      if (typeof safeStorage.decryptStringAsync !== "function") return safeStorage.decryptString(buf);
-      const r = await safeStorage.decryptStringAsync(buf);
-      return typeof r === "string" ? r : r.result;
-    },
-  };
-}
-
 async function startServer() {
-  // tsx's ESM loader works in Electron's main process (verified); it lets us import the .ts server directly.
-  const { register } = await import("tsx/esm/api");
-  register();
-  const mod = await import(pathToFileURL(path.join(appRoot, "server", "main.ts")).href);
-  killTreesSync = mod.killTreesSync;
-  locateClaudeBinary = mod.locateClaudeBinary;
-  const claudeBin = env.LEARNER_CLAUDE_BIN || undefined;
-  const claudeBinArgs = env.LEARNER_CLAUDE_BIN_ARGS ? JSON.parse(env.LEARNER_CLAUDE_BIN_ARGS) : undefined;
-  const agyBin = env.LEARNER_AGY_BIN || undefined;
-  const agyBinArgs = env.LEARNER_AGY_BIN_ARGS ? JSON.parse(env.LEARNER_AGY_BIN_ARGS) : undefined;
-  const opencodeBin = env.LEARNER_OPENCODE_BIN || undefined;
-  const opencodeBinArgs = env.LEARNER_OPENCODE_BIN_ARGS ? JSON.parse(env.LEARNER_OPENCODE_BIN_ARGS) : undefined;
-  const base = {
-    repoRoot, claudeBin, claudeBinArgs, agyBin, agyBinArgs, opencodeBin, opencodeBinArgs, openBrowser: false,
-    addDirs: env.LEARNER_ADD_DIRS ? JSON.parse(env.LEARNER_ADD_DIRS) : undefined,
-    relaunch: () => { app.relaunch(); app.quit(); },
-    secretCipher: secretCipher(),
-  };
+  const bin = proxiBinaryPath(repoRoot, env); // throws naming `cargo build --release --locked` when missing
   const wanted = env.LEARNER_PORT !== undefined ? Number(env.LEARNER_PORT) : 4317;
+  const spawnOnce = (port) => spawnBackend(bin, serveArgs({ repoRoot, distDir: path.join(appRoot, "web", "dist"), port, env }), env);
   try {
-    return await mod.createServer({ ...base, port: wanted });
+    return await spawnOnce(wanted);
   } catch (e) {
-    if (e?.code !== "EADDRINUSE" || wanted === 0) throw e;
-    // Busy port: if it is another Proxi (npm run app) just show it: a second server on the same .learner/ state
-    // would corrupt job records. Only when something else holds the port, take a free one.
-    const url = "http://127.0.0.1:" + wanted;
-    if (await isLearner(url)) return { external: true, url };
-    return await mod.createServer({ ...base, port: 0 });
+    // The Rust listener fails before printing its URL on a busy port. If another Proxi holds it, just show
+    // that window (a second server on the same .learner/ state would corrupt job records); only when
+    // something else holds the port, take a free one.
+    if (wanted !== 0) {
+      const url = "http://127.0.0.1:" + wanted;
+      if (await isLearner(url)) return { external: true, url };
+      return await spawnOnce(0);
+    }
+    throw e;
   }
 }
 
@@ -306,14 +259,23 @@ async function start() {
     mainWin = openWindow(w.url, { main: true });
     return;
   }
-  process.on("exit", () => killTreesSync([...srv.manager.livePids(), ...srv.jobs.livePids()]));
+  process.on("exit", () => killTreeSync(srv.pid)); // sync: nothing async can run in the exit hook
+  // The backend exiting with code 0 while we are not quitting is the self-update relaunch signal
+  // (serve_cli exits after the relaunch notify); anything else is a crash: log it and quit.
+  void srv.exited.then((code) => {
+    if (quitting) return;
+    if (code === 0) app.relaunch();
+    else console.error(`[desktop] backend exited with code ${code}`);
+    app.quit();
+  });
   let provider = "claude";
   try {
     provider = JSON.parse(fs.readFileSync(path.join(repoRoot, ".learner", "settings.json"), "utf8")).provider || "claude";
   } catch { /* default: claude */ }
   const bin =
     (provider === "opencode" ? env.LEARNER_OPENCODE_BIN : provider === "agy" ? env.LEARNER_AGY_BIN : env.LEARNER_CLAUDE_BIN) ||
-    (provider === "opencode" ? "opencode" : provider === "agy" ? "agy" : (locateClaudeBinary?.() || "claude"));
+    locateEngineBin(provider, env) ||
+    (provider === "opencode" ? "opencode" : provider === "agy" ? "agy" : "claude");
   const rawArgs =
     provider === "opencode" ? env.LEARNER_OPENCODE_BIN_ARGS : provider === "agy" ? env.LEARNER_AGY_BIN_ARGS : env.LEARNER_CLAUDE_BIN_ARGS;
   const binArgs = rawArgs ? JSON.parse(rawArgs) : [];
@@ -340,6 +302,7 @@ app.on("before-quit", (e) => {
   e.preventDefault();
   quitting = true;
   const force = setTimeout(() => app.exit(0), 10000);
+  killTreeSync(srv.pid); // the tree kill also takes down any engine child the backend spawned
   srv.close().catch(() => {}).finally(() => {
     clearTimeout(force);
     app.exit(0);

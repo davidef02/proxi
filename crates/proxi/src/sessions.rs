@@ -2064,6 +2064,11 @@ impl SessionManager {
         self.0.opts.token.clone()
     }
 
+    /// The add-dirs the manager was built with (test seam).
+    pub fn add_dirs(&self) -> &[PathBuf] {
+        &self.0.opts.add_dirs
+    }
+
     pub fn session_config(&self, id: &str) -> Option<Map<String, Value>> {
         let session = self.0.session(id)?;
         let guard = session.lock().expect("session lock");

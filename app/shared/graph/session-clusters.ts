@@ -8,7 +8,7 @@
  * proximity, this groups by WHERE KNOWLEDGE WAS BORN — the owner's call
  * that the session that minted a set of propositions is the honest
  * "region of the world model" they belong to.
- * (Clustering only: concept search uses local embeddings, see app/server/graph/embeddings.ts.)
+ * (Clustering only: concept search uses local embeddings, see crates/proxi/src/embeddings.rs.)
  *
  * Birth session (owner ruling 2026-09-23): a node's FIRST surviving
  * provenance point's chatId — the create line's first point at read time

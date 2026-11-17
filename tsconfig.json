@@ -18,8 +18,6 @@
   "include": [
     "extensions/html-lesson.ts",
     "extensions/anki-sync.ts",
-    "extensions/anki-client.ts",
-    "extensions/embed-bench.ts",
-    "tests/**/*"
+    "extensions/anki-client.ts"
   ]
 }

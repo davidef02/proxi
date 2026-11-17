@@ -13,18 +13,12 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { parseArgs } from "node:util";
 import { APP_NAME } from "../app/shared/identity.mjs";
-import { main } from "./cli.ts";
-import { enterDataRoot } from "./data-root.ts";
 import { escapeHtml, parseLessonDocument, type FullLessonDocument, type PedagogicalTier } from "./html-lesson.ts";
-import { slugify } from "./slug.ts";
 import { DECK_ROOT, courseDeckNameFor } from "./anki-sync.ts";
 import { DEFAULT_ANKI_URL, invoke } from "./anki-client.ts";
 import {
-  formatCurriculum,
   matchCurriculum,
-  planChapter,
   readCurriculum,
   type CurriculumMatch,
   type PlannedLesson
@@ -554,107 +548,3 @@ export async function generateHomepage(
     ankiOnline: anki !== null
   };
 }
-
-// ────────────────────────────────────────────────────────────────────────────
-// CLI
-// ────────────────────────────────────────────────────────────────────────────
-
-export async function runCli(argv: string[]): Promise<number> {
-  try {
-    const { values, positionals } = parseArgs({
-      args: argv,
-      allowPositionals: true,
-      options: {
-        chapter: { type: "string" },
-        slug: { type: "string" },
-        "lessons-json": { type: "string" },
-        curriculum: { type: "string" },
-        dir: { type: "string" },
-        out: { type: "string" },
-        "anki-url": { type: "string" },
-        "no-anki": { type: "boolean" },
-        help: { type: "boolean", short: "h" }
-      }
-    });
-    const command = positionals[0] || "generate";
-
-    if (command === "help" || values.help) {
-      console.log(
-        [
-          `${APP_NAME} homepage`,
-          "",
-          "  npm run home                      generate index.html (requires AnkiConnect)",
-          "  npm run home -- --no-anki         generate without card counts",
-          "  npm run home -- plan --chapter <title> [--slug <course-dir>] --lessons-json <json>",
-          "  npm run home -- chapters          print the plan as text (writes nothing)",
-          "",
-          "  --lessons-json  [{\"title\":\"...\",\"plannedNodes\":4}, ...]",
-          "  --slug          course directory, when it differs from the chapter title",
-          "  --dir           courses directory (default ./courses)",
-          "  --anki-url      AnkiConnect endpoint (default " + DEFAULT_ANKI_URL + ")"
-        ].join("\n")
-      );
-      return 0;
-    }
-
-    if (command === "plan") {
-      const chapter = values.chapter;
-      if (!chapter) throw new Error("plan requires --chapter <title>");
-      const raw = values["lessons-json"];
-      if (!raw) throw new Error("plan requires --lessons-json '[{\"title\":\"...\"}]'");
-      const lessons = JSON.parse(raw);
-      if (!Array.isArray(lessons)) throw new Error("--lessons-json must be a JSON array");
-      const curriculum = planChapter({
-        chapter,
-        slug: values.slug,
-        lessons,
-        curriculumPath: values.curriculum
-      });
-      const wanted = slugify(values.slug || chapter);
-      const saved = curriculum.chapters.find((c) => c.slug === wanted)!;
-      console.log(
-        "Planned " + saved.title + " (courses/" + saved.slug + "): " + saved.lessons.length +
-          " lessons (" + saved.lessons.map((l) => l.slug).join(", ") + ")"
-      );
-      return 0;
-    }
-
-    if (command === "chapters") {
-      console.log(
-        formatCurriculum(
-          matchCurriculum(
-            readCurriculum({ curriculumPath: values.curriculum }),
-            scanLessons({ coursesDir: values.dir })
-          )
-        )
-      );
-      return 0;
-    }
-
-    if (command === "generate") {
-      const res = await generateHomepage({
-        noAnki: values["no-anki"] === true,
-        coursesDir: values.dir,
-        curriculumPath: values.curriculum,
-        outFile: values.out,
-        ankiUrl: values["anki-url"]
-      });
-      console.log(
-        res.filePath + " — " + res.chapterCount + " chapters, " + res.lessonCount + " lessons taught" +
-          (res.orphanCount ? ", " + res.orphanCount + " outside the plan" : "") +
-          (res.ankiOnline ? "" : ", without Anki")
-      );
-      return 0;
-    }
-
-    throw new Error("Unknown command: " + command);
-  } catch (err: any) {
-    console.error("Error: " + err.message);
-    return 1;
-  }
-}
-
-main(import.meta.url, (argv) => {
-  enterDataRoot();
-  return runCli(argv);
-});

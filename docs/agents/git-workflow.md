@@ -21,9 +21,9 @@ gh pr create --base main --title "<type>(<scope>): <summary>" --body "Closes #<i
 gh pr merge --auto --squash                # GitHub merges once the `checks` job is green
 ```
 
-- The gate is CI (`.github/workflows/ci.yml`, job `checks`): typecheck, typecheck:app, `npm test`,
-  `app:build`, `test:app`, `cargo build --release --locked`, `test:rust`, `cargo test --locked`,
-  Playwright e2e.
+- The gate is CI (`.github/workflows/ci.yml`, job `checks`): `typecheck:app`,
+  `cargo build --release --locked`, `app:build`, `test:app`, `test:rust`,
+  `cargo test --locked`, Playwright e2e.
   Locally run only the test you are iterating on; CI runs the full set.
 - CI red: read the failing step with `gh run view <id> --log-failed`, fix it on the same branch and
   push. Auto-merge stays armed and fires on the next green run.

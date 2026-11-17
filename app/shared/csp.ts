@@ -1,5 +1,5 @@
 // Content-Security-Policy for subagent demos: inline code only, no network of any kind. Used both by the headless
-// test run (app/server/jobs/render.ts) and by the UI iframe (app/web/src/session/cards/JobCard.tsx), so what was
+// test run (crates/proxi/src/jobs/render.rs) and by the UI iframe (app/web/src/session/cards/JobCard.tsx), so what was
 // tested is what ships.
 export const DEMO_CSP =
   "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; " +

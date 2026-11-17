@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, before, describe, it } from "node:test";
-import { OPENCODE_MODELS_FALLBACK } from "../server/opencode.ts";
+import { OPENCODE_MODELS_FALLBACK } from "../shared/protocol.ts";
 import type { SessionState } from "../shared/protocol.ts";
 import { startServer, type StartOptions, type TestServer } from "./harness.ts";
 

@@ -1,7 +1,11 @@
 //! Headless rendering through the installed Edge/Chrome (port of app/server/jobs/render.ts).
 //!
 //! One lazy shared browser per server (Edge first, then Chrome) driven through CDP; a failed launch is
-//! not cached, so the next render retries. No Node, no Playwright, no bundled browser.
+//! not cached, so the next render retries. A browser that dies mid-work is replaced like a failed
+//! launch, and nothing waits on one unbounded: with the connection gone, this chromiumoxide's command
+//! timeouts never fire again (its handler returns on the connection error before the pass that applies
+//! them), so every wait here is bounded and the fallback is the kill (#55: such a death hung the CI
+//! `cargo test` until the job timeout). No Node, no Playwright, no bundled browser.
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
@@ -41,6 +45,10 @@ pub const DEMO_CSP: &str = "default-src 'none'; script-src 'unsafe-inline'; styl
 pub const VIEWPORT: (u32, u32) = (900, 600);
 /// How long a demo runs before the screenshot, as `runDemoPage`'s default.
 pub const DEFAULT_SETTLE: Duration = Duration::from_millis(1500);
+
+/// How long one close step (the graceful close, the exit wait) may take before the browser is
+/// killed instead: a healthy browser answers and exits in well under a second.
+const CLOSE_STEP: Duration = Duration::from_secs(5);
 
 const SVG_SHELL_START: &str = r#"<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:"></head><body style="margin:0;padding:16px;background:#1c1c1c;display:inline-block">"#;
 const SVG_SHELL_END: &str = "</body></html>";
@@ -288,10 +296,21 @@ impl Renderer {
         for id in ids {
             let _ = running.browser.dispose_browser_context(id).await;
         }
-        if running.browser.close().await.is_err() {
+        // Bounded, with the kill as the fallback: the graceful close may never be answered (a
+        // dead or frozen browser) and the exit wait may never end on its own.
+        if !matches!(
+            tokio::time::timeout(CLOSE_STEP, running.browser.close()).await,
+            Ok(Ok(_))
+        ) {
             let _ = running.browser.kill().await;
         }
-        let _ = running.browser.wait().await;
+        if tokio::time::timeout(CLOSE_STEP, running.browser.wait())
+            .await
+            .is_err()
+        {
+            let _ = running.browser.kill().await;
+            let _ = tokio::time::timeout(CLOSE_STEP, running.browser.wait()).await;
+        }
         running.handler.abort();
         *self.inner.pid.lock().expect("browser pid lock") = None;
         remove_user_data_dir(&running.user_data_dir).await;
@@ -311,6 +330,13 @@ impl Drop for Renderer {
 impl Inner {
     async fn ensure(&self) -> Result<(), RenderError> {
         let mut running = self.running.lock().await;
+        // A browser that died mid-work (a crash) is replaced like a failed launch: every command
+        // on it fails from now on, so keeping it would break every later render.
+        if let Some(mut dead) = running.take_if(|running| dead_browser(running)) {
+            dead.handler.abort();
+            let _ = dead.browser.kill().await;
+            remove_user_data_dir(&dead.user_data_dir).await;
+        }
         if running.is_some() {
             return Ok(());
         }
@@ -340,7 +366,12 @@ impl Inner {
         let pid = browser
             .get_mut_child()
             .and_then(|child| child.as_mut_inner().id());
-        let handler = tokio::spawn(async move { while handler.next().await.is_some() {} });
+        let handler = tokio::spawn(async move {
+            // The driver stops at the first connection error (a browser death is one): later
+            // commands then fail at once because the channel is closed, instead of waiting for
+            // responses nothing will ever send.
+            while let Some(Ok(_)) = handler.next().await {}
+        });
         *self.pid.lock().expect("browser pid lock") = pid;
         *running = Some(Running {
             browser,
@@ -734,6 +765,14 @@ fn browser_error(error: &str) -> RenderError {
 fn launch_counter() -> usize {
     static LAUNCHES: AtomicUsize = AtomicUsize::new(0);
     LAUNCHES.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Whether the browser process already exited (a crash, a kill): only then is it replaced.
+fn dead_browser(running: &mut Running) -> bool {
+    running
+        .browser
+        .try_wait()
+        .is_ok_and(|exited| exited.is_some())
 }
 
 /// The browser holds its profile files for a moment after exit; retry instead of reporting a leak.

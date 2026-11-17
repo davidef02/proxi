@@ -1,10 +1,10 @@
-// Tests for the mode-selecting server helper (PROXI_TEST_SERVER) and its small utilities.
+// Tests for the test-server helper and its small utilities.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, describe, it } from "node:test";
-import { binaryArgs, fakeFetch, MODE_ENV, proxiBinary, serverMode, startServer } from "./harness.ts";
+import { binaryArgs, fakeFetch, proxiBinary, startServer } from "./harness.ts";
 
 const dirs: string[] = [];
 function tempDir(prefix: string): string {
@@ -15,19 +15,6 @@ function tempDir(prefix: string): string {
 
 after(() => {
   for (const dir of dirs) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
-});
-
-describe("serverMode", () => {
-  it("defaults to node and accepts both modes", () => {
-    assert.equal(serverMode({}), "node");
-    assert.equal(serverMode({ [MODE_ENV]: "" }), "node");
-    assert.equal(serverMode({ [MODE_ENV]: "node" }), "node");
-    assert.equal(serverMode({ [MODE_ENV]: "binary" }), "binary");
-  });
-
-  it("rejects an unknown mode", () => {
-    assert.throws(() => serverMode({ [MODE_ENV]: "rust" }), /must be "node" or "binary"/);
-  });
 });
 
 describe("binaryArgs", () => {
@@ -120,12 +107,11 @@ describe("fakeFetch", () => {
 });
 
 describe("startServer", () => {
-  it("starts in the selected mode and serves the roots", async () => {
+  it("starts the binary and serves the roots", async () => {
     const repo = tempDir("harness-repo-");
     const data = tempDir("harness-data-");
     const server = await startServer({ repoRoot: repo, dataRoot: data });
     try {
-      assert.equal(server.mode, serverMode());
       assert.match(server.url, /^http:\/\/127\.0\.0\.1:\d+$/);
       const res = await fetch(`${server.url}/api/settings`);
       assert.equal(res.status, 200);
@@ -137,18 +123,5 @@ describe("startServer", () => {
     }
     await assert.rejects(fetch(`${server.url}/api/settings`));
     await server.close();
-  });
-
-  it("maps the Anki fake onto LEARNER_ANKI_URL and restores it", { skip: serverMode() !== "node" && "node mode only" }, async () => {
-    const repo = tempDir("harness-anki-");
-    const prev = process.env.LEARNER_ANKI_URL;
-    const fake = "http://127.0.0.1:9";
-    const server = await startServer({ repoRoot: repo, fakes: { anki: fake } });
-    try {
-      assert.equal(process.env.LEARNER_ANKI_URL, fake);
-    } finally {
-      await server.close();
-    }
-    assert.equal(process.env.LEARNER_ANKI_URL, prev);
   });
 });

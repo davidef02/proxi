@@ -36,11 +36,10 @@ CI runs all of these on every PR (`.github/workflows/ci.yml`); locally run only 
 iterating on.
 
 ```bash
-npm run typecheck && npm run typecheck:app
-npm test            # engine (tests/)
-npm run app:build   # before test:app and e2e: both expect app/web/dist
-npm run test:app    # app (app/test/)
+npm run typecheck:app
 cargo build --release --locked
+npm run app:build   # before test:app and e2e: both expect app/web/dist
+npm run test:app    # app (app/test/); needs the release build first: the harness spawns the proxi binary
 npm run test:rust   # ported HTTP/SSE tests against the proxi binary (needs the release build)
 cargo test --locked # Rust backend (crates/proxi)
 npm run e2e         # app, Playwright (Chromium)
@@ -55,14 +54,8 @@ folder; the temp settings copy drops `syncProvider` so the throwaway data never 
 #18/#21 serve the MCP tools no scenario reaches its stop card), `EVAL_KEEP=1` keeps the temp folders. Only
 `claude` runs in the Rust backend for now. Never in CI; the agent runs it after changing teach/plan prompts.
 
-`npm run golden:capture` is manual, never in CI: it rewrites the HTTP goldens in
-`crates/proxi/tests/fixtures/golden/*.json` from the Node server, and `lesson-cli.json` / `anki-cli.json`
-from the Node `lesson` and `anki` CLIs (`app/test/capture-lesson-golden.ts`, `app/test/capture-anki-golden.ts`). Run it only when a ported route's Node behaviour
-changes on purpose, before the cutover, and commit the fixtures with that change;
-`app/test/capture-golden.test.ts` fails until you do.
-
-Server tests start servers through `startServer` in `app/test/harness.ts` (`PROXI_TEST_SERVER=node|binary`,
-default node) with the external services faked by `app/test/fake-servers.ts`; a test file that runs against
+Server tests start servers through `startServer` in `app/test/harness.ts` (binary-only: it spawns the built
+`proxi` binary) with the external services faked by `app/test/fake-servers.ts`; a test file that runs against
 the binary uses only HTTP/SSE and is listed in `RUST_PORTED` of `scripts/test-rust.mjs`. `app/test/binary.ts`
 locates and spawns the binary with no server import; the eval uses it too.
 
@@ -73,8 +66,7 @@ runs its tests, and `npm run test:rust` runs the ported HTTP/SSE tests against t
 `npm run desktop:install` runs the same build and adds `target/release` to the user PATH (Windows, no admin
 rights; `npm run desktop:uninstall` removes it), so agents run `proxi lesson|anki|home|data` from any new
 shell; check with `proxi --version`. The binary finds the repo from its own location: keep it in
-`target/release`, never copy it elsewhere. Until the cutover `proxi lesson|anki|home|data` match the
-`npm run` scripts flag for flag, output for output.
+`target/release`, never copy it elsewhere.
 
 ## Where the logic lives
 
@@ -87,19 +79,18 @@ shell; check with `proxi --version`. The binary finds the repo from its own loca
 | Card generation, TSV export, Anki sync | `extensions/anki-sync.ts` |
 | AnkiConnect calls for the board | `extensions/anki-client.ts` (`anki-sync.ts` still has its own copy) |
 | Data folder resolution | `extensions/data-root.ts` |
-| Sync (engine, providers, secrets, service) | `app/server/sync/` (Node, until the cutover); Rust: `crates/proxi/src/sync/` (GitHub and Google Drive; secrets in the OS keychain) |
+| Sync (engine, providers, secrets, service) | `crates/proxi/src/sync/` (GitHub and Google Drive; secrets in the OS keychain) |
 | The app (server, web UI, desktop, engine prompts) | `app/`: read [`app/README.md`](../../app/README.md) first |
 
-Server data modules (`courses.ts`, `knowledge.ts`, `lesson.ts`, `exercises.ts`, `graph/store.ts`) take the
+Server data modules in `crates/proxi/src/` (`courses.rs`, `knowledge.rs`, `lesson/`, `exercises.rs`, `graph/store.rs`) take the
 data root (`dataRoot`) as their first argument. `.learner/` (settings, sessions, jobs, manifests, secrets)
 stays under `repoRoot` and is never synced. `.learner/models` and `.learner/embeddings` hold the embedding
 model and index, regenerated automatically. `proxi embed-bench` measures recall@3 and median query time of
-that model on `<dataRoot>/bench/embed-bench-queries.json` and records the result in
-`app/server/graph/embedding-model.json`.
+that model on `<dataRoot>/bench/embed-bench-queries.json`.
 
 ## Keep the teaching context lean
 
 The root `AGENTS.md` is loaded on every turn of every agent that studies in this repo. Put
 development rules here, never in the root. The app's own engines already skip the root:
 `claude` runs with `--setting-sources ""` and `agy` runs with its scratch dir as `cwd`; keep both
-when changing `app/server/claude.ts`/`agy.ts` or their Rust ports `crates/proxi/src/claude.rs`/`agy.rs`.
+when changing their Rust ports `crates/proxi/src/claude.rs`/`agy.rs`.

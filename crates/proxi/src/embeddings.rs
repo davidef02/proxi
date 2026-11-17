@@ -9,12 +9,12 @@ use serde_json::{Map, Value};
 use sha1::{Digest, Sha1};
 
 /// Where the model file lives, from the repo root.
-pub const MODEL_FILE: [&str; 4] = ["app", "server", "graph", "embedding-model.json"];
+pub const MODEL_FILE: [&str; 4] = ["crates", "proxi", "src", "embedding-model.json"];
 
 // The same file, compiled in: a temp repo (tests) has no model file to read.
-const BUNDLED_MODEL_FILE: &str = include_str!("../../../app/server/graph/embedding-model.json");
+const BUNDLED_MODEL_FILE: &str = include_str!("embedding-model.json");
 
-/// The model file, also read by Node (`app/server/graph/embeddings.ts`), which throws at import.
+/// The model file, also compiled into the binary (see `BUNDLED_MODEL_FILE` below).
 #[derive(Debug, Clone, PartialEq)]
 pub struct EmbeddingConfig {
     pub model: String,
@@ -537,7 +537,7 @@ mod tests {
         let file = EmbeddingConfig::model_file(&repo);
         fs::create_dir_all(file.parent().unwrap()).unwrap();
         fs::copy(
-            real_repo().join("app/server/graph/embedding-model.json"),
+            real_repo().join("crates/proxi/src/embedding-model.json"),
             &file,
         )
         .unwrap();

@@ -105,3 +105,18 @@ test("desktop main: uses the startup helpers", () => {
   assert.match(main, /uiIsStale\(appRoot\)/);
   assert.ok(!main.includes("function uiIsStale"));
 });
+
+test("desktop main: spawns the binary backend, not the Node server", () => {
+  const main = fs.readFileSync(path.join(here, "../desktop/main.mjs"), "utf8");
+  assert.match(main, /from "\.\/backend\.mjs"/);
+  assert.ok(!main.includes("tsx"), "main.mjs must not register tsx");
+  assert.ok(!main.includes("server/main.ts"), "main.mjs must not reference the deleted Node server");
+  assert.match(main, /killTreeSync\(srv\.pid\)/);
+});
+
+test("desktop main: relaunches only on a clean backend exit, logs a crash otherwise", () => {
+  const main = fs.readFileSync(path.join(here, "../desktop/main.mjs"), "utf8");
+  assert.match(main, /if \(code === 0\) app\.relaunch\(\);/, "a clean exit is the self-update relaunch signal");
+  assert.match(main, /else console\.error\(`\[desktop\] backend exited with code \$\{code\}`\);/, "a crash is logged, never relaunched");
+  assert.match(main, /if \(quitting\) return;/, "no relaunch while quitting");
+});

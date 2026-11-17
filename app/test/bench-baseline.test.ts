@@ -17,7 +17,7 @@ const BASE_SHA = "b".repeat(40);
 /** A document that passes validateBaseline; individual tests break one field at a time. */
 const validBaseline = () => ({
   schema: 1,
-  app: "electron+node",
+  app: "electron+rust",
   date: "2026-11-12T10:00:00.000Z",
   commit: SHA,
   base_commit: BASE_SHA,
@@ -109,6 +109,7 @@ test("buildBaseline: medians of the runs, key order, and a valid document", asyn
   const { buildBaseline, validateBaseline } = await bench();
   const runs = validBaseline().runs;
   const baseline = buildBaseline({
+    app: "electron+rust",
     runs,
     date: "2026-11-12T10:00:00.000Z",
     commit: SHA,
@@ -119,6 +120,7 @@ test("buildBaseline: medians of the runs, key order, and a valid document", asyn
     electron: "45.0.0",
     warmupRuns: 1,
   });
+  assert.equal(baseline.app, "electron+rust");
   assert.equal(baseline.ram_idle_mb, 305.2);
   assert.equal(baseline.cold_start_ms, 2100);
   assert.deepEqual(Object.keys(baseline), [
@@ -305,10 +307,19 @@ test("drift: a smaller next run is measured as an absolute change", async () => 
   assert.equal(d.ok, true);
 });
 
+test("drift: the limit is configurable for a required re-measurement", async () => {
+  const { drift } = await bench();
+  const over = drift({ ram_idle_mb: 100, cold_start_ms: 1000 }, { ram_idle_mb: 130, cold_start_ms: 1300 });
+  assert.equal(over.ok, false);
+  assert.equal(drift({ ram_idle_mb: 100, cold_start_ms: 1000 }, { ram_idle_mb: 130, cold_start_ms: 1300 }, 0.5).ok, true);
+  assert.equal(drift({ ram_idle_mb: 100, cold_start_ms: 1000 }, { ram_idle_mb: 110, cold_start_ms: 1000 }, 0.05).ok, false);
+});
+
 test("validateCompareFile: accepts a baseline with any run count", async () => {
   const { buildBaseline, validateCompareFile } = await bench();
   assert.deepEqual(validateCompareFile(validBaseline()), []);
   const one = buildBaseline({
+    app: "electron+rust",
     runs: [validBaseline().runs[0]],
     date: "2026-11-12T10:00:00.000Z",
     commit: SHA,
@@ -355,19 +366,22 @@ test(
   },
 );
 
-test("parseArgs: defaults, all three flags, every error case", async () => {
+test("parseArgs: defaults, all four flags, every error case", async () => {
   const { parseArgs } = await bench();
-  assert.deepEqual(parseArgs([]), { runs: 5, out: "docs/benchmark-baseline.json", compare: undefined });
-  assert.deepEqual(parseArgs(["--runs", "2", "--out", "x.json", "--compare", "y.json"]), {
+  assert.deepEqual(parseArgs([]), { runs: 5, out: "docs/benchmark-baseline.json", compare: undefined, driftLimit: 0.1 });
+  assert.deepEqual(parseArgs(["--runs", "2", "--out", "x.json", "--compare", "y.json", "--drift-limit", "0.5"]), {
     runs: 2,
     out: "x.json",
     compare: "y.json",
+    driftLimit: 0.5,
   });
   assert.throws(() => parseArgs(["--runs", "0"]), /--runs needs a positive integer/);
   assert.throws(() => parseArgs(["--runs", "1.5"]), /--runs needs a positive integer/);
   assert.throws(() => parseArgs(["--runs", "nope"]), /--runs needs a positive integer/);
   assert.throws(() => parseArgs(["--out"]), /--out needs a path/);
   assert.throws(() => parseArgs(["--compare"]), /--compare needs a path/);
+  assert.throws(() => parseArgs(["--drift-limit"]), /--drift-limit needs a non-negative number/);
+  assert.throws(() => parseArgs(["--drift-limit", "-0.1"]), /--drift-limit needs a non-negative number/);
   assert.throws(() => parseArgs(["--wat"]), /unknown flag --wat/);
 });
 
