@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { APP_ID, APP_NAME } from "../shared/identity.mjs";
+import { proxiBinary } from "../shared/proxi-bin.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../..");
@@ -25,6 +26,7 @@ const env = {
   LEARNER_USER_DATA: path.join(tmp, "userdata"),
   LEARNER_CLAUDE_BIN: process.execPath, // node + fake-claude: the real claude is never run
   LEARNER_CLAUDE_BIN_ARGS: JSON.stringify([path.join(root, "app", "test", "fake-claude.mjs")]),
+  PROXI_BIN: proxiBinary(root, process.env), // the smoke runs the real binary, not the repo's
 };
 delete env.ELECTRON_RUN_AS_NODE;
 
@@ -109,7 +111,10 @@ try {
   electronApp = undefined;
   await new Promise((r) => setTimeout(r, 1000));
   if (alive(pid)) fail(`electron pid ${pid} still running after quit`);
-  console.log("ok: clean quit, no leftover process");
+  // AC3: quitting leaves no backend or engine process behind.
+  const proxiLeft = execFileSync("tasklist", ["/FI", "IMAGENAME eq proxi.exe", "/NH"], { encoding: "utf8" }).includes("proxi.exe");
+  if (proxiLeft) fail("proxi.exe still running after quit");
+  console.log("ok: clean quit, no backend or engine process left");
 } finally {
   if (electronApp) await electronApp.close().catch(() => {});
   if (pid && alive(pid)) execFileSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore" });
