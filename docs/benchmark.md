@@ -41,7 +41,8 @@ npm run bench:baseline -- --out <tmp>/first.json
 npm run bench:baseline -- --compare <tmp>/first.json
 ```
 
-The second command exits 0 only when both medians drift less than 10 %. `--runs <n>` is for quick tries only; the
+The second command exits 0 only when both medians drift less than 10 %. `--drift-limit <frac>` raises that limit for
+a run that is expected to move the numbers (e.g. the cutover re-measurement). `--runs <n>` is for quick tries only; the
 committed baseline must be a default 5-run execution.
 
 `commit` is HEAD when the file was generated, `base_commit` is the merge-base with `main` (it survives a squash

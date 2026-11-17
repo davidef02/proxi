@@ -1,6 +1,6 @@
 // Measures the real desktop app: idle RAM (Windows Private Working Set summed over the Electron process tree) and
 // cold start (launch to the course page's next action). One discarded warm-up plus N measured runs, medians only.
-// Run: npm run bench:baseline [-- --runs n] [--out file] [--compare file]
+// Run: npm run bench:baseline [-- --runs n] [--out file] [--compare file] [--drift-limit frac]
 import { _electron } from "playwright-core";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { performance } from "node:perf_hooks";
 import { uiIsStale } from "./startup.mjs";
 import { proxiBinaryPath } from "./backend.mjs";
+import { proxiBinary } from "../shared/proxi-bin.mjs";
 import {
   INTERACTIVE_SELECTOR,
   OPEN_HASH,
@@ -82,6 +83,8 @@ try {
       LEARNER_CLAUDE_BIN_ARGS: JSON.stringify([path.join(appRoot, "test", "fake-claude.mjs")]),
       LEARNER_ANKI_URL: "http://127.0.0.1:9",
       LEARNER_OPEN_HASH: OPEN_HASH,
+      // The app resolves the binary under LEARNER_REPO_ROOT (the temp fixture repo): point it at the real one.
+      PROXI_BIN: proxiBinary(root, process.env),
     };
     delete env.ELECTRON_RUN_AS_NODE;
     let electronApp, pid;
@@ -161,8 +164,8 @@ try {
   console.log(`wrote ${path.relative(root, outPath) || outPath}: ram_idle_mb=${baseline.ram_idle_mb} cold_start_ms=${baseline.cold_start_ms}`);
 
   if (prev) {
-    const d = drift(prev, baseline);
-    console.log(`drift ram=${(d.ram * 100).toFixed(1)}% cold=${(d.cold * 100).toFixed(1)}% (limit 10%)`);
+    const d = drift(prev, baseline, opts.driftLimit);
+    console.log(`drift ram=${(d.ram * 100).toFixed(1)}% cold=${(d.cold * 100).toFixed(1)}% (limit ${(opts.driftLimit * 100).toFixed(0)}%)`);
     if (!d.ok) process.exitCode = 1;
   }
 } catch (e) {

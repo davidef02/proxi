@@ -114,7 +114,7 @@ async fn downloads_measures_and_records() {
     let model_file = EmbeddingConfig::model_file(&repo.0);
     fs::create_dir_all(model_file.parent().expect("model file dir")).expect("create model dir");
     fs::copy(
-        common::repo_root().join("app/server/graph/embedding-model.json"),
+        common::repo_root().join("crates/proxi/src/embedding-model.json"),
         &model_file,
     )
     .expect("copy the real model file");

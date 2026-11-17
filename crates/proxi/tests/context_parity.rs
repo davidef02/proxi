@@ -1,4 +1,4 @@
-//! Replays the Node prompt golden captured by app/test/capture-parity-golden.ts:
+//! Replays the Node prompt golden (crates/proxi/tests/fixtures/golden/context.json):
 //! every case builds the same `PromptInput` on a fresh fixture and compares
 //! prompt and opening byte-for-byte with the frozen expectation.
 

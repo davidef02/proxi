@@ -1,5 +1,5 @@
-// The scripted HTTP goldens and their capture helpers, shared by the kept RUST_PORTED tests (and, until the
-// cutover, the capture-*.ts scripts). Binary server only: captureScript talks to the spawned `proxi`.
+// The scripted HTTP goldens and their capture helpers, shared by the kept RUST_PORTED tests.
+// Binary server only: captureScript talks to the spawned `proxi`.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";

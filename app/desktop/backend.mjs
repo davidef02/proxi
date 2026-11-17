@@ -103,7 +103,7 @@ export function probeEngine(bin, binArgs) {
   });
 }
 
-/** Spawn `bin` with `args` and wait for the `Proxi: <url>` line it prints on startup. */
+/** Spawn `bin` with `args` and wait for the `Proxi: <url>` line it prints on startup. `exited` resolves with the close code. */
 export async function spawnBackend(bin, args, env = process.env) {
   // No shell: a quoted path breaks under cmd.exe. Detached on posix so the process group exists for killTreeSync.
   const child = spawn(bin, args, {
@@ -115,7 +115,7 @@ export async function spawnBackend(bin, args, env = process.env) {
   let stdout = "";
   let stderr = "";
   let exited = false;
-  const exitedOnce = new Promise((resolve) => child.once("close", () => { exited = true; resolve(); }));
+  const exitedOnce = new Promise((resolve) => child.once("close", (code) => { exited = true; resolve(code); }));
   const kill = () => {
     try {
       child.kill();
@@ -145,12 +145,16 @@ export async function spawnBackend(bin, args, env = process.env) {
     };
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
+      if (settled) return; // started has resolved: drop the rest, the buffers would only grow
       stdout += chunk;
       const found = reported();
       if (found) finish(() => resolve(found));
     });
     child.stderr.setEncoding("utf8");
-    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.stderr.on("data", (chunk) => {
+      if (settled) return;
+      stderr += chunk;
+    });
     child.once("error", (error) => finish(() => reject(error)));
     // `close`, not `exit`: it fires after stdio closes, so the stderr of a process that dies at
     // startup reaches us before we build the message.

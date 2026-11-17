@@ -141,14 +141,14 @@ export function validateCompareFile(obj) {
   return validateBaseline(obj, { runs });
 }
 
-export function drift(prev, next) {
+export function drift(prev, next, limit = DRIFT_LIMIT) {
   const ram = Math.abs(next.ram_idle_mb - prev.ram_idle_mb) / prev.ram_idle_mb;
   const cold = Math.abs(next.cold_start_ms - prev.cold_start_ms) / prev.cold_start_ms;
-  return { ram, cold, ok: ram < DRIFT_LIMIT && cold < DRIFT_LIMIT };
+  return { ram, cold, ok: ram < limit && cold < limit };
 }
 
 export function parseArgs(argv) {
-  const opts = { runs: RUNS, out: "docs/benchmark-baseline.json", compare: undefined };
+  const opts = { runs: RUNS, out: "docs/benchmark-baseline.json", compare: undefined, driftLimit: DRIFT_LIMIT };
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
     if (flag === "--runs") {
@@ -157,6 +157,10 @@ export function parseArgs(argv) {
         throw new Error("--runs needs a positive integer");
       }
       opts.runs = Number(value);
+    } else if (flag === "--drift-limit") {
+      const value = argv[++i];
+      if (value === undefined || !/^\d+(\.\d+)?$/.test(value)) throw new Error("--drift-limit needs a non-negative number");
+      opts.driftLimit = Number(value);
     } else if (flag === "--out" || flag === "--compare") {
       const value = argv[++i];
       if (value === undefined || value === "") throw new Error(`${flag} needs a path`);

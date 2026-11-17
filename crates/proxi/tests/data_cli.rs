@@ -1,4 +1,4 @@
-//! Replays the Node `data` CLI golden captured by app/test/capture-parity-golden.ts:
+//! Replays the Node `data` CLI golden (crates/proxi/tests/fixtures/golden/data-cli.json):
 //! every case runs `proxi data <args>` with the case's env and compares the
 //! normalised stdout/stderr/exit code with the frozen expectation.
 

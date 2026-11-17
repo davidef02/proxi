@@ -260,11 +260,12 @@ async function start() {
     return;
   }
   process.on("exit", () => killTreeSync(srv.pid)); // sync: nothing async can run in the exit hook
-  // The backend exiting on its own while we are not quitting is the self-update relaunch signal
-  // (serve_cli exits after the relaunch notify). backend.mjs does not expose the close code.
-  void srv.exited.then(() => {
+  // The backend exiting with code 0 while we are not quitting is the self-update relaunch signal
+  // (serve_cli exits after the relaunch notify); anything else is a crash: log it and quit.
+  void srv.exited.then((code) => {
     if (quitting) return;
-    app.relaunch();
+    if (code === 0) app.relaunch();
+    else console.error(`[desktop] backend exited with code ${code}`);
     app.quit();
   });
   let provider = "claude";

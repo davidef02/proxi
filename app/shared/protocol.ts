@@ -549,9 +549,6 @@ export const DEFAULT_PORT = 4317;
 /** The exact Phase 1c question (skills/teach). */
 export const ANKI_OPT_IN_QUESTION = "Vuoi che vengano create e sincronizzate le flashcard Anki per questa sessione? (Sì / No)";
 
-// ───────────────────────────── engine and sync constants ─────────────────────────────
-// Shared by the tests and the web UI; the Rust server (crates/proxi) is the runtime source after the cutover.
-
 /** Minimum claude CLI version the app supports (GET /api/claude/status). */
 export const CLAUDE_MIN_VERSION = "2.1.259";
 

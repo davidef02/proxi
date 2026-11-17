@@ -275,7 +275,7 @@ fn run(args: EmbedBenchArgs) -> Result<i32, String> {
     } else {
         println!(
             "FAIL: try another model: edit model, dtype, queryPrefix, passagePrefix in \
-             app/server/graph/embedding-model.json and rerun proxi embed-bench"
+             crates/proxi/src/embedding-model.json and rerun proxi embed-bench"
         );
     }
 
@@ -294,7 +294,7 @@ fn run(args: EmbedBenchArgs) -> Result<i32, String> {
             "measuredAt": &measured_at[..10],
         });
         record_bench(&repo_root, record)?;
-        println!("Recorded in app/server/graph/embedding-model.json");
+        println!("Recorded in crates/proxi/src/embedding-model.json");
     }
 
     Ok(if passes { 0 } else { 1 })
