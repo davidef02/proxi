@@ -91,8 +91,13 @@ async fn job_mcp(
     }
 }
 
-async fn graph_sources(State(jobs): State<Arc<JobManager>>) -> Json<Vec<Value>> {
-    Json(list_sources(&jobs.opts.data_root, &jobs.opts.graph))
+async fn graph_sources(State(jobs): State<Arc<JobManager>>) -> Response {
+    let data_root = jobs.opts.data_root.clone();
+    let graph = jobs.opts.graph.clone();
+    match tokio::task::spawn_blocking(move || list_sources(&data_root, &graph)).await {
+        Ok(sources) => Json(sources).into_response(),
+        Err(_) => crate::server::json_error(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"),
+    }
 }
 
 async fn graph_extract(State(jobs): State<Arc<JobManager>>, body: Bytes) -> Response {
@@ -103,44 +108,54 @@ async fn graph_extract(State(jobs): State<Arc<JobManager>>, body: Bytes) -> Resp
             "Cannot read properties of null (reading 'sources')",
         );
     }
-    let sources = parsed.as_object().and_then(|object| object.get("sources"));
-    let all = list_sources(&jobs.opts.data_root, &jobs.opts.graph);
-    let (picked, force) = if let Some(ids) = sources.and_then(Value::as_array) {
-        let ids: Vec<&str> = ids.iter().filter_map(Value::as_str).collect();
-        let bad: Vec<&str> = ids
-            .iter()
-            .copied()
-            .filter(|id| !all.iter().any(|source| source["id"].as_str() == Some(id)))
-            .collect();
-        if !bad.is_empty() {
-            return crate::server::json_error(
-                StatusCode::BAD_REQUEST,
-                &format!("unknown source: {}", bad.join(", ")),
-            );
-        }
-        (
-            all.iter()
-                .filter(|source| source["id"].as_str().is_some_and(|id| ids.contains(&id)))
-                .collect::<Vec<_>>(),
-            true,
-        )
-    } else {
-        (
-            all.iter().filter(|source| needs_mapping(source)).collect(),
-            false,
-        )
-    };
-
-    let mut started = Vec::new();
-    for source in picked {
-        let Some(id) = source["id"].as_str() else {
-            continue;
+    let res = tokio::task::spawn_blocking(move || {
+        let sources = parsed.as_object().and_then(|object| object.get("sources"));
+        let all = list_sources(&jobs.opts.data_root, &jobs.opts.graph);
+        let (picked_ids, force) = if let Some(ids) = sources.and_then(Value::as_array) {
+            let ids: Vec<String> = ids.iter().filter_map(Value::as_str).map(str::to_string).collect();
+            let bad: Vec<&str> = ids
+                .iter()
+                .map(String::as_str)
+                .filter(|id| !all.iter().any(|source| source["id"].as_str() == Some(id)))
+                .collect();
+            if !bad.is_empty() {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    format!("unknown source: {}", bad.join(", ")),
+                ));
+            }
+            (
+                all.iter()
+                    .filter(|source| source["id"].as_str().is_some_and(|id| ids.iter().any(|i| i == id)))
+                    .filter_map(|source| source["id"].as_str().map(str::to_string))
+                    .collect::<Vec<_>>(),
+                true,
+            )
+        } else {
+            (
+                all.iter()
+                    .filter(|source| needs_mapping(source))
+                    .filter_map(|source| source["id"].as_str().map(str::to_string))
+                    .collect(),
+                false,
+            )
         };
-        match jobs.start_map(id, None, force) {
-            Ok(Some(record)) => started.push(record),
-            Ok(None) => {}
-            Err(message) => return crate::server::json_error(StatusCode::INTERNAL_SERVER_ERROR, &message),
+
+        let mut started = Vec::new();
+        for id in picked_ids {
+            match jobs.start_map_from_all(&all, &id, None, force) {
+                Ok(Some(record)) => started.push(record),
+                Ok(None) => {}
+                Err(message) => return Err((StatusCode::INTERNAL_SERVER_ERROR, message)),
+            }
         }
+        Ok(started)
+    })
+    .await;
+
+    match res {
+        Ok(Ok(started)) => Json(json!({ "jobs": started })).into_response(),
+        Ok(Err((status, message))) => crate::server::json_error(status, &message),
+        Err(_) => crate::server::json_error(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"),
     }
-    Json(json!({ "jobs": started })).into_response()
 }

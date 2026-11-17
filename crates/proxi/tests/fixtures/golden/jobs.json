@@ -129,28 +129,20 @@
       }
     },
     {
-      "name": "list",
+      "name": "cancel-settled",
       "request": {
-        "method": "GET",
-        "path": "/api/jobs"
+        "method": "POST",
+        "path": "/api/jobs/<job>/cancel",
+        "headers": {
+          "x-learner-client": "1"
+        },
+        "body": {}
       },
       "response": {
         "status": 200,
-        "body": [
-          {
-            "id": "<uuid>",
-            "kind": "research",
-            "title": "Ricerca: Cos'è un ref in Vue 3.5? FAKE:job:W3sidG9vbCI6InN1Ym1pdF9yZ…",
-            "sessionId": "<session>",
-            "model": "sonnet",
-            "status": "done",
-            "activity": "",
-            "createdAt": "<iso>",
-            "updatedAt": "<iso>",
-            "costUsd": 0.001,
-            "delivered": true
-          }
-        ]
+        "body": {
+          "ok": true
+        }
       }
     },
     {

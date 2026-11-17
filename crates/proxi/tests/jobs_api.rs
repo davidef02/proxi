@@ -117,6 +117,15 @@ async fn job_routes_answer_like_node() {
 
     let response = client
         .post(url(&server, "/mcp/job/nope"))
+        .body("{}")
+        .send()
+        .await
+        .expect("POST missing job MCP without token");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(body_json(response).await, json!({"error": "Unauthorized"}));
+
+    let response = client
+        .post(url(&server, "/mcp/job/nope"))
         .header("x-learner-token", server.sessions.token())
         .body("{}")
         .send()
@@ -124,6 +133,25 @@ async fn job_routes_answer_like_node() {
         .expect("POST missing job MCP");
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     assert_eq!(body_json(response).await, json!({"error": "Job not found"}));
+
+    for (method, path) in [
+        ("GET", "/mcp/job/nope"),
+        ("POST", "/mcp/job/"),
+        ("POST", "/mcp/job/a/b"),
+    ] {
+        let req = if method == "GET" {
+            client.get(url(&server, path))
+        } else {
+            client.post(url(&server, path)).body("{}")
+        };
+        let response = req
+            .header("x-learner-token", server.sessions.token())
+            .send()
+            .await
+            .expect("MCP invalid path request");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(body_json(response).await, json!({"error": "Not found"}));
+    }
 
     let response = post(&client, &server, "/api/graph/extract", "null").await;
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -181,7 +209,10 @@ async fn research_job_runs_through_the_job_endpoint() {
 
     let initial = only_job(&client, &server).await;
     let id = initial["id"].as_str().expect("job id").to_string();
-    let done = job_until(&client, &server, &id, |job| job["status"] == "done").await;
+    let done = job_until(&client, &server, &id, |job| {
+        job["status"] == "done" && job["delivered"] == true
+    })
+    .await;
     assert_eq!(done["result"]["kind"], "research");
     assert!(done["costUsd"].as_f64().unwrap_or(0.0) > 0.0);
     assert_eq!(done["activity"], "");

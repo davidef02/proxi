@@ -389,14 +389,14 @@ impl JobManager {
         Ok(Value::Object(rec))
     }
 
-    pub fn start_map(
+    pub fn start_map_from_all(
         &self,
+        all: &[Value],
         source: &str,
         session_id: Option<&str>,
         force: bool,
     ) -> Result<Option<Value>, String> {
-        let sources = crate::graph::extract::list_sources(&self.opts.data_root, &self.opts.graph);
-        let s = match sources.iter().find(|x| x.get("id").and_then(Value::as_str) == Some(source)) {
+        let s = match all.iter().find(|x| x.get("id").and_then(Value::as_str) == Some(source)) {
             Some(s) => s,
             None => return Ok(None),
         };
@@ -419,6 +419,16 @@ impl JobManager {
             Err(e) => return Err(e),
         };
         Ok(Some(full))
+    }
+
+    pub fn start_map(
+        &self,
+        source: &str,
+        session_id: Option<&str>,
+        force: bool,
+    ) -> Result<Option<Value>, String> {
+        let sources = crate::graph::extract::list_sources(&self.opts.data_root, &self.opts.graph);
+        self.start_map_from_all(&sources, source, session_id, force)
     }
 
     pub fn list(&self) -> Vec<Value> {
@@ -798,30 +808,24 @@ impl JobManager {
         static TICKET_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let ticket = TICKET_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-        let already_settled = {
+        let handle_to_stop = {
             let mut state = self.state.lock().expect("state lock");
             state.live.insert(ticket, pid);
             let Some(e) = state.entries.get_mut(id) else {
                 return;
             };
             if e.settled {
-                true
+                state.live.remove(&ticket);
+                Some(handle)
             } else {
                 handle.send(&first_message);
                 e.handle = Some(handle);
-                false
+                None
             }
         };
 
-        if already_settled {
-            let h = {
-                let mut state = self.state.lock().expect("state lock");
-                state.live.remove(&ticket);
-                state.entries.get_mut(id).and_then(|e| e.handle.take())
-            };
-            if let Some(mut h) = h {
-                tokio::spawn(async move { h.stop().await });
-            }
+        if let Some(mut h) = handle_to_stop {
+            tokio::spawn(async move { h.stop().await });
             return;
         }
 

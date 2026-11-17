@@ -11,7 +11,7 @@ import {
   SESSIONS_DATA_SEED,
   waitForStatus,
 } from "./capture-golden.ts";
-import { fakeClaude, startServer } from "./harness.ts";
+import { fakeClaude, removeTree, startServer } from "./harness.ts";
 
 export const JOBS_GOLDEN = "jobs";
 
@@ -127,7 +127,9 @@ async function captureJob(outDir: string): Promise<string> {
     const jobEvents = events.events.filter(
       (event) => (event as { type?: string }).type === "job" && (event as { job?: { id?: string } }).job?.id === job.id,
     ) as Array<{ job: { status: string; activity: string; result?: unknown } }>;
-    const statuses = [...new Set(jobEvents.map((event) => event.job.status))];
+    const statuses = jobEvents
+      .map((event) => event.job.status)
+      .filter((status, index, array) => index === 0 || array[index - 1] !== status);
     const activities = [...new Set(jobEvents.map((event) => event.job.activity).filter(Boolean))].sort();
     const normalise = (value: unknown) => normaliseSession(value, roots, sessionId);
 
@@ -151,7 +153,11 @@ async function captureJob(outDir: string): Promise<string> {
         request: { method: "POST", path: "/api/jobs/nope/cancel", headers: { "x-learner-client": "1" }, body: {} },
         response: await request("POST", "/api/jobs/nope/cancel", {}),
       },
-      { name: "list", request: { method: "GET", path: "/api/jobs" }, response: await request("GET", "/api/jobs") },
+      {
+        name: "cancel-settled",
+        request: { method: "POST", path: "/api/jobs/<job>/cancel", headers: { "x-learner-client": "1" }, body: {} },
+        response: await request("POST", `/api/jobs/${job.id}/cancel`, {}),
+      },
       {
         name: "mcp-unauthorized",
         request: { method: "POST", path: "/mcp/job/<job>", body: rpc },
@@ -200,8 +206,7 @@ async function captureJob(outDir: string): Promise<string> {
   } finally {
     events.close();
     await server.close();
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    await removeTree(dir);
   }
 }
 
