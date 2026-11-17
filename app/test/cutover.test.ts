@@ -39,7 +39,7 @@ describe("cutover to the proxi binary", () => {
   });
 
   it("keeps no reference to app/server in code", (t) => {
-    const r = spawnSync("git", ["grep", "-l", "app/server", "--", "app", "extensions", "tests", "scripts"], {
+    const r = spawnSync("git", ["grep", "-l", "app/server", "--", "app", "extensions", "tests", "scripts", ":(exclude)app/test/cutover.test.ts"], {
       cwd: repoRoot,
       encoding: "utf8",
     });
