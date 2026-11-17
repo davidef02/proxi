@@ -5,6 +5,7 @@ repetition. Learner language is **Italian**; code, commits and docs are in Engli
 
 Mode: personal | Level: uso personale
 Reliable in the user's daily use. Tests cover the behaviours that matter and errors are clear. No multi-user, scale or enterprise hardening unless asked.
+Gate: `npm run typecheck && npm run typecheck:app && npm test && npm run app:build && cargo test --locked`
 
 **Product principle: reduce study friction.** Every screen makes the next useful study action
 obvious and one click away: **Continua** (next lesson) and **Ripasso** (Anki review).

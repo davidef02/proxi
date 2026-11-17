@@ -75,7 +75,8 @@ export function exportTree(repoRoot, destDir, ref = "HEAD") {
   const tmpTar = path.join(os.tmpdir(), `proxi-export-${process.pid}-${Date.now()}.tar`);
   try {
     execFileSync("git", ["archive", "--format=tar", "-o", tmpTar, ref], { cwd: repoRoot, stdio: "pipe" });
-    execFileSync("tar", ["-xf", tmpTar, "-C", destDir], { stdio: "pipe" });
+    // archive named relative to its folder: GNU tar (Git for Windows) reads "C:\..." as a remote host
+    execFileSync("tar", ["-xf", path.basename(tmpTar), "-C", destDir], { cwd: path.dirname(tmpTar), stdio: "pipe" });
   } finally {
     fs.rmSync(tmpTar, { force: true });
   }
