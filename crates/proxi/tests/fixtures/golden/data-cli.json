@@ -1,0 +1,265 @@
+{
+  "route": "data-cli",
+  "cases": [
+    {
+      "name": "where_env_absolute_matches_node",
+      "args": [
+        "where"
+      ],
+      "env": {
+        "HOME": "<home>",
+        "USERPROFILE": "<home>",
+        "LEARNER_DATA_ROOT": "<dataRoot>",
+        "LEARNER_REPO_ROOT": "<repo>"
+      },
+      "config": null,
+      "stdout": "<dataRoot> (env)\n",
+      "stderr": "",
+      "exitCode": 0
+    },
+    {
+      "name": "where_env_relative_matches_node",
+      "args": [
+        "where"
+      ],
+      "env": {
+        "HOME": "<home>",
+        "USERPROFILE": "<home>",
+        "LEARNER_DATA_ROOT": "rel/dir",
+        "LEARNER_REPO_ROOT": "<repo>"
+      },
+      "config": null,
+      "stdout": "<repoRoot>/rel/dir (env)\n",
+      "stderr": "",
+      "exitCode": 0
+    },
+    {
+      "name": "where_env_padded_matches_node",
+      "args": [
+        "where"
+      ],
+      "env": {
+        "HOME": "<home>",
+        "USERPROFILE": "<home>",
+        "LEARNER_DATA_ROOT": "  <dataRoot>  ",
+        "LEARNER_REPO_ROOT": "<repo>"
+      },
+      "config": null,
+      "stdout": "<dataRoot> (env)\n",
+      "stderr": "",
+      "exitCode": 0
+    },
+    {
+      "name": "where_config_pointer_matches_node",
+      "args": [
+        "where"
+      ],
+      "env": {
+        "HOME": "<home>",
+        "USERPROFILE": "<home>",
+        "LEARNER_REPO_ROOT": "<repo>"
+      },
+      "config": {
+        "dataRoot": "<dataRoot>"
+      },
+      "stdout": "<dataRoot> (config)\n",
+      "stderr": "",
+      "exitCode": 0
+    },
+    {
+      "name": "where_config_pointer_relative_falls_back_to_default",
+      "args": [
+        "where"
+      ],
+      "env": {
+        "HOME": "<home>",
+        "USERPROFILE": "<home>",
+        "LEARNER_REPO_ROOT": "<repo>"
+      },
+      "config": {
+        "dataRoot": "rel/dir"
+      },
+      "stdout": "<home>/Documents/proxi-data (default)\n",
+      "stderr": "",
+      "exitCode": 0
+    },
+    {
+      "name": "where_default_matches_node",
+      "args": [
+        "where"
+      ],
+      "env": {
+        "HOME": "<home>",
+        "USERPROFILE": "<home>",
+        "LEARNER_REPO_ROOT": "<repo>"
+      },
+      "config": null,
+      "stdout": "<home>/Documents/proxi-data (default)\n",
+      "stderr": "",
+      "exitCode": 0
+    },
+    {
+      "name": "cli_where_matches_node",
+      "args": [
+        "where"
+      ],
+      "env": {
+        "HOME": "<home>",
+        "USERPROFILE": "<home>",
+        "LEARNER_DATA_ROOT": "<dataRoot>",
+        "LEARNER_REPO_ROOT": "<repo>"
+      },
+      "config": null,
+      "stdout": "<dataRoot> (env)\n",
+      "stderr": "",
+      "exitCode": 0
+    },
+    {
+      "name": "cli_help_matches_node",
+      "args": [
+        "help"
+      ],
+      "env": {
+        "HOME": "<home>",
+        "USERPROFILE": "<home>",
+        "LEARNER_DATA_ROOT": "<dataRoot>",
+        "LEARNER_REPO_ROOT": "<repo>"
+      },
+      "config": null,
+      "stdout": "Usage: npm run data -- <command>\n\n  where                  print the data folder and where it was resolved from\n  help                   show this message\n\nResolution: LEARNER_DATA_ROOT, then .learner/config.json, then ~/Documents/proxi-data.\n",
+      "stderr": "",
+      "exitCode": 0
+    },
+    {
+      "name": "cli_no_args_matches_node",
+      "args": [],
+      "env": {
+        "HOME": "<home>",
+        "USERPROFILE": "<home>",
+        "LEARNER_DATA_ROOT": "<dataRoot>",
+        "LEARNER_REPO_ROOT": "<repo>"
+      },
+      "config": null,
+      "stdout": "Usage: npm run data -- <command>\n\n  where                  print the data folder and where it was resolved from\n  help                   show this message\n\nResolution: LEARNER_DATA_ROOT, then .learner/config.json, then ~/Documents/proxi-data.\n",
+      "stderr": "",
+      "exitCode": 0
+    },
+    {
+      "name": "cli_unknown_command_matches_node",
+      "args": [
+        "nope"
+      ],
+      "env": {
+        "HOME": "<home>",
+        "USERPROFILE": "<home>",
+        "LEARNER_DATA_ROOT": "<dataRoot>",
+        "LEARNER_REPO_ROOT": "<repo>"
+      },
+      "config": null,
+      "stdout": "",
+      "stderr": "Unknown command: nope\nUsage: npm run data -- <command>\n\n  where                  print the data folder and where it was resolved from\n  help                   show this message\n\nResolution: LEARNER_DATA_ROOT, then .learner/config.json, then ~/Documents/proxi-data.\n",
+      "exitCode": 1
+    },
+    {
+      "name": "cli_unknown_long_option_matches_node",
+      "args": [
+        "where",
+        "--foo"
+      ],
+      "env": {
+        "HOME": "<home>",
+        "USERPROFILE": "<home>",
+        "LEARNER_DATA_ROOT": "<dataRoot>",
+        "LEARNER_REPO_ROOT": "<repo>"
+      },
+      "config": null,
+      "stdout": "",
+      "stderr": "Error: Unknown option '--foo'. To specify a positional argument starting with a '-', place it at the end of the command after '--', as in '-- \"--foo\"\n",
+      "exitCode": 1
+    },
+    {
+      "name": "cli_unknown_long_option_with_value_matches_node",
+      "args": [
+        "where",
+        "--foo=bar"
+      ],
+      "env": {
+        "HOME": "<home>",
+        "USERPROFILE": "<home>",
+        "LEARNER_DATA_ROOT": "<dataRoot>",
+        "LEARNER_REPO_ROOT": "<repo>"
+      },
+      "config": null,
+      "stdout": "",
+      "stderr": "Error: Unknown option '--foo'. To specify a positional argument starting with a '-', place it at the end of the command after '--', as in '-- \"--foo\"\n",
+      "exitCode": 1
+    },
+    {
+      "name": "cli_unknown_short_option_matches_node",
+      "args": [
+        "-x"
+      ],
+      "env": {
+        "HOME": "<home>",
+        "USERPROFILE": "<home>",
+        "LEARNER_DATA_ROOT": "<dataRoot>",
+        "LEARNER_REPO_ROOT": "<repo>"
+      },
+      "config": null,
+      "stdout": "",
+      "stderr": "Error: Unknown option '-x'. To specify a positional argument starting with a '-', place it at the end of the command after '--', as in '-- \"-x\"\n",
+      "exitCode": 1
+    },
+    {
+      "name": "cli_unknown_short_option_group_matches_node",
+      "args": [
+        "-abc"
+      ],
+      "env": {
+        "HOME": "<home>",
+        "USERPROFILE": "<home>",
+        "LEARNER_DATA_ROOT": "<dataRoot>",
+        "LEARNER_REPO_ROOT": "<repo>"
+      },
+      "config": null,
+      "stdout": "",
+      "stderr": "Error: Unknown option '-a'. To specify a positional argument starting with a '-', place it at the end of the command after '--', as in '-- \"-a\"\n",
+      "exitCode": 1
+    },
+    {
+      "name": "cli_double_dash_positional_matches_node",
+      "args": [
+        "where",
+        "--",
+        "--zz"
+      ],
+      "env": {
+        "HOME": "<home>",
+        "USERPROFILE": "<home>",
+        "LEARNER_DATA_ROOT": "<dataRoot>",
+        "LEARNER_REPO_ROOT": "<repo>"
+      },
+      "config": null,
+      "stdout": "<dataRoot> (env)\n",
+      "stderr": "",
+      "exitCode": 0
+    },
+    {
+      "name": "cli_double_dash_unknown_command_matches_node",
+      "args": [
+        "--",
+        "-abc"
+      ],
+      "env": {
+        "HOME": "<home>",
+        "USERPROFILE": "<home>",
+        "LEARNER_DATA_ROOT": "<dataRoot>",
+        "LEARNER_REPO_ROOT": "<repo>"
+      },
+      "config": null,
+      "stdout": "",
+      "stderr": "Unknown command: -abc\nUsage: npm run data -- <command>\n\n  where                  print the data folder and where it was resolved from\n  help                   show this message\n\nResolution: LEARNER_DATA_ROOT, then .learner/config.json, then ~/Documents/proxi-data.\n",
+      "exitCode": 1
+    }
+  ]
+}

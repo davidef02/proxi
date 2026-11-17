@@ -14,6 +14,7 @@ use serde_json::Value;
 
 use proxi::data_root::resolve_path;
 use proxi::embeddings::EmbeddingConfig;
+use proxi::server::start;
 
 use common::fake_hf::FakeHf;
 
@@ -22,6 +23,8 @@ const FLAGS: &[&str] = &[
     "--repo-root",
     "--data-root",
     "--port",
+    "--dist-dir",
+    "--add-dir",
     "--claude-bin",
     "--claude-bin-arg",
     "--agy-bin",
@@ -177,6 +180,52 @@ fn serve_rejects_an_out_of_range_port_flag() {
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("--port"), "{stderr}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn serve_serves_the_dist_dir_flag() {
+    let root = common::temp_dir("serve-cli-dist-dir");
+    let repo = root.0.join("repo");
+    let dist = root.0.join("ui");
+    fs::create_dir_all(&repo).expect("create repo");
+    fs::create_dir_all(&dist).expect("create dist");
+    fs::write(dist.join("index.html"), "<html>flag dist</html>").expect("write index");
+
+    let repo_arg = repo.display().to_string();
+    let dist_arg = dist.display().to_string();
+    let (_server, rx) = spawn_serve(&[
+        "serve",
+        "--port",
+        "0",
+        "--repo-root",
+        &repo_arg,
+        "--data-root",
+        &repo_arg,
+        "--dist-dir",
+        &dist_arg,
+    ]);
+    let (url, _) = wait_for_url(&rx);
+
+    let response = Client::new().get(format!("{url}/")).send().await.expect("GET /");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.text().await.expect("read index");
+    assert_eq!(body, "<html>flag dist</html>");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn start_add_dirs_override_reaches_the_session_manager() {
+    let fixture = common::Fixture::new("serve-cli-add-dirs");
+    let mut options = fixture.options();
+    options.memory_secrets = true;
+    options.add_dirs = Some(vec![fixture.root.0.join("extra")]);
+
+    let server = start(options).await.expect("start the server");
+    assert_eq!(
+        server.sessions.add_dirs(),
+        &[fixture.root.0.join("extra")],
+        "the add_dirs override must reach the manager"
+    );
+    server.close();
 }
 
 #[tokio::test(flavor = "multi_thread")]
