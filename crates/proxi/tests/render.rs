@@ -184,3 +184,60 @@ async fn close_owner_drops_open_pages_while_a_demo_runs() {
     let _ = run.await;
     renderer.close().await;
 }
+
+/// #55 on CI: the browser died while a demo page was open and every later CDP wait never
+/// returned — this chromiumoxide's command timeouts never fire again once the connection is
+/// gone — so `cargo test` sat in the shutdown until the job timeout killed it. A dead browser
+/// must fail the render quickly and let `close` finish.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_dead_browser_fails_the_render_and_does_not_hang_the_close() {
+    let renderer = Arc::new(renderer());
+    let demo = tokio::spawn({
+        let renderer = Arc::clone(&renderer);
+        async move {
+            renderer
+                .run_demo_page("dead", "<!doctype html><p>x</p>", Duration::from_secs(1))
+                .await
+        }
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while renderer.browser_pid().is_none() {
+        assert!(Instant::now() < deadline, "the browser never started");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    kill_process(renderer.browser_pid().expect("the browser has a pid"));
+
+    let outcome = tokio::time::timeout(Duration::from_secs(45), demo)
+        .await
+        .expect("run_demo_page hung after the browser died");
+    let result = outcome.expect("the demo task panicked");
+    assert!(result.is_err(), "the dead browser did not fail the render");
+    assert_eq!(renderer.open_pages(), 0);
+
+    let closed = tokio::time::timeout(Duration::from_secs(15), renderer.close()).await;
+    assert!(closed.is_ok(), "close hung after the browser died");
+}
+
+fn kill_process(pid: u32) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        use std::process::Command;
+
+        let _ = Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .status();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = std::process::Command::new("kill")
+            .args(["-9", &pid.to_string()])
+            .status();
+    }
+}
+
+/// `taskkill` opens no console window from a GUI-less test run.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;

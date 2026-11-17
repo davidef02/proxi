@@ -52,8 +52,8 @@ flowchart LR
 
 ### Phase 1: Probe (Find the Boundary)
 
-> `quiz` and `ask_user_question` name the interactive extensions of the OpenCode / Pi runtime
-> (`extensions/quiz.ts`, `extensions/ask-user-question.ts`). On runtimes without them, ask in chat
+> `quiz` and `ask_user_question` name interactive question tools; runtimes differ in what they
+> provide. On runtimes without them, ask in chat
 > turns — the format matters, the tool does not.
 
 1. **1a. Current Level (`quiz`)**:

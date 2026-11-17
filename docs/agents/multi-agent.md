@@ -7,7 +7,7 @@ System rules bind automatically from `AGENTS.md` (Antigravity, OpenCode / Pi) an
 
 | Capability | Google Antigravity (Agy) | OpenCode / Pi | Claude Code / CLI |
 | :--- | :--- | :--- | :--- |
-| **Probing & Quizzes** | `ask_question` / chat turns | `quiz` & `ask_user_question` TUI (`extensions/`) | Chat turns (symmetric bare claims) |
+| **Probing & Quizzes** | `ask_question` / chat turns | Chat turns (symmetric bare claims) | Chat turns (symmetric bare claims) |
 | **Subagent Dispatch** | Native `invoke_subagent` | `subagent(agent="...", task="...")` / `pi-interactive-subagents` | Task delegation / `agents/*.md` |
 | **Visual Rendering** | Local CLI render + inspect | Legacy makers (render tools removed); else local CLI render + inspect | Local CLI render + inspect |
 | **Lessons, Anki, Board** | `proxi lesson` / `anki` / `home` | Programmatic TS or the same CLI | `proxi lesson` / `anki` / `home` |
