@@ -10,3 +10,4 @@
 - When bounding a blocking pass in Tokio: stop it cooperatively or shut the runtime down with `shutdown_timeout`/`shutdown_background` (`timeout` around `spawn_blocking` leaves the task running and dropping the runtime waits for it, so quitting hangs for minutes).
 - When a test needs an external prerequisite or polls for an asynchronous condition: assert the condition or panic on failure or timeout, never exit or skip silently (a test that exits without checking goes green falsely).
 - When a second ported module needs a helper the crate already has: make the existing one `pub(crate)` and call it there, never paste a copy into the module (byte-identical copies drift and cost a fix round).
+- When a test removes a temp folder on Windows after killing a server: use a bounded retry helper instead of rmSync (the killed engine child holds the folder past its ~475 ms budget and teardown failed with EPERM).
