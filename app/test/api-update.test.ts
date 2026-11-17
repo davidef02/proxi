@@ -1,4 +1,4 @@
-// GET/POST /api/update over plain HTTP: checks, refusals, fast-forward, rebuild and relaunch in both server modes.
+// GET/POST /api/update over plain HTTP: checks, refusals, fast-forward, rebuild and relaunch.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -299,7 +299,6 @@ describe("/api/update", () => {
           stream.close();
         }
 
-        if (server.mode !== "binary") return;
         const exe = path.join(root, "target", "release", process.platform === "win32" ? "proxi.exe" : "proxi");
         assert.equal(fs.readFileSync(exe, "utf8").trim(), "new build");
 

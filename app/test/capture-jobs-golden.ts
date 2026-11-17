@@ -87,7 +87,7 @@ async function captureJob(outDir: string): Promise<string> {
   }
 
   const roots = { repoRoot: rootVariants(repo), dataRoot: rootVariants(data) };
-  const server = await startServer({ repoRoot: repo, dataRoot: data, mode: "node", claude: fakeClaude() });
+  const server = await startServer({ repoRoot: repo, dataRoot: data, claude: fakeClaude() });
   const events = openEvents(server.url);
   try {
     await events.ready;

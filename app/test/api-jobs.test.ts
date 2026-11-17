@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { SESSIONS_DATA_SEED, waitForStatus } from "./capture-golden.ts";
+import { SESSIONS_DATA_SEED, waitForStatus } from "./golden-scripts.ts";
 import { fakeClaude, removeTree, startServer, type TestServer } from "./harness.ts";
 
 const BRIEF = "Vue 3.5 rende reattivo un ref leggendo .value dentro un effect: la dipendenza viene registrata al momento della lettura. Fonte primaria: la documentazione ufficiale.";

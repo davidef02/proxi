@@ -15,8 +15,7 @@ import {
   SKIP_MODEL_ENV,
 } from "../shared/identity.mjs";
 import { defaultDataRoot } from "../../extensions/data-root.ts";
-import { DATA_REPO } from "../server/sync/github.ts";
-import { DRIVE_FOLDER } from "../server/sync/gdrive.ts";
+import { DATA_REPO, DRIVE_FOLDER } from "../shared/protocol.ts";
 import { DECK_ROOT, cardsToTsv, formatDefaultDeckName } from "../../extensions/anki-sync.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");

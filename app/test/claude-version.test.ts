@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, describe, it } from "node:test";
-import { CLAUDE_MIN_VERSION } from "../server/claude.ts";
+import { CLAUDE_MIN_VERSION } from "../shared/protocol.ts";
 import { startServer } from "./harness.ts";
 
 describe("GET /api/claude/status", () => {

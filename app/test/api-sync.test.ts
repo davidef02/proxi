@@ -1,17 +1,17 @@
 // /api/sync over plain HTTP: the GitHub and Google logins, conflicts, trash, the data folder and the committed
-// goldens, identical against the Node server and the proxi binary (PROXI_TEST_SERVER).
+// goldens, against the proxi binary.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, before, describe, it } from "node:test";
-import { DRIVE_SCOPE, GOOGLE_CLIENT_ID } from "../server/sync/gdrive.ts";
-import { captureScript, GOLDEN_DIR, ISO_RE, SCRIPTS } from "./capture-golden.ts";
+import { DRIVE_SCOPE, GOOGLE_CLIENT_ID } from "../shared/protocol.ts";
+import { captureScript, GOLDEN_DIR, ISO_RE, SCRIPTS } from "./golden-scripts.ts";
 import { installFakeDrive, type FakeDrive, type FakeDriveSeed } from "./fake-drive.ts";
 import { installFakeGithub, type FakeGithubSeed } from "./fake-github.ts";
 import { startFakeServers, type FakeServers } from "./fake-servers.ts";
-import { serverMode, startServer, type TestServer } from "./harness.ts";
+import { startServer, type TestServer } from "./harness.ts";
 
 const CURRICULUM = { chapters: [{ title: "Demo", slug: "demo", lessons: [{ title: "Prima lezione", slug: "prima-lezione", plannedNodes: 2 }] }] };
 
@@ -260,7 +260,7 @@ describe("GitHub device flow", () => {
       const created = fakes.github.requests.find((r) => r.method === "POST" && r.path === "/user/repos");
       assert.ok(created, "the fake got no POST /user/repos");
       assert.equal((JSON.parse(created.body) as { private?: boolean }).private, true);
-      if (server.mode === "binary") assert.equal(fs.existsSync(path.join(repo, ".learner", "secrets.json")), false);
+      assert.equal(fs.existsSync(path.join(repo, ".learner", "secrets.json")), false);
     });
   });
 
@@ -280,7 +280,7 @@ describe("GitHub device flow", () => {
         const connected = await status(server);
         assert.equal(connected.github.connected, true);
         assert.equal(connected.provider, "local");
-        if (server.mode === "binary") assert.equal(fs.existsSync(path.join(repo, ".learner", "secrets.json")), false);
+        assert.equal(fs.existsSync(path.join(repo, ".learner", "secrets.json")), false);
 
         const disconnected = (await (await post(server, "/api/sync/disconnect", { provider: "github" })).json()) as SyncStatusBody;
         assert.equal(disconnected.github.connected, false);
@@ -426,7 +426,7 @@ describe("Google login", () => {
   it("a full sync against the fake Drive sends the Node golden requests (AC3)", async () => {
     const script = SCRIPTS.find((s) => s.route === "sync-gdrive");
     assert.ok(script, "no sync-gdrive script in capture-golden.ts");
-    const file = await captureScript(script, serverMode());
+    const file = await captureScript(script);
     const golden = JSON.parse(fs.readFileSync(path.join(GOLDEN_DIR, "sync-gdrive.json"), "utf-8")) as { cases: unknown };
     assert.deepEqual(file.cases, golden.cases);
   });
@@ -587,7 +587,7 @@ describe("data folder", () => {
 it("a full sync against the fake GitHub sends the Node golden commits (AC5)", async () => {
   const script = SCRIPTS.find((s) => s.route === "sync");
   assert.ok(script, "no sync script in capture-golden.ts");
-  const file = await captureScript(script, serverMode());
+  const file = await captureScript(script);
   const golden = JSON.parse(fs.readFileSync(path.join(GOLDEN_DIR, "sync.json"), "utf-8")) as { cases: unknown };
   assert.deepEqual(file.cases, golden.cases);
 });

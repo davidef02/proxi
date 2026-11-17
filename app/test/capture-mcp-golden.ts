@@ -183,6 +183,16 @@ export async function post(base: string, pathname: string, body: string, token?:
   return { status: res.status, text: await res.text() };
 }
 
+/** The shared MCP secret the server writes into the session's mcp.json (the binary exposes it no other way). */
+export function mcpToken(repo: string, id: string): string {
+  const mcp = JSON.parse(
+    fs.readFileSync(path.join(repo, ".learner", "sessions", id, "mcp.json"), "utf8"),
+  ) as { mcpServers: Record<string, { headers: Record<string, string> }> };
+  const token = Object.values(mcp.mcpServers)[0]?.headers["x-learner-token"];
+  if (!token) throw new Error(`no x-learner-token in the session's mcp.json (${id})`);
+  return token;
+}
+
 /** Runs the script against a fresh temp repo + data folder and writes `<outDir>/mcp.json`; returns its path. */
 export async function captureMcpGolden(outDir: string = GOLDEN_DIR): Promise<string> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "golden-mcp-"));
@@ -202,10 +212,8 @@ export async function captureMcpGolden(outDir: string = GOLDEN_DIR): Promise<str
     fs.writeFileSync(file, text);
   }
   const roots = { repoRoot: rootVariants(repo), dataRoot: rootVariants(data) };
-  const server = await startServer({ repoRoot: repo, dataRoot: data, mode: "node", claude: fakeClaude() });
+  const server = await startServer({ repoRoot: repo, dataRoot: data, claude: fakeClaude() });
   try {
-    const token = server.token;
-    if (!token) throw new Error("the Node test server reports no MCP token");
     const created = await fetch(`${server.url}/api/sessions`, {
       method: "POST",
       headers: { "x-learner-client": "1", "content-type": "application/json" },
@@ -215,6 +223,7 @@ export async function captureMcpGolden(outDir: string = GOLDEN_DIR): Promise<str
     if (!created.ok || !createBody.id) throw new Error(`POST /api/sessions: ${created.status} ${JSON.stringify(createBody)}`);
     const id = createBody.id;
     await waitForStatus(server.url, id, "idle");
+    const token = mcpToken(repo, id);
 
     const cases: McpCase[] = [];
     for (const c of CASES) {

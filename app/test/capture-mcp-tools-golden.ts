@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { GOLDEN_DIR, normaliseSession, rootVariants, SESSIONS_DATA_SEED, waitForStatus } from "./capture-golden.ts";
-import { diff, post } from "./capture-mcp-golden.ts";
+import { diff, mcpToken, post } from "./capture-mcp-golden.ts";
 import { snapshot } from "./capture-lesson-golden.ts";
 import { fakeClaude, REPO_ROOT, startServer } from "./harness.ts";
 
@@ -230,13 +230,13 @@ export async function captureMcpToolsGolden(outDir: string = GOLDEN_DIR): Promis
     fs.writeFileSync(file, text);
   }
   const roots = { repoRoot: rootVariants(repo), dataRoot: rootVariants(data) };
-  const server = await startServer({ repoRoot: repo, dataRoot: data, mode: "node", claude: fakeClaude() });
+  const server = await startServer({ repoRoot: repo, dataRoot: data, claude: fakeClaude() });
   try {
-    const token = server.token;
-    if (!token) throw new Error("the Node test server reports no MCP token");
     const sessions: ToolSession[] = [];
+    let token: string | undefined;
     for (const def of SESSIONS) {
       const id = await create(server.url, def.createBody);
+      token ??= mcpToken(repo, id);
       const cases: ToolCase[] = [];
       for (const c of def.cases) {
         const pathname = `/mcp/${id}`;

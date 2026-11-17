@@ -1,5 +1,6 @@
 // The one contract between the server (app/server) and the web UI (app/web).
 // Types only, plus a few constants. Both sides import this file; change it deliberately.
+import { DATA_DIR_NAME } from "./identity.mjs";
 import type { CognitiveNodePayload, CognitiveStepPayload, FullLessonDocument, PedagogicalTier, SintesiDocument, SintesiNode, SintesiMisconception } from "../../extensions/html-lesson.ts";
 
 export type { CognitiveNodePayload, CognitiveStepPayload, FullLessonDocument, PedagogicalTier, SintesiDocument, SintesiNode, SintesiMisconception };
@@ -547,6 +548,38 @@ export type AnswerBody =
 export const DEFAULT_PORT = 4317;
 /** The exact Phase 1c question (skills/teach). */
 export const ANKI_OPT_IN_QUESTION = "Vuoi che vengano create e sincronizzate le flashcard Anki per questa sessione? (Sì / No)";
+
+// ───────────────────────────── engine and sync constants ─────────────────────────────
+// Shared by the tests and the web UI; the Rust server (crates/proxi) is the runtime source after the cutover.
+
+/** Minimum claude CLI version the app supports (GET /api/claude/status). */
+export const CLAUDE_MIN_VERSION = "2.1.259";
+
+/** agy model ids offered when the CLI answers no list. */
+export const AGY_MODELS_FALLBACK = [
+  "gemini-3.8-flash-high",
+  "gemini-3.8-flash-medium",
+  "gemini-3.8-flash-low",
+  "claude-sonnet-4-6",
+  "claude-opus-4-6-thinking",
+  "gpt-oss-120b-medium",
+];
+
+/** opencode model ids offered when the CLI answers no list. */
+export const OPENCODE_MODELS_FALLBACK = [
+  "omniroute/auto/best-coding",
+  "omniroute/auto/best-fast",
+  "omniroute/auto/fast",
+  "google/gemini-2.5-pro",
+  "google/gemini-2.5-flash",
+  "opencode/big-pickle",
+];
+
+export const GOOGLE_CLIENT_ID = "596427399450-dbi9kfci4g4hfmdic4l5o8shr6vetbna.apps.googleusercontent.com"; // human prerequisite: Desktop OAuth client
+export const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
+/** The GitHub repo and the Drive folder the sync providers use, named after the data folder. */
+export const DATA_REPO: string = DATA_DIR_NAME;
+export const DRIVE_FOLDER: string = DATA_DIR_NAME;
 
 // ───────────────────────────── settings ─────────────────────────────
 // Stored in <repo>/.learner/settings.json (runtime, gitignored). Read with readSettings() (app/server/settings.ts).

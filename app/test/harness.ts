@@ -1,21 +1,9 @@
-// One test server for both backends: the in-process Node server or the spawned `proxi` binary, chosen by PROXI_TEST_SERVER.
+// The one test server: the spawned `proxi` binary. PROXI_TEST_SERVER=binary (scripts/test-rust.mjs) is simply ignored.
 import path from "node:path";
 import fs from "node:fs";
-import { createServer } from "../server/main.ts";
 import { proxiBinary, spawnProxi } from "./binary.ts";
 
 export { proxiBinary };
-
-export const MODE_ENV = "PROXI_TEST_SERVER";
-export type ServerMode = "node" | "binary";
-
-/** The mode selected by `PROXI_TEST_SERVER`: `node` (default) or `binary`. */
-export function serverMode(env: NodeJS.ProcessEnv = process.env): ServerMode {
-  const raw = env[MODE_ENV];
-  if (raw === undefined || raw === "" || raw === "node") return "node";
-  if (raw === "binary") return "binary";
-  throw new Error(`${MODE_ENV} must be "node" or "binary", got "${raw}"`);
-}
 
 export const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
 
@@ -100,34 +88,26 @@ export interface StartOptions {
   /** The engines to run instead of the real agy and opencode (tests: `fakeAgy()`, `fakeOpencode()`). */
   agy?: { cmd: string; args?: string[] };
   opencode?: { cmd: string; args?: string[] };
-  /** Fake executables. Node mode honours `git` only; it has no build step. */
+  /** Fake executables. */
   bins?: { git?: string; cargo?: string };
-  /** Default: serverMode(). */
-  mode?: ServerMode;
 }
 
-/** The narrowed server behind both modes (the binary has no token, manager or jobs). */
+/** The spawned binary behind every HTTP test (no token, manager or jobs). */
 export interface TestServer {
-  mode: ServerMode;
   url: string;
   port: number;
-  /** Node mode only: the MCP secret. */
-  token?: string;
-  /** Binary mode: resolves when the process exits; apply's relaunch exits it. */
+  /** Resolves when the process exits; apply's relaunch exits it. */
   exited?: Promise<void>;
   close(): Promise<void>;
 }
 
 export async function startServer(opts: StartOptions): Promise<TestServer> {
-  const mode = opts.mode ?? serverMode();
   const repoRoot = path.resolve(opts.repoRoot);
   const dataRoot = path.resolve(opts.dataRoot ?? opts.repoRoot);
-  return mode === "binary"
-    ? startBinary(repoRoot, dataRoot, opts.fakes, opts.bins, opts.claude, opts.agy, opts.opencode)
-    : startNode(repoRoot, dataRoot, opts.fakes, opts.claude, opts.bins, opts.agy, opts.opencode);
+  return startBinary(repoRoot, dataRoot, opts.fakes, opts.bins, opts.claude, opts.agy, opts.opencode);
 }
 
-/** The `serve` arguments both-mode HTTP tests use: no startup update check, secrets in memory, fakes and bins. */
+/** The `serve` arguments the HTTP tests use: no startup update check, secrets in memory, fakes and bins. */
 export function binaryArgs(
   repoRoot: string,
   dataRoot: string,
@@ -142,55 +122,6 @@ export function binaryArgs(
   if (bins?.git) args.push("--git-bin", bins.git);
   if (bins?.cargo) args.push("--cargo-bin", bins.cargo);
   return args;
-}
-
-async function startNode(
-  repoRoot: string,
-  dataRoot: string,
-  fakes?: FakeUrls,
-  claude?: { cmd: string; args?: string[] },
-  bins?: StartOptions["bins"],
-  agy?: { cmd: string; args?: string[] },
-  opencode?: { cmd: string; args?: string[] },
-): Promise<TestServer> {
-  // The Anki URL is the Node seam the fake server can reach without a new URL option.
-  const prevAnki = process.env.LEARNER_ANKI_URL;
-  if (fakes?.anki) process.env.LEARNER_ANKI_URL = fakes.anki;
-  const restoreAnki = () => {
-    if (prevAnki === undefined) delete process.env.LEARNER_ANKI_URL;
-    else process.env.LEARNER_ANKI_URL = prevAnki;
-  };
-  try {
-    const srv = await createServer({
-      repoRoot,
-      dataRoot,
-      port: 0,
-      openBrowser: false,
-      claudeBin: claude?.cmd,
-      claudeBinArgs: claude?.args,
-      agyBin: agy?.cmd,
-      agyBinArgs: agy?.args,
-      opencodeBin: opencode?.cmd,
-      opencodeBinArgs: opencode?.args,
-      checkUpdateOnStart: false,
-      fetchModelOnStart: false,
-      fetchFn: fakes ? fakeFetch(fakes) : undefined,
-      gitBin: bins?.git,
-      // Node's applyUpdate exits the process after 500 ms without it: keep the test server alive.
-      relaunch: () => {},
-    });
-    let closing: Promise<void> | undefined;
-    return {
-      mode: "node",
-      url: srv.url,
-      port: srv.port,
-      token: srv.token,
-      close: () => (closing ??= srv.close().finally(restoreAnki)),
-    };
-  } catch (error) {
-    restoreAnki();
-    throw error;
-  }
 }
 
 async function startBinary(
@@ -217,5 +148,5 @@ async function startBinary(
   }
 
   const p = await spawnProxi(args);
-  return { mode: "binary", url: p.url, port: p.port, exited: p.exited, close: p.close };
+  return { url: p.url, port: p.port, exited: p.exited, close: p.close };
 }

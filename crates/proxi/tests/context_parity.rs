@@ -1,18 +1,20 @@
-//! Live Node ↔ Rust parity for the system prompt: every session kind must come out byte-identical.
+//! Replays the Node prompt golden captured by app/test/capture-parity-golden.ts:
+//! every case builds the same `PromptInput` on a fresh fixture and compares
+//! prompt and opening byte-for-byte with the frozen expectation.
 
 mod common;
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 
+use common::cli_golden;
 use proxi::context::{build_system_prompt, opening_message, PromptInput};
 
 const TITLE: &str = "Il titolo pianificato della lezione due";
 const LESSON: &str = "courses/demo/lessons/0001-lezione-uno.html";
 const DAG: &str = "graph TD\n  N1[\"Nodo 1: Prima cosa\"] --> N2[\"Nodo 2: Seconda cosa\"]\n  N2 --> N3[\"Nodo 3: Terza cosa\"]";
-const TODAY: &str = "2026-10-27";
 
 fn write(path: &Path, text: &str) {
     if let Some(parent) = path.parent() {
@@ -29,17 +31,14 @@ fn lesson_island(doc: Value) -> String {
 struct Fixture {
     _repo_dir: common::TempDir,
     _data_dir: common::TempDir,
-    _input_dir: common::TempDir,
     repo: PathBuf,
     data: PathBuf,
-    inputs: PathBuf,
 }
 
 impl Fixture {
     fn new() -> Self {
         let repo_dir = common::temp_dir("ctx-parity-repo");
         let data_dir = common::temp_dir("ctx-parity-data");
-        let input_dir = common::temp_dir("ctx-parity-input");
         let repo = repo_dir.0.clone();
         let data = data_dir.0.clone();
 
@@ -185,274 +184,101 @@ impl Fixture {
         Fixture {
             _repo_dir: repo_dir,
             _data_dir: data_dir,
-            inputs: input_dir.0.clone(),
-            _input_dir: input_dir,
             repo,
             data,
         }
     }
 }
 
-struct Case {
-    name: &'static str,
-    config: Value,
-    data_root: bool,
-    lesson_path: Option<&'static str>,
-    lesson_title: Option<&'static str>,
-    /// Markers that prove Node read the fixture, so an empty read cannot pass silently.
-    markers: &'static [&'static str],
-}
-
-fn cases() -> Vec<Case> {
-    let teach_planned = |anki: bool, model: &str| {
-        json!({
-            "kind": "teach",
-            "course": "demo",
-            "model": model,
-            "target": { "mode": "planned", "title": TITLE },
-            "ankiOptIn": anki,
-        })
-    };
-    let teach_existing = || {
-        json!({
-            "kind": "teach",
-            "course": "demo",
-            "model": "sonnet",
-            "target": { "mode": "existing", "lessonPath": LESSON },
-            "ankiOptIn": false,
-        })
-    };
-    let practice = |extra: Value| {
-        let mut config = json!({
-            "kind": "practice",
-            "course": "demo",
-            "model": "haiku",
-            "practiceNodes": [],
-        });
-        if let (Some(config), Some(extra)) = (config.as_object_mut(), extra.as_object()) {
-            for (key, value) in extra {
-                config.insert(key.clone(), value.clone());
-            }
-        }
-        config
-    };
-
-    vec![
-        Case {
-            name: "teach-planned-anki",
-            config: teach_planned(true, "sonnet"),
-            data_root: true,
-            lesson_path: None,
-            lesson_title: None,
-            markers: &["Anki opt-in: Sì", TITLE, "REC-2", "anki-cards.md"],
-        },
-        Case {
-            name: "teach-planned-no-anki",
-            config: teach_planned(false, "haiku"),
-            data_root: true,
-            lesson_path: None,
-            lesson_title: None,
-            markers: &["Anki opt-in: No", "<chapter-plan>"],
-        },
-        Case {
-            name: "teach-existing",
-            config: teach_existing(),
-            data_root: true,
-            lesson_path: Some(LESSON),
-            lesson_title: Some("Lezione uno"),
-            markers: &["Captured nodes (1 of 3 planned)", "Capire la prima cosa"],
-        },
-        Case {
-            name: "teach-existing-target-path",
-            config: teach_existing(),
-            data_root: true,
-            lesson_path: None,
-            lesson_title: Some("Lezione uno"),
-            markers: &["Captured nodes (1 of 3 planned)", "Capire la prima cosa"],
-        },
-        Case {
-            name: "teach-free-standalone",
-            config: json!({
-                "kind": "teach",
-                "course": "lezioni-singole",
-                "model": "sonnet",
-                "target": { "mode": "free" },
-                "ankiOptIn": false,
-                "note": "  Voglio partire dalle basi.  ",
-            }),
-            data_root: true,
-            lesson_path: None,
-            lesson_title: None,
-            markers: &["Learner's note: Voglio partire dalle basi."],
-        },
-        Case {
-            name: "plan-existing",
-            config: json!({
-                "kind": "plan",
-                "course": "demo",
-                "model": "sonnet",
-                "chapterTitle": "Demo",
-                "note": "Partiamo dal piano.",
-            }),
-            data_root: true,
-            lesson_path: None,
-            lesson_title: None,
-            markers: &[
-                "<chapter-plan>",
-                "GLOSSARY-MARKER",
-                "<exercises course=\"demo\">",
-                "01-a",
-                "zz-b",
-            ],
-        },
-        Case {
-            name: "plan-new",
-            config: json!({
-                "kind": "plan",
-                "course": "nuovo",
-                "model": "opus",
-                "chapterTitle": "Nuovo corso",
-            }),
-            data_root: true,
-            lesson_path: None,
-            lesson_title: None,
-            markers: &["is new: provide a full mission"],
-        },
-        Case {
-            name: "practice-no-pick",
-            config: practice(json!({})),
-            data_root: true,
-            lesson_path: None,
-            lesson_title: None,
-            markers: &["- key \"demo/lezione-uno#prima-cosa\""],
-        },
-        Case {
-            name: "practice-nodes",
-            config: practice(json!({ "practiceNodes": ["demo/lezione-uno#prima-cosa"] })),
-            data_root: true,
-            lesson_path: None,
-            lesson_title: None,
-            markers: &["Selected nodes to practise"],
-        },
-        Case {
-            name: "practice-unknown-nodes",
-            config: practice(json!({ "practiceNodes": ["demo/lezione-uno#sparito"] })),
-            data_root: true,
-            lesson_path: None,
-            lesson_title: None,
-            markers: &["not found in the map"],
-        },
-        Case {
-            name: "practice-propositions",
-            config: practice(json!({ "practicePropositions": ["n_prima", "n_mancante"] })),
-            data_root: true,
-            lesson_path: None,
-            lesson_title: None,
-            markers: &[
-                "Concetto primo",
-                "La prima proposizione del grafo.",
-                "n_mancante (not found in the map)",
-            ],
-        },
-        Case {
-            name: "teach-planned-repo-as-data",
-            config: teach_planned(false, "sonnet"),
-            data_root: false,
-            lesson_path: None,
-            lesson_title: None,
-            markers: &["The knowledge graph is empty"],
-        },
-    ]
-}
-
-fn run(fixture: &Fixture, case: &Case) {
-    let config = case.config.as_object().expect("config object").clone();
-    let mut input = Map::new();
-    input.insert("config".to_string(), Value::Object(config.clone()));
-    input.insert(
-        "repoRoot".to_string(),
-        Value::String(fixture.repo.display().to_string()),
-    );
-    if case.data_root {
-        input.insert(
-            "dataRoot".to_string(),
-            Value::String(fixture.data.display().to_string()),
-        );
+/// The capture's normalisation: temp roots back to their tags, then separators and CRLF.
+fn normalise(text: &str, roots: &[(String, String)]) -> String {
+    let mut out = text.to_string();
+    for (root, tag) in roots {
+        out = out.replace(root.as_str(), tag.as_str());
     }
-    if let Some(path) = case.lesson_path {
-        input.insert("lessonPath".to_string(), Value::String(path.to_string()));
-    }
-    input.insert("today".to_string(), Value::String(TODAY.to_string()));
-    if let Some(title) = case.lesson_title {
-        input.insert("lessonTitle".to_string(), Value::String(title.to_string()));
-    }
-
-    let file = fixture.inputs.join(format!("{}.json", case.name));
-    write(&file, &Value::Object(input).to_string());
-    let file_arg = file.display().to_string();
-    let output = common::node(&["app/test/prompt-dump.ts", &file_arg])
-        .output()
-        .unwrap_or_else(|error| panic!("{}: run prompt-dump: {error}", case.name));
-    assert!(
-        output.status.success(),
-        "{}: prompt-dump failed:\n{}",
-        case.name,
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let node: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
-        panic!(
-            "{}: prompt-dump printed invalid JSON ({error}): {}",
-            case.name,
-            String::from_utf8_lossy(&output.stdout)
-        )
-    });
-    let node_prompt = node
-        .get("prompt")
-        .and_then(Value::as_str)
-        .unwrap_or_else(|| panic!("{}: no prompt string: {node}", case.name));
-    let node_opening = node
-        .get("opening")
-        .and_then(Value::as_str)
-        .unwrap_or_else(|| panic!("{}: no opening string: {node}", case.name));
-    // A fixture both sides read as empty would compare equal and prove nothing.
-    assert!(
-        node_prompt.contains("# Course index") && node_prompt.contains("# This session"),
-        "{}: Node did not read the fixture:\n{node_prompt}",
-        case.name
-    );
-    for marker in case.markers {
-        assert!(
-            node_prompt.contains(marker),
-            "{}: Node prompt lacks {marker:?}:\n{node_prompt}",
-            case.name
-        );
-    }
-
-    let code_root = common::repo_root();
-    let data_root = case.data_root.then_some(fixture.data.as_path());
-    let rust_prompt = build_system_prompt(&PromptInput {
-        config: &config,
-        code_root: &code_root,
-        repo_root: &fixture.repo,
-        data_root,
-        lesson_path: case.lesson_path,
-        today: TODAY,
-    });
-    let rust_opening = opening_message(&config, case.lesson_title);
-
-    assert_eq!(node_prompt, rust_prompt, "{}: system prompt differs", case.name);
-    assert_eq!(
-        node_opening, rust_opening,
-        "{}: opening message differs",
-        case.name
-    );
+    let out = out.replace("\\\\", "/").replace('\\', "/");
+    out.replace("\r\n", "\n")
 }
 
 #[test]
-fn system_prompt_matches_node_for_every_session_kind() {
-    common::require_node();
+fn system_prompt_replays_the_node_golden_for_every_session_kind() {
+    let golden = cli_golden::golden("context");
+    let cases = golden["cases"].as_array().expect("cases array");
+    let names: Vec<&str> = cases
+        .iter()
+        .map(|case| case["name"].as_str().expect("case name"))
+        .collect();
+    assert_eq!(
+        names,
+        vec![
+            "teach-planned-anki",
+            "teach-planned-no-anki",
+            "teach-existing",
+            "teach-existing-target-path",
+            "teach-free-standalone",
+            "plan-existing",
+            "plan-new",
+            "practice-no-pick",
+            "practice-nodes",
+            "practice-unknown-nodes",
+            "practice-propositions",
+            "teach-planned-repo-as-data",
+        ],
+        "golden case names"
+    );
+
     let fixture = Fixture::new();
-    for case in cases() {
-        run(&fixture, &case);
+    let code_root = common::repo_root();
+    let roots = vec![
+        (fixture.data.display().to_string(), "<dataRoot>".to_string()),
+        (fixture.repo.display().to_string(), "<repo>".to_string()),
+        (code_root.display().to_string(), "<repoRoot>".to_string()),
+    ];
+
+    for case in cases {
+        let name = case["name"].as_str().expect("case name");
+        let input = &case["input"];
+        let config = input["config"].as_object().expect("config object");
+        let data_root = input.get("dataRoot").map(|_| fixture.data.as_path());
+        let lesson_path = input.get("lessonPath").and_then(Value::as_str);
+        let today = input["today"].as_str().expect("today");
+        let lesson_title = input.get("lessonTitle").and_then(Value::as_str);
+
+        let prompt = build_system_prompt(&PromptInput {
+            config,
+            code_root: &code_root,
+            repo_root: &fixture.repo,
+            data_root,
+            lesson_path,
+            today,
+        });
+        let opening = opening_message(config, lesson_title);
+
+        let rust_prompt = normalise(&prompt, &roots);
+        let rust_opening = normalise(&opening, &roots);
+
+        // A fixture read as empty would compare equal and prove nothing.
+        assert!(
+            rust_prompt.contains("# Course index") && rust_prompt.contains("# This session"),
+            "{name}: fixture not read:\n{rust_prompt}"
+        );
+        for marker in case["markers"].as_array().expect("markers") {
+            let marker = marker.as_str().expect("marker");
+            assert!(
+                rust_prompt.contains(marker),
+                "{name}: prompt lacks {marker:?}:\n{rust_prompt}"
+            );
+        }
+
+        assert_eq!(
+            rust_prompt,
+            case["prompt"].as_str().expect("golden prompt"),
+            "{name}: system prompt differs"
+        );
+        assert_eq!(
+            rust_opening,
+            case["opening"].as_str().expect("golden opening"),
+            "{name}: opening message differs"
+        );
     }
 }

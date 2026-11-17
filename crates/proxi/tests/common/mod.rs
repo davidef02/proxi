@@ -144,15 +144,6 @@ pub fn require_node() {
     }
 }
 
-pub fn node(args: &[&str]) -> Command {
-    let mut cmd = Command::new("node");
-    cmd.arg("--import")
-        .arg("tsx")
-        .args(args)
-        .current_dir(repo_root());
-    cmd
-}
-
 pub fn proxi_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_proxi"))
 }
@@ -407,59 +398,6 @@ pub fn blackhole() -> Blackhole {
         url: format!("http://127.0.0.1:{}", address.port()),
         _listener: listener,
         _held: held,
-    }
-}
-
-/// The real Node server, killed on drop so a failing test never leaks a process.
-pub struct NodeServer {
-    child: Child,
-    port: u16,
-}
-
-impl NodeServer {
-    pub fn url(&self) -> String {
-        format!("http://127.0.0.1:{}", self.port)
-    }
-}
-
-impl Drop for NodeServer {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
-pub fn start_node(repo: &Path) -> NodeServer {
-    let repo_arg = repo.display().to_string();
-    let child = node(&["crates/proxi/tests/node/serve.ts", &repo_arg])
-        .env_remove("LEARNER_DATA_ROOT")
-        .stdout(Stdio::piped())
-        .spawn()
-        .expect("spawn Node server");
-    let mut server = NodeServer { child, port: 0 };
-
-    let stdout = server.child.stdout.take().expect("stdout pipe");
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        for line in BufReader::new(stdout).lines() {
-            let Ok(line) = line else { break };
-            if tx.send(line).is_err() {
-                break;
-            }
-        }
-    });
-
-    let deadline = Instant::now() + Duration::from_secs(60);
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        assert!(!remaining.is_zero(), "Node server did not print PORT in 60 s");
-        let line = rx
-            .recv_timeout(remaining)
-            .expect("Node server exited before printing PORT");
-        if let Some(raw) = line.trim().strip_prefix("PORT ") {
-            server.port = raw.trim().parse().expect("PORT line has a number");
-            return server;
-        }
     }
 }
 
