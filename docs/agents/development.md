@@ -82,7 +82,7 @@ shell; check with `proxi --version`. The binary finds the repo from its own loca
 | Sync (engine, providers, secrets, service) | `crates/proxi/src/sync/` (GitHub and Google Drive; secrets in the OS keychain) |
 | The app (server, web UI, desktop, engine prompts) | `app/`: read [`app/README.md`](../../app/README.md) first |
 
-Server data modules (`courses.ts`, `knowledge.ts`, `lesson.ts`, `exercises.ts`, `graph/store.ts`) take the
+Server data modules in `crates/proxi/src/` (`courses.rs`, `knowledge.rs`, `lesson/`, `exercises.rs`, `graph/store.rs`) take the
 data root (`dataRoot`) as their first argument. `.learner/` (settings, sessions, jobs, manifests, secrets)
 stays under `repoRoot` and is never synced. `.learner/models` and `.learner/embeddings` hold the embedding
 model and index, regenerated automatically. `proxi embed-bench` measures recall@3 and median query time of
