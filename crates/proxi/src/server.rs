@@ -52,6 +52,8 @@ use crate::semantic::SemanticSearch;
 use crate::sessions::{AttachmentUpload, CallRequests, ManagerOptions, SessionManager};
 use crate::settings::{self, SettingsError};
 use crate::stt;
+use crate::jobs::{JobManager, JobManagerOptions};
+use crate::jobs::render::Renderer;
 use crate::sync::gdrive::GoogleEndpoints;
 use crate::sync::github::{GithubEndpoints, real_sleeper};
 use crate::sync::routes::spawn_auto;
@@ -95,6 +97,8 @@ pub struct ServerOptions {
     pub keep_alive: Duration,
     pub endpoints: Endpoints,
     pub bins: EngineBins,
+    /// Edge/Chrome for the job renderer; None = the installed one.
+    pub browser: Option<PathBuf>,
     pub memory_secrets: bool,
     /// None = no relaunch signal (library and tests).
     pub relaunch: Option<Arc<dyn Fn() + Send + Sync>>,
@@ -115,6 +119,7 @@ impl ServerOptions {
             keep_alive: events::KEEP_ALIVE,
             endpoints: Endpoints::default(),
             bins: EngineBins::default(),
+            browser: None,
             memory_secrets: false,
             relaunch: None,
             active_work: Arc::new(NoActiveWork),
@@ -129,6 +134,7 @@ pub struct RunningServer {
     pub url: String,
     pub events: EventBus,
     pub sessions: SessionManager,
+    pub jobs: Arc<JobManager>,
     sync: SyncService,
     auto: JoinHandle<()>,
     task: JoinHandle<()>,
@@ -142,7 +148,7 @@ impl RunningServer {
 
     /// Stop the sessions (children and final state), one last auto pass, then stop serving.
     pub async fn shutdown(self) {
-        self.sessions.shutdown().await;
+        tokio::join!(self.sessions.shutdown(), self.jobs.shutdown());
         self.auto.abort();
         if self.sync.auto_enabled() {
             let sync = self.sync.clone();
@@ -329,10 +335,32 @@ pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
             .map_or_else(|| repo_root.clone(), std::path::Path::to_path_buf),
     ];
     let limits = Arc::new(LimitsCache::new());
+    let graph = Arc::new(GraphStore::new(data_root.clone()));
+    let renderer = Arc::new(Renderer::new(opts.browser.clone()));
     let imports = ImportRegistry::new();
     // One registry for the routes and the `run_exercise` tool: a second install would race the first.
     let installs = exercises::Installs::default();
     let claude_cmd = claude.cmd.clone();
+    let job_token = token.clone();
+    let job_opts = JobManagerOptions {
+        repo_root: repo_root.clone(),
+        data_root: data_root.clone(),
+        code_root: data_root::repo_root(),
+        port,
+        token: job_token,
+        claude: claude.clone(),
+        agy: agy.clone(),
+        opencode: opencode.clone(),
+        events: events.clone(),
+        limits: limits.clone(),
+        graph: graph.clone(),
+        renderer,
+        max_concurrent: 2,
+        job_timeout: Duration::from_secs(600),
+    };
+    let jobs = tokio::task::spawn_blocking(move || JobManager::new(job_opts))
+        .await
+        .map_err(std::io::Error::other)?;
     let manager_opts = ManagerOptions {
         repo_root: repo_root.clone(),
         data_root: data_root.clone(),
@@ -347,7 +375,7 @@ pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
         limits: limits.clone(),
         anki: anki.clone(),
         imports: imports.clone(),
-        jobs: Arc::new(crate::tools::NoJobs),
+        jobs: jobs.clone(),
         npm_bin: opts.bins.npm.clone(),
         installs: installs.clone(),
         semantic: Arc::new(SemanticSearch::for_repo(
@@ -358,6 +386,8 @@ pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
     let sessions = tokio::task::spawn_blocking(move || SessionManager::new(manager_opts))
         .await
         .map_err(std::io::Error::other)?;
+    let bound = sessions.clone();
+    jobs.bind_sessions(Arc::new(move |job| bound.on_job(job)));
 
     let state = Arc::new(AppState {
         repo_str: repo_root.display().to_string(),
@@ -376,7 +406,7 @@ pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
         http: reqwest::Client::new(),
         anki,
         imports,
-        graph: Arc::new(GraphStore::new(data_root)),
+        graph,
         sessions: sessions.clone(),
         claude_bin: claude_cmd,
         agy_bin: agy,
@@ -388,7 +418,7 @@ pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
         touched: std::sync::Mutex::new(HashMap::new()),
     });
 
-    let app = router(state, sync.clone());
+    let app = router(state, sync.clone(), jobs.clone());
     let auto = spawn_auto(sync.clone(), events.clone());
     let task = tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
@@ -405,6 +435,7 @@ pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
         url: format!("http://127.0.0.1:{port}"),
         events,
         sessions,
+        jobs,
         sync,
         auto,
         task,
@@ -431,7 +462,7 @@ pub fn should_fetch_model(
         && fetch_on_start.unwrap_or(repo_root == code_root || huggingface.is_some())
 }
 
-fn router(state: Arc<AppState>, sync: SyncService) -> Router {
+fn router(state: Arc<AppState>, sync: SyncService, jobs: Arc<JobManager>) -> Router {
     Router::new()
         .route(
             "/api/settings",
@@ -545,6 +576,7 @@ fn router(state: Arc<AppState>, sync: SyncService) -> Router {
         .route("/api/{*rest}", any(not_found))
         // Merged before the layer so the host/CSRF guards still cover it.
         .merge(crate::sync::routes::router(sync))
+        .merge(crate::jobs::routes::router(jobs))
         .fallback_service(
             ServeDir::new(&state.dist).fallback(ServeFile::new(state.dist.join("index.html"))),
         )
@@ -552,7 +584,7 @@ fn router(state: Arc<AppState>, sync: SyncService) -> Router {
         .with_state(state)
 }
 
-fn json_error(status: StatusCode, message: &str) -> Response {
+pub(crate) fn json_error(status: StatusCode, message: &str) -> Response {
     (status, Json(json!({ "error": message }))).into_response()
 }
 
@@ -560,7 +592,7 @@ fn not_found_response() -> Response {
     json_error(StatusCode::NOT_FOUND, "Not found")
 }
 
-async fn not_found() -> Response {
+pub(crate) async fn not_found() -> Response {
     not_found_response()
 }
 
@@ -677,7 +709,7 @@ async fn front(State(state): State<Arc<AppState>>, request: Request, next: Next)
         if sent != Some(token.as_str()) {
             return json_error(StatusCode::UNAUTHORIZED, "Unauthorized");
         }
-        if method != Method::POST || !is_mcp_session_path(&path) {
+        if method != Method::POST || !is_mcp_path(&path) {
             return not_found_response();
         }
     } else if !path.starts_with("/api/") {
@@ -1218,10 +1250,17 @@ async fn delete_session(State(state): State<Arc<AppState>>, Path(id): Path<Strin
     }
 }
 
-/// `true` for `/mcp/<one segment>`: the only path the MCP route serves.
-fn is_mcp_session_path(path: &str) -> bool {
-    path.strip_prefix("/mcp/")
-        .is_some_and(|rest| !rest.is_empty() && !rest.contains('/'))
+/// `true` for `/mcp/<id>` and `/mcp/job/<id>`: the only MCP paths the server serves.
+fn is_mcp_path(path: &str) -> bool {
+    let Some(rest) = path.strip_prefix("/mcp/") else {
+        return false;
+    };
+    if rest.starts_with("job/") {
+        let id = &rest["job/".len()..];
+        !id.is_empty() && !id.contains('/')
+    } else {
+        !rest.is_empty() && !rest.contains('/')
+    }
 }
 
 /// Cancels the cards one `/mcp` call created when axum drops the handler (the engine went away),
@@ -2179,6 +2218,18 @@ mod tests {
         assert!(!should_fetch_model(code, code, None, None, Some(false)));
         assert!(should_fetch_model(temp, code, None, None, Some(true)));
         assert!(!should_fetch_model(temp, code, None, Some("1"), Some(true)));
+    }
+
+    #[test]
+    fn is_mcp_path_accepts_session_and_job_routes_only() {
+        assert!(is_mcp_path("/mcp/abc"));
+        assert!(is_mcp_path("/mcp/job"));
+        assert!(is_mcp_path("/mcp/job/abc"));
+        assert!(!is_mcp_path("/mcp/"));
+        assert!(!is_mcp_path("/mcp/job/"));
+        assert!(!is_mcp_path("/mcp/a/b"));
+        assert!(!is_mcp_path("/mcp/job/a/b"));
+        assert!(!is_mcp_path("/mcpx"));
     }
 
     #[test]

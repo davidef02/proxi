@@ -22,6 +22,7 @@ pub mod fake_anki;
 pub mod fake_hf;
 pub mod process_tree;
 pub mod sessions;
+pub mod session_golden;
 
 pub fn repo_root() -> PathBuf {
     let raw = Path::new(env!("CARGO_MANIFEST_DIR"))
