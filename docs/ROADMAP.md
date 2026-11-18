@@ -18,25 +18,20 @@ Vision: Ottimizzare il processo di apprendimento riducendo al minimo l'attrito n
 - [x] M02 Spaced repetition e Anki (2026-11-06): Collegamento bidirezionale Anki-app: ripassi importati, concetti deboli su mappa e probe mirato.
 - [x] M03 Motore ZPD globale (2026-11-06): Conoscenza globale per significato, ancoraggio idee e confine ZPD senza sovraccarico contesto.
 - [x] M04 Nuova identità (2026-11-11): App rinominata Proxi, repo pubblico pulito, ia-teacher archiviato.
-- [ ] M05 Backend Rust
+- [x] M05 Backend Rust (2026-11-18): Backend e comandi in un unico binario Rust
 - [ ] M06 App nativa Tauri
-
-## M05 Backend Rust
-Goal: Server e comandi del motore sono un unico binario Rust con la stessa API, e l'app Electron ci gira sopra invariata.
-Exit:
-- Una misura di riferimento di Electron+Node (RAM a riposo con un corso aperto, avvio a freddo) è salvata nel repo.
-- Con il backend Rust funzionano come prima lezione completa, Esercizi, mappa, ricerca per significato, import Anki e sync.
-- I test HTTP/SSE e Playwright esistenti passano contro il binario Rust.
-- Gli agenti usano `proxi lesson|anki|home|data`; nessun `npm run` in skill e docs.
-- Node serve solo per gli esercizi JS.
 
 ## M06 App nativa Tauri
 Goal: Proxi si installa e si aggiorna come app Tauri su Windows, senza Electron, consumando meno risorse.
 Exit:
 - L'installer Windows è su GitHub Releases e l'app si aggiorna da Impostazioni con aggiornamenti firmati.
-- RAM a riposo almeno −50% rispetto alla misura di M05, avvio a freddo non più lento.
+- RAM a riposo almeno −15% rispetto alla misura di M05 e installer Windows sotto i 15 MB; avvio a freddo non più lento.
 - Finestra, tema, zoom, appunti, microfono, link esterni, istanza singola e segreti nel keychain funzionano come in Electron.
 - Electron e l'aggiornamento via `git pull` sono rimossi.
 - La CI compila Windows, macOS e Linux, e il README spiega come compilare per tutti e tre.
+Settled:
+- Shell: Tauri v2 su WebView2; wry custom, Electron, Avalonia e Wails (Go) scartati (ricerca 2026-11-18).
+- Aggiornamenti firmati = firme Ed25519 (minisign) su latest.json di GitHub Releases; installer non firmato Authenticode (SmartScreen solo al primo avvio).
+- UI: React mantenuto; Svelte 5 solo per eventuali rebuild futuri a pezzi.
 
 ## Fog
