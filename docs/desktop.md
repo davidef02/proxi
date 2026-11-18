@@ -43,6 +43,20 @@ behind a small splash window when stale. If a rebuild fails and an older build e
 - The title bar is hidden with a 36px native overlay for the window buttons: the web shell must leave that strip
   free and mark a drag region (`-webkit-app-region: drag`).
 
+## Tauri shell (M06)
+
+An alternative Tauri v2 shell (WebView2) in `src-tauri/` keeps the Electron contract verbatim: spawn argv
+`serve --repo-root <abs> --dist-dir <abs> --port <N>` plus engine flags, readiness = stdout line
+`Proxi: http://127.0.0.1:<port>` within 30 s, kill = `taskkill /PID <pid> /T /F`, relaunch = backend exit
+code 0 while not quitting. The React UI is untouched. It is not the default yet: the Electron shell (above)
+stays the shipped one until the separate remove-electron issue. Build and try it with:
+
+```bash
+npm run tauri:build   # tauri build (src-tauri/)
+npm run tauri:dev     # tauri dev mode
+npm run tauri:smoke   # real-run smoke of the built exe (app/desktop/tauri-smoke.mjs)
+```
+
 ## Smoke test
 
 `npm run desktop:smoke` launches the app with fake claude and a temp copy of the fixture repo, checks the page

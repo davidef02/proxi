@@ -20,6 +20,10 @@ __pycache__/
 # Rust build output
 /target/
 
+# Tauri shell build output
+/src-tauri/target/
+/src-tauri/gen/
+
 # Scratch payloads for lesson append
 .tmp/
 

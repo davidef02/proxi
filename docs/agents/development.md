@@ -43,6 +43,9 @@ npm run test:app    # app (app/test/); needs the release build first: the harnes
 npm run test:rust   # ported HTTP/SSE tests against the proxi binary (needs the release build)
 cargo test --locked # Rust backend (crates/proxi)
 npm run e2e         # app, Playwright (Chromium)
+npm run tauri:dev   # Tauri shell (src-tauri/) in dev mode
+npm run tauri:build # Tauri shell release build
+npm run tauri:smoke # Tauri shell smoke (app/desktop/tauri-smoke.mjs)
 ```
 
 `npm run eval -- [scenario] [--engine claude|agy|opencode] [--settings <file>] [--timeout <min>]` drives
