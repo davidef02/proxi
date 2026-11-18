@@ -5,7 +5,7 @@ repetition. Learner language is **Italian**; code, commits and docs are in Engli
 
 Mode: personal | Level: uso personale
 Reliable in the user's daily use. Tests cover the behaviours that matter and errors are clear. No multi-user, scale or enterprise hardening unless asked.
-Gate: `npm ci && npm run typecheck:app && rustup toolchain install stable --profile minimal && rustup default stable && cargo build --release --locked && npm run app:build && npm run test:app && npm run test:rust && npx playwright install chromium && $env:PROXI_TEST_BROWSER = node -p "require('playwright-core').chromium.executablePath()"; if (-not (Test-Path $env:PROXI_TEST_BROWSER)) { exit 1 }; cargo test --locked && npm run e2e`
+Gate: `bash scripts/gate.sh`
 
 **Product principle: reduce study friction.** Every screen makes the next useful study action
 obvious and one click away: **Continua** (next lesson) and **Ripasso** (Anki review).

@@ -1,1 +1,2 @@
 app/test/fixtures/anki/import-progress.jsonl -text
+*.sh text eol=lf
