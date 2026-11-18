@@ -16,7 +16,7 @@ test run (it says so while it works).
 **Desktop app (normal use):** `npm run desktop:install` once builds the `proxi` binary, puts it on your user
 PATH and creates the "Proxi" shortcuts (Start menu and Desktop). The window rebuilds the UI by itself when the
 sources changed, so after a `git pull` you just reopen it. Closing the window stops every engine process it
-started. Details: `docs/desktop.md`.
+started. Details: `docs/desktop.md` (a Tauri v2 shell lives in `src-tauri/`, see the "Tauri shell (M06)" section).
 
 ## Use
 

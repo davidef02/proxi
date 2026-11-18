@@ -1,0 +1,31 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Proxi",
+  "version": "0.1.0",
+  "identifier": "proxi",
+  "build": {
+    "beforeDevCommand": "npm run app:web",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "npm run app:build",
+    "frontendDist": "../app/web/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Proxi",
+        "width": 1440,
+        "height": 920,
+        "minWidth": 1000,
+        "minHeight": 680,
+        "visible": false,
+        "url": "about:blank"
+      }
+    ]
+  },
+  "bundle": {
+    "active": false,
+    "targets": ["nsis"],
+    "icon": ["../app/desktop/icon.ico"]
+  }
+}

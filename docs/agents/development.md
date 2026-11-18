@@ -45,6 +45,15 @@ cargo test --locked # Rust backend (crates/proxi)
 npm run e2e         # app, Playwright (Chromium)
 ```
 
+The `tauri:*` commands are local only, on Windows (the src-tauri crate is deliberately outside the
+workspace CI compiles and needs WebView2):
+
+```bash
+npm run tauri:dev   # Tauri shell (src-tauri/) in dev mode
+npm run tauri:build # Tauri shell release build
+npm run tauri:smoke # Tauri shell smoke (app/desktop/tauri-smoke.mjs)
+```
+
 `npm run eval -- [scenario] [--engine claude|agy|opencode] [--settings <file>] [--timeout <min>]` drives
 the real configured engine on fixed scenarios (`app/eval/scenarios.ts`, fixture Vue graph in
 `app/eval/fixture.ts`) through the built `proxi` binary over HTTP/SSE only (build it first:
