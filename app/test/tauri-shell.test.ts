@@ -37,8 +37,12 @@ test("single instance: the plugin is registered before run, focusing main when a
   assert.match(main, /tauri_plugin_single_instance::init/);
   assert.match(main, /get_webview_window\("main"\)/, "the duplicate focuses the existing window");
   assert.match(main, /set_focus\(\)/);
-  // The skip is keyed on the user-data override, so smoke/e2e runs beside a real instance.
-  assert.match(main, /LEARNER_USER_DATA"\)\s*\.is_none\(\)/);
+  // The skip is keyed on the user-data override, so smoke/e2e runs beside a real instance; an
+  // empty override behaves like an unset one (Electron's falsy check) in both uses of the value.
+  assert.match(
+    main,
+    /LEARNER_USER_DATA"\)\s*\.filter\(\|d\| !d\.is_empty\(\)\)[\s\S]*user_data\.is_none\(\)/,
+  );
 });
 
 test("the shell spawns proxi serve and reads its URL from stdout", () => {

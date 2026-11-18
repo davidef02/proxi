@@ -23,7 +23,10 @@ struct BackendState {
 }
 
 fn main() {
-    if let Some(dir) = std::env::var_os("LEARNER_USER_DATA").filter(|d| !d.is_empty()) {
+    // Fallback everywhere (serve_args, the binary probe, APPDATA): empty means unset. The
+    // single-instance skip below must see the same value, so the filter lives in one place.
+    let user_data = std::env::var_os("LEARNER_USER_DATA").filter(|d| !d.is_empty());
+    if let Some(dir) = &user_data {
         // app_data_dir is %APPDATA%\<identifier> with identifier "proxi": point APPDATA at the
         // override so smoke/e2e runs keep their window.json (and keychain-free state) isolated.
         std::env::set_var("APPDATA", &dir);
@@ -32,7 +35,7 @@ fn main() {
     let env = shell::vars();
 
     let mut builder = tauri::Builder::default();
-    if std::env::var_os("LEARNER_USER_DATA").is_none() {
+    if user_data.is_none() {
         // Register FIRST: a duplicate instance exits inside this plugin's setup, before ours runs,
         // so it never spawns a second backend. Its lock keys derive from the identifier only and
         // cannot honor LEARNER_USER_DATA, hence the skip above.
@@ -97,7 +100,7 @@ fn start_backend(app: &tauri::App, env: &Vars) -> Result<(), String> {
     let dist_str = dist.display().to_string();
 
     let spawn = |port: u16| -> Result<shell::Backend, String> {
-        let args = shell::serve_args(&root_str, &dist_str, port, env);
+        let args = shell::serve_args(&root_str, &dist_str, port, env)?;
         shell::spawn_backend(&bin_str, &args, env)
     };
     let started = shell::start_server(spawn, |base| shell::is_learner(base), env)?;

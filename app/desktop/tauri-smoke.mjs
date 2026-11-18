@@ -199,14 +199,18 @@ async function closeAppThroughCdp(page, pid, repo) {
   await until("no proxi.exe of this run remains after quit", EXIT_BUDGET_MS, () => proxiCount(repo) === 0);
 }
 
-function cleanup({ browser, child, tmp }) {
+/** Teardown: close the browser, tree-kill the backend, then remove tmp only once no proxi.exe of
+ * this run still holds files under tmp/repo — a just-killed backend can release its handles a
+ * moment later (L13), so every other teardown waits and rmSync retries before giving up. */
+async function cleanup({ browser, child, tmp, repo }) {
   try {
-    if (browser) browser.close().catch(() => {});
+    if (browser) await browser.close();
   } catch {
     /* browser already gone */
   }
   if (child?.pid) killTree(child.pid);
-  if (tmp) fs.rmSync(tmp, { recursive: true, force: true });
+  if (repo) await until("no proxi.exe of this run remains", EXIT_BUDGET_MS, () => proxiCount(repo) === 0);
+  if (tmp) fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 3 });
 }
 
 // Locate or build the exe; npm run tauri:build also rebuilds the UI before the shell binary.
@@ -222,13 +226,14 @@ if (!fs.existsSync(EXE)) fail(`no Tauri shell exe at ${EXE}: run npm run tauri:b
 let tmp, handles;
 try {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "proxi-tauri-smoke-"));
+  const repo = path.join(tmp, "repo");
   handles = await launchApp(smokeEnv(tmp));
   const { courses, title } = await assertAppPage(handles.page, { ephemeral: true, hash: true });
   const syncOk = await handles.page.evaluate(() => fetch("/api/sync").then((r) => r.ok)); // AC4 smoke part
   if (!syncOk) fail("GET /api/sync did not answer ok");
   console.log(`ok [AC1]: window ${handles.page.url()} title=${JSON.stringify(title)} courses=${courses.length}, /api/sync answered ok`);
 } finally {
-  cleanup({ ...handles, tmp });
+  await cleanup({ ...handles, tmp, repo: tmp && path.join(tmp, "repo") });
   handles = undefined;
 }
 
@@ -249,7 +254,7 @@ try {
     gate.close();
   }
 } finally {
-  cleanup({ ...handles, tmp });
+  await cleanup({ ...handles, tmp, repo: tmp && path.join(tmp, "repo") });
   handles = undefined;
 }
 
@@ -280,7 +285,7 @@ try {
   console.log("ok [AC3]: window closed, no proxi.exe backend left behind");
 } finally {
   if (first?.pid && tracked.includes(first.pid)) tracked.splice(tracked.indexOf(first.pid), 1);
-  cleanup({ browser, child: first, tmp });
+  await cleanup({ browser, child: first, tmp, repo: tmp && path.join(tmp, "repo") });
   if (dup?.pid && alive(dup.pid)) killTree(dup.pid);
 }
 

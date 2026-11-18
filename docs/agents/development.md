@@ -43,6 +43,12 @@ npm run test:app    # app (app/test/); needs the release build first: the harnes
 npm run test:rust   # ported HTTP/SSE tests against the proxi binary (needs the release build)
 cargo test --locked # Rust backend (crates/proxi)
 npm run e2e         # app, Playwright (Chromium)
+```
+
+The `tauri:*` commands are local only, on Windows (the src-tauri crate is deliberately outside the
+workspace CI compiles and needs WebView2):
+
+```bash
 npm run tauri:dev   # Tauri shell (src-tauri/) in dev mode
 npm run tauri:build # Tauri shell release build
 npm run tauri:smoke # Tauri shell smoke (app/desktop/tauri-smoke.mjs)

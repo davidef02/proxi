@@ -34,7 +34,9 @@ const ENGINES: [(&str, &str, &str, &str); 3] = [
 ];
 
 /// The `proxi serve` argv; engine flags only when their env vars are set (backend.mjs serveArgs).
-pub fn serve_args(repo_root: &str, dist_dir: &str, port: u16, env: &Vars) -> Vec<String> {
+/// A malformed `LEARNER_*_BIN_ARGS` raises like backend.mjs (`JSON.parse(rawArgs)`, main.mjs shows
+/// the error and exits): the raw value is never silently dropped.
+pub fn serve_args(repo_root: &str, dist_dir: &str, port: u16, env: &Vars) -> Result<Vec<String>, String> {
     let mut args = vec![
         "serve".to_string(),
         "--repo-root".to_string(),
@@ -50,16 +52,18 @@ pub fn serve_args(repo_root: &str, dist_dir: &str, port: u16, env: &Vars) -> Vec
             args.push(format!("--{bin_flag}"));
             args.push(bin.clone());
         }
-        if let Some(raw) = env.get(args_key) {
-            if let Ok(list) = serde_json::from_str::<Vec<String>>(raw) {
-                for arg in list {
-                    args.push(format!("--{arg_flag}"));
-                    args.push(arg);
-                }
+        if let Some(raw) = env.get(args_key).filter(|r| !r.is_empty()) {
+            // backend.mjs parses the raw args even without a binary: the error must surface.
+            let list: Vec<String> = serde_json::from_str(raw).map_err(|e| {
+                format!("{args_key} is not a JSON array of strings: {e} (raw value: {raw:?})")
+            })?;
+            for arg in list {
+                args.push(format!("--{arg_flag}"));
+                args.push(arg);
             }
         }
     }
-    args
+    Ok(args)
 }
 
 /// The built `proxi` executable: `PROXI_BIN`, else the newest of target/release and target/debug.
@@ -124,8 +128,10 @@ pub fn repo_root(env: &Vars, exe_dir: &Path) -> PathBuf {
         .unwrap_or_else(|| exe_dir.to_path_buf())
 }
 
-/// `LEARNER_PORT` with JS `Number` semantics (main.mjs: `Number(env.LEARNER_PORT) || 4317`),
-/// trimmed; unset or not a plain number falls back to 4317; "0" stays 0, the ephemeral request.
+/// `LEARNER_PORT` with the JS semantics of main.mjs (`env.LEARNER_PORT !== undefined ?
+/// Number(env.LEARNER_PORT) : 4317`), trimmed; unset or not a plain number falls back to 4317;
+/// "0" stays 0, the ephemeral request. Note the deliberate refinement over `|| 4317`: an empty or
+/// non-numeric value would be 0 (`Number("")`) for Electron, here it is 4317.
 pub fn wanted_port(env: &Vars) -> u16 {
     let Some(raw) = env.get("LEARNER_PORT").map(String::as_str) else {
         return 4317;
@@ -342,7 +348,7 @@ mod tests {
 
     #[test]
     fn serve_args_minimum() {
-        let args = serve_args("C:/repo", "C:/repo/app/web/dist", 4317, &Vars::new());
+        let args = serve_args("C:/repo", "C:/repo/app/web/dist", 4317, &Vars::new()).unwrap();
         assert_eq!(
             args,
             ["serve", "--repo-root", "C:/repo", "--dist-dir", "C:/repo/app/web/dist", "--port", "4317"]
@@ -356,20 +362,26 @@ mod tests {
             ("LEARNER_CLAUDE_BIN_ARGS", r#"["app/test/fake-claude.mjs"]"#),
             ("LEARNER_AGY_BIN", "C:/bin/agy.exe"),
             ("LEARNER_OPENCODE_BIN", ""),
-            ("LEARNER_OPENCODE_BIN_ARGS", "not json"),
         ]);
-        let args = serve_args("R", "D", 0, &env);
+        let args = serve_args("R", "D", 0, &env).unwrap();
         assert!(args.windows(2).any(|w| w == ["--claude-bin", "node.exe"]));
         assert!(args.windows(2).any(|w| w == ["--claude-bin-arg", "app/test/fake-claude.mjs"]));
         assert!(args.windows(2).any(|w| w == ["--agy-bin", "C:/bin/agy.exe"]));
         assert!(!args.contains(&"--opencode-bin".to_string()), "empty bin value is skipped");
-        assert!(!args.iter().any(|a| a.contains("opencode")), "invalid JSON args are ignored");
+    }
+
+    #[test]
+    fn serve_args_rejects_malformed_bin_args_json() {
+        let env = env_from(&[("LEARNER_AGY_BIN_ARGS", "not json")]);
+        let err = serve_args("R", "D", 0, &env).unwrap_err();
+        assert!(err.contains("LEARNER_AGY_BIN_ARGS"), "{err}");
+        assert!(err.contains("not json"), "{err}");
     }
 
     #[test]
     fn serve_args_repeated_bin_args() {
         let env = env_from(&[("LEARNER_AGY_BIN_ARGS", r#"["a","b"]"#)]);
-        let args = serve_args("R", "D", 5, &env);
+        let args = serve_args("R", "D", 5, &env).unwrap();
         assert_eq!(args.iter().filter(|a| *a == "--agy-bin-arg").count(), 2, "one flag per element");
     }
 
