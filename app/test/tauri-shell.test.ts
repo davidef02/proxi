@@ -51,6 +51,20 @@ test("the shell spawns proxi serve and reads its URL from stdout", () => {
   assert.match(shell, /READY_TIMEOUT: Duration = Duration::from_secs\(30\)/, "30 s deadline");
 });
 
+test("every exit path tree-kills the owned backend with taskkill (AC3)", () => {
+  assert.match(
+    main,
+    /RunEvent::ExitRequested[\s\S]*kill_backend_tree/,
+    "the run event handler kills the backend on the exit events",
+  );
+  assert.match(main, /fn kill_backend_tree[\s\S]*kill_tree_args\(pid\)/, "the tree kill uses kill_tree_args");
+  assert.match(
+    shell,
+    /fn kill_tree_args\(pid: u32\)[\s\S]*"taskkill"[\s\S]*"\/T"[\s\S]*"\/F"/,
+    "the kill is taskkill /PID <pid> /T /F",
+  );
+});
+
 test("a clean backend exit code 0 relaunches, anything else is logged, never relaunched", () => {
   assert.match(main, /code == Some\(0\)[\s\S]*?app\.restart\(\)/);
   assert.match(main, /backend exited with code/);
@@ -109,7 +123,7 @@ test("the identity contract is untouched: deck root, app name and user model id"
 test("the Rust dependency set matches the locked versions", () => {
   const cargo = source("src-tauri/Cargo.toml");
   assert.match(cargo, /^name = "proxi-app"$/m);
-  assert.match(cargo, /^tauri = "2"$/m);
+  assert.match(cargo, /^tauri = \{ version = "2"/m);
   assert.match(cargo, /^tauri-plugin-single-instance = "2\.5\.5"$/m);
   assert.match(cargo, /^reqwest = \{ version = "0\.13\.5"/m);
 });

@@ -47,8 +47,23 @@ async function until(what, budgetMs, ok) {
 
 const tasklist = (filter) => execFileSync("tasklist", ["/FI", filter, "/NH"], { encoding: "utf8" });
 const alive = (pid) => tasklist(`PID eq ${pid}`).includes(String(pid));
-// The smoke assumes no other Proxi runs on this machine (same assumption as app/desktop/smoke.mjs).
-const proxiCount = () => (tasklist("IMAGENAME eq proxi.exe").match(/\bproxi\.exe\b/gi) ?? []).length;
+// Only the backends of THIS run: each block spawns its backend with --repo-root pointing at the
+// block's own tmp copy, so the command line identifies it — other runs on this machine (parallel
+// gate/test:app sessions, a real app instance) must never count.
+const proxiCount = (repo) => {
+  const out = spawnSync(
+    "powershell",
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      `(Get-CimInstance Win32_Process -Filter "Name='proxi.exe'" | Where-Object { $_.CommandLine -like '*${repo.replace(/'/g, "''")}*' } | Measure-Object).Count`,
+    ],
+    { encoding: "utf8", windowsHide: true },
+  ).stdout;
+  const n = Number(String(out).trim());
+  return Number.isInteger(n) ? n : -1;
+};
 const shellCount = () => (tasklist("IMAGENAME eq proxi-app.exe").match(/\bproxi-app\.exe\b/gi) ?? []).length;
 /** Best-effort tree kill: the whole backend tree (and any engine child) goes with the shell. */
 const killTree = (pid) => {
@@ -167,7 +182,7 @@ async function assertAppPage(page, { ephemeral, hash }) {
 }
 
 /** AC3 close: window.close() over CDP first, the real user close as fallback, then verify. */
-async function closeAppThroughCdp(page, pid) {
+async function closeAppThroughCdp(page, pid, repo) {
   await page.evaluate(() => window.close()).catch(() => {});
   let closed = true;
   try {
@@ -181,7 +196,7 @@ async function closeAppThroughCdp(page, pid) {
     closeMainWindow(pid);
     await until("the shell exits after the close request", EXIT_BUDGET_MS, () => !alive(pid));
   }
-  await until("no proxi.exe remains after quit", EXIT_BUDGET_MS, () => proxiCount() === 0);
+  await until("no proxi.exe of this run remains after quit", EXIT_BUDGET_MS, () => proxiCount(repo) === 0);
 }
 
 function cleanup({ browser, child, tmp }) {
@@ -244,6 +259,7 @@ try {
 let first, dup, browser, page;
 try {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "proxi-tauri-smoke-"));
+  const repo = path.join(tmp, "repo");
   ({ child: first, browser, page } = await launchApp(smokeEnv(tmp, { singleInstance: true })));
   await assertAppPage(page, { ephemeral: true, hash: true });
   // A bare spawn: the duplicate exits inside the plugin before any WebView2 exists, so there is
@@ -252,7 +268,7 @@ try {
   tracked.push(dup.pid);
   await until("the duplicate instance exits on its own", EXIT_BUDGET_MS, () => !alive(dup.pid));
   await until("exactly one proxi-app.exe shell remains", EXIT_BUDGET_MS, () => shellCount() === 1);
-  await until("exactly one proxi.exe backend remains", EXIT_BUDGET_MS, () => proxiCount() === 1);
+  await until("exactly one proxi.exe backend of this run remains", EXIT_BUDGET_MS, () => proxiCount(repo) === 1);
   const windows = (browser.contexts() ?? []).flatMap((c) => c.pages()).filter((p) => URL_RE.test(p.url()));
   if (windows.length !== 1) fail(`expected exactly one CDP window after the duplicate start, found ${windows.length}`);
   const focusDeadline = Date.now() + 30_000;
@@ -260,7 +276,7 @@ try {
   if (foregroundPid() !== first.pid) fail(`the existing Proxi window was not focused (foreground pid ${foregroundPid()}, want ${first.pid})`);
   console.log("ok [AC2]: duplicate exited on its own, one shell + one backend left, existing window focused");
 
-  await closeAppThroughCdp(page, first.pid);
+  await closeAppThroughCdp(page, first.pid, repo);
   console.log("ok [AC3]: window closed, no proxi.exe backend left behind");
 } finally {
   if (first?.pid && tracked.includes(first.pid)) tracked.splice(tracked.indexOf(first.pid), 1);
