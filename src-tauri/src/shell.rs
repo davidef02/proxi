@@ -379,6 +379,16 @@ mod tests {
     }
 
     #[test]
+    fn serve_args_empty_bin_args_value_is_skipped_like_unset() {
+        // backend.mjs:33 `rawArgs ? JSON.parse(rawArgs) : []` — the empty string is falsy there,
+        // so no flag is emitted and no parse error is raised.
+        let env = env_from(&[("LEARNER_CLAUDE_BIN_ARGS", ""), ("LEARNER_AGY_BIN_ARGS", "")]);
+        let args = serve_args("R", "D", 0, &env).unwrap();
+        assert!(!args.contains(&"--claude-bin-arg".to_string()), "empty value skipped: {args:?}");
+        assert!(!args.contains(&"--agy-bin-arg".to_string()), "empty value skipped: {args:?}");
+    }
+
+    #[test]
     fn serve_args_repeated_bin_args() {
         let env = env_from(&[("LEARNER_AGY_BIN_ARGS", r#"["a","b"]"#)]);
         let args = serve_args("R", "D", 5, &env).unwrap();
