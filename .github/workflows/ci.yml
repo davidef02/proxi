@@ -20,22 +20,10 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - run: npm ci
-      - run: npm run typecheck:app
       - run: rustup toolchain install stable --profile minimal && rustup default stable
-      - run: cargo build --release --locked
-      - run: npm run app:build # test:app expects app/web/dist
-      - run: npm run test:app # needs the binary built first
-      - run: npm run test:rust # ported HTTP/SSE tests against target/release/proxi
-      # also the test browser of the Rust render tests (PROXI_TEST_BROWSER)
-      - run: npx playwright install --with-deps chromium
-      - name: cargo test
-        run: |
-          PROXI_TEST_BROWSER="$(node -p "require('playwright-core').chromium.executablePath()")"
-          test -f "$PROXI_TEST_BROWSER" || { echo "::error::Playwright Chromium not found at '$PROXI_TEST_BROWSER'"; exit 1; }
-          export PROXI_TEST_BROWSER
-          cargo test --locked
-      - run: npm run e2e
+      # All checks live in scripts/gate.sh — the same script the AGENTS.md Gate: line runs,
+      # so CI and the local gate can never drift apart.
+      - run: bash scripts/gate.sh
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

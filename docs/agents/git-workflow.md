@@ -21,16 +21,23 @@ gh pr create --base main --title "<type>(<scope>): <summary>" --body "Closes #<i
 gh pr merge --auto --squash                # GitHub merges once the `checks` job is green
 ```
 
-- The gate is CI (`.github/workflows/ci.yml`, job `checks`): `typecheck:app`,
-  `cargo build --release --locked`, `app:build`, `test:app`, `test:rust`,
-  `cargo test --locked`, Playwright e2e.
-  Locally run only the test you are iterating on; CI runs the full set.
+- The gate is `scripts/gate.sh`, recorded in AGENTS.md as the `Gate:` command
+  (`bash scripts/gate.sh`). It is the full CI gate — the same script CI's `checks` job runs
+  (`.github/workflows/ci.yml`): `typecheck:app`, `cargo build --release --locked`, `app:build`,
+  `test:app`, `test:rust`, `cargo test --locked`, Playwright e2e.
+  Run the full gate before every push. While iterating locally you may run a fast subset of
+  just the checks for what you touched (e.g. `node --test` on the touched test files,
+  `cargo test <touched-module>`, `npm run typecheck:app`); the full gate still runs before push.
 - CI red: read the failing step with `gh run view <id> --log-failed`, fix it on the same branch and
   push. Auto-merge stays armed and fires on the next green run.
 - After the merge GitHub deletes the remote branch. Clean up locally:
   `git switch main && git pull --ff-only && git branch -d <branch> && git fetch --prune`.
 - One branch per PR; delete a branch as soon as its PR is merged or closed. The repo holds `main`
   plus open PR branches only.
+- Worktree hygiene: when a PR is merged or closed, remove its worktree
+  (`git worktree remove <path>`, then `git worktree prune`), delete the local branch if it was
+  merged (`git branch -d <branch>` — including stale `t3/*` branches fully contained in `main`),
+  and remove any leftover directories under `~/.t3/worktrees/<repo>/`.
 
 ## Study content is not in this repo
 
