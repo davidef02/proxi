@@ -55,6 +55,18 @@ describe("CI workflow matrix (AC1)", () => {
   });
 });
 
+describe("test suite execution on all legs (AC2)", () => {
+  it("runs the full test suite in gate without degradation across all legs", () => {
+    const ciContent = readRepoFile(".github/workflows/ci.yml");
+    assert.ok(ciContent.includes("bash scripts/gate.sh"), "missing bash scripts/gate.sh step in CI");
+    const gateContent = readRepoFile("scripts/gate.sh");
+    assert.ok(gateContent.includes("npm run test:app"), "gate must run app tests");
+    assert.ok(gateContent.includes("npm run test:rust"), "gate must run Rust HTTP tests");
+    assert.ok(gateContent.includes("cargo test --locked"), "gate must run cargo test");
+    assert.ok(gateContent.includes("npm run e2e"), "gate must run e2e tests");
+  });
+});
+
 describe("README build sections (AC3)", () => {
   function getBuildSection(): string {
     const readme = readRepoFile("README.md");
