@@ -148,21 +148,28 @@ test("desktop capabilities and permissions pin the Tauri ACL", () => {
 
   const def = JSON.parse(
     fs.readFileSync(path.join(root, "src-tauri/capabilities/default.json"), "utf8"),
-  ) as { windows: string[]; permissions: string[] };
+  ) as {
+    windows: string[];
+    permissions: unknown[];
+    remote?: { urls: string[] };
+  };
   assert.deepEqual(def.windows, ["main"]);
+  assert.deepEqual(def.remote?.urls, [
+    "http://127.0.0.1:*/*",
+    "http://localhost:*/*",
+  ]);
   assert.deepEqual(def.permissions, [
     "core:default",
     "clipboard-manager:allow-write-text",
-    "opener:allow-open-url",
-    "allow-open-external-http",
+    {
+      identifier: "opener:allow-open-url",
+      allow: [{ url: "http://*" }, { url: "https://*" }],
+    },
   ]);
 
-  const scope = fs
-    .readFileSync(path.join(root, "src-tauri/permissions/opener-http.toml"), "utf8")
-    .split(/\r?\n/)
-    .filter((line) => !line.trimStart().startsWith("#"))
-    .join("\n");
-  assert.match(scope, /url = "http:\/\/\*"/);
-  assert.match(scope, /url = "https:\/\/\*"/);
-  assert.doesNotMatch(scope, /mailto:|tel:/, "the opener scope stays http/https-only");
+  assert.equal(
+    fs.existsSync(path.join(root, "src-tauri/permissions/opener-http.toml")),
+    false,
+    "opener-http.toml removed in favor of capability scope",
+  );
 });

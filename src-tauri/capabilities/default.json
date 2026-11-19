@@ -3,10 +3,15 @@
   "identifier": "default",
   "description": "Default permissions for the Proxi shell window",
   "windows": ["main"],
+  "remote": {
+    "urls": ["http://127.0.0.1:*/*", "http://localhost:*/*"]
+  },
   "permissions": [
     "core:default",
     "clipboard-manager:allow-write-text",
-    "opener:allow-open-url",
-    "allow-open-external-http"
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "http://*" }, { "url": "https://*" }]
+    }
   ]
 }

@@ -110,8 +110,10 @@ test("capabilities grant core:default, clipboard and opener to the main window o
   assert.deepEqual(caps.permissions, [
     "core:default",
     "clipboard-manager:allow-write-text",
-    "opener:allow-open-url",
-    "allow-open-external-http",
+    {
+      identifier: "opener:allow-open-url",
+      allow: [{ url: "http://*" }, { url: "https://*" }],
+    },
   ]);
 });
 

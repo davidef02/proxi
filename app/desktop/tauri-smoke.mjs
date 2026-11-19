@@ -100,8 +100,29 @@ function foregroundPid() {
       "-NoProfile",
       "-NonInteractive",
       "-Command",
-      "Add-Type -Namespace U -Name W -MemberDefinition '[DllImport(\"user32.dll\")] public static extern IntPtr GetForegroundWindow(); [DllImport(\"user32.dll\")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);';" +
-        "$h = [U.W]::GetForegroundWindow(); $p = [uint32]0; [void][U.W]::GetWindowThreadProcessId($h, [ref]$p); Write-Output $p",
+      "Add-Type -Namespace U -Name W -MemberDefinition '" +
+        "[DllImport(\"user32.dll\")] public static extern IntPtr GetForegroundWindow(); " +
+        "[DllImport(\"user32.dll\")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId); " +
+        "[StructLayout(LayoutKind.Sequential)] public struct GUITHREADINFO { public int cbSize; public int flags; public IntPtr hwndActive; public IntPtr hwndFocus; public IntPtr hwndCapture; public IntPtr hwndMenuOwner; public IntPtr hwndMoveSize; public IntPtr hwndCaret; public System.Drawing.Rectangle rcCaret; } " +
+        "[DllImport(\"user32.dll\")] public static extern bool GetGUIThreadInfo(uint idThread, ref GUITHREADINFO lpgui); " +
+        "[DllImport(\"user32.dll\")] public static extern bool EnumDesktopWindows(IntPtr hDesktop, EnumDesktopWindowsProc lpfn, IntPtr lParam); " +
+        "public delegate bool EnumDesktopWindowsProc(IntPtr hWnd, IntPtr lParam); " +
+        "[DllImport(\"user32.dll\")] public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder lpString, int nMaxCount); " +
+        "public static uint GetForegroundOrActivePid() { " +
+        "  IntPtr fg = GetForegroundWindow(); " +
+        "  if (fg != IntPtr.Zero) { uint p = 0; GetWindowThreadProcessId(fg, out p); if (p > 0) return p; } " +
+        "  uint foundPid = 0; " +
+        "  EnumDesktopWindows(IntPtr.Zero, (hWnd, lParam) => { " +
+        "    System.Text.StringBuilder sb = new System.Text.StringBuilder(256); " +
+        "    GetWindowText(hWnd, sb, 256); " +
+        "    if (sb.ToString() == \"Proxi\") { " +
+        "      uint p = 0; uint tid = GetWindowThreadProcessId(hWnd, out p); " +
+        "      GUITHREADINFO gui = new GUITHREADINFO(); gui.cbSize = Marshal.SizeOf(gui); " +
+        "      if (GetGUIThreadInfo(tid, ref gui) && (gui.hwndActive == hWnd || gui.hwndFocus != IntPtr.Zero)) { foundPid = p; return false; } " +
+        "    } return true; " +
+        "  }, IntPtr.Zero); return foundPid; " +
+        "}' -ReferencedAssemblies System.Drawing; " +
+        "$p = [U.W]::GetForegroundOrActivePid(); Write-Output $p",
     ],
     { encoding: "utf8", windowsHide: true },
   ).stdout;
@@ -278,9 +299,8 @@ try {
   const windows = (browser.contexts() ?? []).flatMap((c) => c.pages()).filter((p) => URL_RE.test(p.url()));
   if (windows.length !== 1) fail(`expected exactly one CDP window after the duplicate start, found ${windows.length}`);
   const focusDeadline = Date.now() + 30_000;
-  while (Date.now() < focusDeadline && foregroundPid() !== first.pid && foregroundPid() !== -1) await sleep(500);
-  const fg = foregroundPid();
-  if (fg > 0 && fg !== first.pid) fail(`the existing Proxi window was not focused (foreground pid ${fg}, want ${first.pid})`);
+  while (Date.now() < focusDeadline && foregroundPid() !== first.pid) await sleep(500);
+  if (foregroundPid() !== first.pid) fail(`the existing Proxi window was not focused (foreground pid ${foregroundPid()}, want ${first.pid})`);
   console.log("ok [AC2]: duplicate exited on its own, one shell + one backend left, existing window focused");
 
   await closeAppThroughCdp(page, first.pid, repo);

@@ -78,12 +78,6 @@ Four guards are ported 1:1 from the Electron main process (`app/desktop/main.mjs
 One Tauri 2.12.6 consequence: the guard handlers exist only on the window builders, so the main window is
 built in the Rust `setup` hook instead of coming from `tauri.conf.json` `app.windows` (that list is empty).
 
-```bash
-npm run tauri:build   # tauri build (src-tauri/)
-npm run tauri:dev     # tauri dev mode
-npm run tauri:smoke   # real-run smoke of the built exe (app/desktop/tauri-smoke.mjs)
-```
-
 ## Smoke test
 
 `npm run desktop:smoke` launches the app with fake claude and a temp copy of the fixture repo, checks the page
