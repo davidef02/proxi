@@ -4,11 +4,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 const here = import.meta.dirname;
+const require = createRequire(import.meta.url);
 const bench = () => import(pathToFileURL(path.join(here, "../desktop/bench-lib.mjs")).href);
 
 const SHA = "a".repeat(40);
@@ -347,6 +349,12 @@ test(
   "bench:baseline rejects a malformed --compare file before launching",
   { skip: process.platform !== "win32" ? "bench:baseline runs on Windows only" : false },
   () => {
+    const electronExe = path.join(here, "../../node_modules/electron/dist/electron.exe");
+    if (!fs.existsSync(electronExe)) {
+      try {
+        require("electron");
+      } catch {}
+    }
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "bench-compare-"));
     try {
       const bad = path.join(tmp, "bad.json");

@@ -75,13 +75,12 @@ test("a clean backend exit code 0 relaunches, anything else is logged, never rel
   assert.match(main, /if state\.quitting\.load\(Ordering::SeqCst\)/);
 });
 
-test("the configured window is main, hidden until the start URL is known", () => {
+test("the window is main, hidden until the start URL is known (built in setup for guard handlers)", () => {
   assert.equal(conf.productName, "Proxi");
-  assert.equal(conf.app.windows.length, 1);
-  const win = conf.app.windows[0];
-  assert.equal(win.label, "main");
-  assert.equal(win.title, "Proxi");
-  assert.equal(win.visible, false);
+  assert.equal(conf.app.windows.length, 0, "window moved to setup so guard handlers can attach to builder");
+  assert.match(main, /WebviewWindowBuilder::new\(\s*app,\s*"main"/);
+  assert.match(main, /\.title\("Proxi"\)/);
+  assert.match(main, /\.visible\(false\)/);
 });
 
 test("the bundle stays off: installers are the release pipeline's job", () => {
@@ -106,9 +105,14 @@ test("the crate stays out of the root workspace so CI never compiles tauri", () 
   assert.match(gitignore, /\/src-tauri\/gen\//);
 });
 
-test("capabilities grant core:default to the main window only", () => {
+test("capabilities grant core:default, clipboard and opener to the main window only", () => {
   assert.deepEqual(caps.windows, ["main"]);
-  assert.deepEqual(caps.permissions, ["core:default"]);
+  assert.deepEqual(caps.permissions, [
+    "core:default",
+    "clipboard-manager:allow-write-text",
+    "opener:allow-open-url",
+    "allow-open-external-http",
+  ]);
 });
 
 test("the npm scripts exist and the CLI twin is a devDependency", () => {
