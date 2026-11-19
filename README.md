@@ -50,9 +50,35 @@ On Windows, `npm run desktop:install` adds Start menu and Desktop shortcuts and 
 
 ## Build
 
+### Windows
+
+Prerequisites: Microsoft Edge WebView2 (preinstalled on Windows 10/11).
+
 ```bash
+cargo build --release --locked
 npm run app:build
-npm test
+```
+
+### macOS
+
+Prerequisites: Xcode Command Line Tools (`xcode-select --install`).
+
+```bash
+cargo build --release --locked
+npm run app:build
+```
+
+### Linux
+
+Prerequisites (Ubuntu/Debian packages):
+
+```bash
+sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+```
+
+```bash
+cargo build --release --locked
+npm run app:build
 ```
 
 ## License

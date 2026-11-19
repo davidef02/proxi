@@ -32,7 +32,7 @@ Agents that teach or study never need this file.
 
 ## Commands
 
-CI runs all of these on every PR (`.github/workflows/ci.yml`); locally run only the one you are
+CI runs all of these on every PR across Windows, macOS, and Linux (`.github/workflows/ci.yml`); locally run only the one you are
 iterating on.
 
 ```bash

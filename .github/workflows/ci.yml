@@ -11,11 +11,20 @@ concurrency:
 
 jobs:
   checks:
-    name: checks
-    runs-on: ubuntu-latest
+    name: checks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -27,7 +36,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: playwright-traces
+          name: playwright-traces-${{ matrix.os }}
           path: test-results/
           retention-days: 7
   gitleaks:
