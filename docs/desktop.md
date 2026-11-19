@@ -48,8 +48,35 @@ behind a small splash window when stale. If a rebuild fails and an older build e
 An alternative Tauri v2 shell (WebView2) in `src-tauri/` keeps the Electron contract verbatim: spawn argv
 `serve --repo-root <abs> --dist-dir <abs> --port <N>` plus engine flags, readiness = stdout line
 `Proxi: http://127.0.0.1:<port>` within 30 s, kill = `taskkill /PID <pid> /T /F`, relaunch = backend exit
-code 0 while not quitting. The React UI is untouched. It is not the default yet: the Electron shell (above)
-stays the shipped one until the separate remove-electron issue. Build and try it with:
+code 0 while not quitting. The React UI is untouched; only routing changes. Build and try it with:
+
+```bash
+npm run tauri:build   # tauri build (src-tauri/)
+npm run tauri:dev     # tauri dev mode
+npm run tauri:smoke   # real-run smoke of the built exe (app/desktop/tauri-smoke.mjs)
+```
+
+Four guards are ported 1:1 from the Electron main process (`app/desktop/main.mjs`, kept as the reference):
+
+- **Clipboard** — copy writes through `tauri-plugin-clipboard-manager` from the web call site. The Electron
+  10 000-char bound is enforced in `app/web/src/clipboard.ts` (the plugin command itself has none): longer
+  strings return `false` before the plugin is invoked. The `iaDesktop` Electron branch and the
+  `navigator.clipboard`/`execCommand` fallback are unchanged.
+- **External links** — `tauri-plugin-opener` opens http(s) URLs in the system browser (JS call sites route
+  through `openUrl`; `mailto:`/`tel:` stay denied, parity with Electron's `/^https?:/i`), and the Rust
+  `on_new_window` handler denies in-app creation of any window from those links.
+- **Microphone** — a Rust permission handler grants `Microphone` only when the requesting webview's origin
+  matches the backend origin (the localhost fallback before it is known); `Camera` and every other
+  permission kind is denied. WebView2 splits a `getUserMedia({audio, video})` request into separate
+  Microphone and Camera permission requests, so a video+audio capture fails on the denied Camera request.
+- **Popup guards** — every `/files/...` link goes through a single admission gate under one lock: the
+  requested URL is registered as label `lesson-<n>`, the window is built with `on_navigation` locked to that
+  exact URL (navigation elsewhere is cancelled) and no IPC capabilities (`capabilities/popup.json` with empty
+  `permissions`, so a popup cannot invoke Tauri commands), and `MAX_WINDOWS = 8` caps the number of live
+  popups — requests past the cap are denied atomically.
+
+One Tauri 2.12.6 consequence: the guard handlers exist only on the window builders, so the main window is
+built in the Rust `setup` hook instead of coming from `tauri.conf.json` `app.windows` (that list is empty).
 
 ```bash
 npm run tauri:build   # tauri build (src-tauri/)

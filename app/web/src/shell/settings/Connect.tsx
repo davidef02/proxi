@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { api } from "../../api.ts";
 import { copyText } from "../../clipboard.ts";
+import { openExternal } from "../../desktop.ts";
 import { APP_NAME, DATA_DIR_NAME } from "../../../../shared/identity.mjs";
 import type { SyncStatus } from "../../../../shared/protocol.ts";
 
@@ -119,7 +120,9 @@ export function GoogleConnect({ sync, onStatus }: { sync?: SyncStatus; onStatus(
             setErr(undefined);
             api.googleStart()
               .then(({ url }) => {
-                window.open(url, "_blank");
+                // In the Tauri shell the Rust on_new_window guard routes this to the system browser;
+                // openExternal is the JS call site path for the same rule.
+                void openExternal(url);
                 setFallbackUrl(url);
               })
               .catch((e) => setErr(errorText(e)))
