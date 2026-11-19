@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "popup",
+  "description": "Lesson pop-ups: window-creation only, no IPC bridge (the guard lives in main.rs on_new_window/on_navigation).",
+  "windows": ["lesson-*"],
+  "permissions": []
+}

@@ -3,5 +3,10 @@
   "identifier": "default",
   "description": "Default permissions for the Proxi shell window",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "clipboard-manager:allow-write-text",
+    "opener:allow-open-url",
+    "allow-open-external-http"
+  ]
 }

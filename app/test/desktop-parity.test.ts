@@ -137,3 +137,32 @@ test("useDictation.ts pins an audio-only getUserMedia request", () => {
   assert.doesNotMatch(src, /audio: \{[^}]*\},\s*\n?\s*video/, "the Rust handler grants audio-only");
   assert.doesNotMatch(src, /video:/);
 });
+
+test("desktop capabilities and permissions pin the Tauri ACL", () => {
+  const popup = JSON.parse(
+    fs.readFileSync(path.join(root, "src-tauri/capabilities/popup.json"), "utf8"),
+  ) as { identifier: string; windows: string[]; permissions: string[] };
+  assert.equal(popup.identifier, "popup");
+  assert.deepEqual(popup.permissions, [], "pop-ups get no IPC bridge");
+  assert.deepEqual(popup.windows, ["lesson-*"]);
+
+  const def = JSON.parse(
+    fs.readFileSync(path.join(root, "src-tauri/capabilities/default.json"), "utf8"),
+  ) as { windows: string[]; permissions: string[] };
+  assert.deepEqual(def.windows, ["main"]);
+  assert.deepEqual(def.permissions, [
+    "core:default",
+    "clipboard-manager:allow-write-text",
+    "opener:allow-open-url",
+    "allow-open-external-http",
+  ]);
+
+  const scope = fs
+    .readFileSync(path.join(root, "src-tauri/permissions/opener-http.toml"), "utf8")
+    .split(/\r?\n/)
+    .filter((line) => !line.trimStart().startsWith("#"))
+    .join("\n");
+  assert.match(scope, /url = "http:\/\/\*"/);
+  assert.match(scope, /url = "https:\/\/\*"/);
+  assert.doesNotMatch(scope, /mailto:|tel:/, "the opener scope stays http/https-only");
+});

@@ -1,0 +1,14 @@
+# The http/https-only URL scope pinning open_url: the TOML port of the Electron
+# /^https?:/i guard of main.mjs (shell.openExternal), so mailto:/tel: and every other
+# scheme stay denied even if a capability could see them.
+[[permission]]
+identifier = "allow-open-external-http"
+description = "Grants tauri-plugin-opener open_url for http/https URLs only, in parity with the Electron shell.openExternal guard."
+commands.allow = ["open_url"]
+
+[[permission.scope.allow]]
+url = "http://*"
+
+[[permission.scope.allow]]
+url = "https://*"
+
