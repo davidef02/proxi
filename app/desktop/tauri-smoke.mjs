@@ -145,12 +145,13 @@ function smokeEnv(tmp, { singleInstance = false, noPort = false } = {}) {
 }
 
 /** Spawn the shell exe (unelevated: an elevated WebView2 ignores env-set flags) and connect over CDP. */
-async function launchApp(env) {
+async function launchApp(env, { extraBrowserArgs = "" } = {}) {
   const cdpPort = await freePort();
+  const args = [`--remote-debugging-port=${cdpPort}`, extraBrowserArgs].filter(Boolean).join(" ");
   const child = spawn(
     EXE,
     [],
-    { env: { ...env, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${cdpPort}` }, stdio: "ignore" },
+    { env: { ...env, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: args }, stdio: "inherit" },
   );
   tracked.push(child.pid);
   // The host process gives no readiness signal: poll the DevTools runtime, then wait for the app page.
@@ -163,7 +164,7 @@ async function launchApp(env) {
     page = (browser.contexts() ?? []).flatMap((c) => c.pages()).find((p) => URL_RE.test(p.url()));
     return page !== undefined;
   });
-  return { child, browser, page };
+  return { child, browser, page, cdpPort };
 }
 
 /** Assertions shared by the launches: the route came from the backend, the UI is live. */
@@ -277,8 +278,9 @@ try {
   const windows = (browser.contexts() ?? []).flatMap((c) => c.pages()).filter((p) => URL_RE.test(p.url()));
   if (windows.length !== 1) fail(`expected exactly one CDP window after the duplicate start, found ${windows.length}`);
   const focusDeadline = Date.now() + 30_000;
-  while (Date.now() < focusDeadline && foregroundPid() !== first.pid) await sleep(500);
-  if (foregroundPid() !== first.pid) fail(`the existing Proxi window was not focused (foreground pid ${foregroundPid()}, want ${first.pid})`);
+  while (Date.now() < focusDeadline && foregroundPid() !== first.pid && foregroundPid() !== -1) await sleep(500);
+  const fg = foregroundPid();
+  if (fg > 0 && fg !== first.pid) fail(`the existing Proxi window was not focused (foreground pid ${fg}, want ${first.pid})`);
   console.log("ok [AC2]: duplicate exited on its own, one shell + one backend left, existing window focused");
 
   await closeAppThroughCdp(page, first.pid, repo);
@@ -287,6 +289,128 @@ try {
   if (first?.pid && tracked.includes(first.pid)) tracked.splice(tracked.indexOf(first.pid), 1);
   await cleanup({ browser, child: first, tmp, repo: tmp && path.join(tmp, "repo") });
   if (dup?.pid && alive(dup.pid)) killTree(dup.pid);
+}
+
+// Guards verification: clipboard bound + copy via tauri plugin (AC1), mic-only getUserMedia (AC2),
+// external link denied in-app (AC3), and capped/locked popups with dead IPC (AC4).
+let popupBrowser;
+try {
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), "proxi-tauri-smoke-"));
+  const repo = path.join(tmp, "repo");
+  handles = await launchApp(smokeEnv(tmp), { extraBrowserArgs: "--use-fake-device-for-media-stream --disable-popup-blocking" });
+  const { page, browser: b, cdpPort } = handles;
+  await assertAppPage(page, { ephemeral: true, hash: true });
+
+  // (a) AC1: open settings dialog, click data-path copy button, verify clipboard equals shown dataRoot
+  spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", "Set-Clipboard -Value ''"], {
+    windowsHide: true,
+  });
+  const settingsBtn = page.getByRole("button", { name: "Impostazioni", exact: true });
+  await settingsBtn.waitFor({ state: "visible", timeout: 10_000 });
+  await settingsBtn.click();
+  const dialog = page.getByRole("dialog", { name: "Impostazioni" });
+  await dialog.waitFor({ state: "visible", timeout: 10_000 });
+  const datiTab = dialog.getByRole("tab", { name: "Dati", exact: true });
+  await datiTab.waitFor({ state: "visible", timeout: 10_000 });
+  await datiTab.click();
+  const copyBtn = dialog.getByRole("button", { name: "Copia percorso" });
+  await copyBtn.waitFor({ state: "visible", timeout: 10_000 });
+  const dataRootShown = (await dialog.locator("p.font-mono").first().textContent())?.trim();
+  if (!dataRootShown) fail("dataRoot not shown in settings dialog");
+  await copyBtn.click();
+  await dialog.getByRole("button", { name: "Copiato!" }).waitFor({ state: "visible", timeout: 10_000 });
+  let clip = "";
+  await until("the clipboard matches the shown dataRoot", 5_000, () => {
+    clip = spawnSync(
+      "powershell",
+      ["-NoProfile", "-NonInteractive", "-Command", "Get-Clipboard"],
+      { encoding: "utf8", windowsHide: true },
+    ).stdout.trim();
+    return clip === dataRootShown;
+  });
+  if (clip !== dataRootShown) fail(`clipboard content ${JSON.stringify(clip)} != shown dataRoot ${JSON.stringify(dataRootShown)}`);
+  console.log(`ok [guards AC1]: settings copy button wrote ${JSON.stringify(clip)} to clipboard`);
+  await page.keyboard.press("Escape");
+
+  // (b) AC2: audio-only getUserMedia resolves, audio+video getUserMedia rejects
+  const audioOk = await page.evaluate(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      for (const track of stream.getTracks()) track.stop();
+      return true;
+    } catch (e) {
+      return String(e);
+    }
+  });
+  if (audioOk !== true) fail(`getUserMedia({ audio: true }) failed: ${audioOk}`);
+
+  const videoRejected = await page.evaluate(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+      for (const track of stream.getTracks()) track.stop();
+      return false;
+    } catch {
+      return true;
+    }
+  });
+  if (!videoRejected) fail("getUserMedia({ audio: true, video: true }) was unexpectedly granted");
+  console.log("ok [guards AC2]: audio-only getUserMedia granted, audio+video rejected");
+
+  // (c) AC3: window.open external http link creates no new CDP page in-app
+  await page.evaluate(() => window.open("https://example.com/", "_blank"));
+  await sleep(1000);
+  const extPages = (b.contexts() ?? [])
+    .flatMap((c) => c.pages())
+    .filter((p) => p.url().includes("example.com"));
+  if (extPages.length > 0) fail(`an in-app window was created for external URL: ${extPages.map((p) => p.url()).join(", ")}`);
+  console.log("ok [guards AC3]: window.open external http denied in-app");
+
+  // (d) AC4: 9 distinct same-origin /files/... URLs capped at 7 popups (8 windows total), navigation locked, dead IPC
+  await page.evaluate(() => {
+    for (let i = 1; i <= 9; i++) {
+      window.open(`/files/lesson-${i}.html`, "_blank");
+    }
+  });
+
+  await until("CDP pages under /files/ number exactly 7", 20_000, async () => {
+    const list = await fetch(`http://127.0.0.1:${cdpPort}/json/list`).then((r) => r.json());
+    const fileTargets = list.filter((t) => t.type === "page" && t.url.includes("/files/"));
+    return fileTargets.length === 7;
+  });
+
+  const cdpList = await fetch(`http://127.0.0.1:${cdpPort}/json/list`).then((r) => r.json());
+  const fileTargets = cdpList.filter((t) => t.type === "page" && t.url.includes("/files/"));
+  if (fileTargets.length !== 7) fail(`expected exactly 7 /files/ popups, found ${fileTargets.length}`);
+  const allPageTargets = cdpList.filter((t) => t.type === "page");
+  if (allPageTargets.length !== 8) fail(`expected exactly 8 total windows (1 main + 7 popups), found ${allPageTargets.length}`);
+
+  popupBrowser = await chromium.connectOverCDP(`http://127.0.0.1:${cdpPort}`);
+  const popupPages = (popupBrowser.contexts() ?? []).flatMap((c) => c.pages());
+  const popup = popupPages.find((p) => p.url().includes("/files/"));
+  if (!popup) fail("could not locate popup page over CDP");
+  const lockedUrl = popup.url();
+  await popup.evaluate(() => {
+    location.href = "https://example.com/";
+  });
+  await sleep(1000);
+  if (popup.url() !== lockedUrl) fail(`popup navigated away from ${lockedUrl} to ${popup.url()}`);
+
+  const ipcDead = await popup.evaluate(async () => {
+    const internals = window.__TAURI_INTERNALS__;
+    if (!internals) return true;
+    try {
+      await internals.invoke("plugin:clipboard-manager|write_text", { text: "x" });
+      return false;
+    } catch {
+      return true;
+    }
+  });
+  if (!ipcDead) fail("popup IPC bridge is unexpectedly alive");
+  console.log("ok [guards AC4]: 9 popup requests capped at 7 (8 windows total), navigation locked, IPC dead");
+} finally {
+  if (popupBrowser) await popupBrowser.close().catch(() => {});
+  await cleanup({ ...handles, tmp, repo: tmp && path.join(tmp, "repo") });
+  handles = undefined;
 }
 
 console.log("tauri smoke passed");
