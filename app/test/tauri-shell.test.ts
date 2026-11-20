@@ -83,13 +83,13 @@ test("the window is main, hidden until the start URL is known (built in setup fo
   assert.match(main, /\.visible\(false\)/);
 });
 
-test("the bundle stays off: installers are the release pipeline's job", () => {
-  assert.equal(conf.bundle.active, false);
+test("the bundle is active for NSIS installer in the release pipeline", () => {
+  assert.equal(conf.bundle.active, true);
   assert.deepEqual(conf.bundle.targets, ["nsis"]);
 });
 
-test("the frontendDist and dev commands match the vite app", () => {
-  assert.equal(conf.build.frontendDist, "../app/web/dist");
+test("the frontendDist placeholder and dev commands match the vite app", () => {
+  assert.equal(conf.build.frontendDist, "capabilities");
   assert.equal(conf.build.beforeDevCommand, "npm run app:web");
   assert.equal(conf.build.beforeBuildCommand, "npm run app:build");
 });
