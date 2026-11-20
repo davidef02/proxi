@@ -1,0 +1,87 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: release ${{ github.ref_name }}
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      PROXI_SKIP_MODEL: "1"
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      # Same provisioning as ci.yml: the rustup install stays here, not in gate.sh.
+      - run: rustup toolchain install stable --profile minimal && rustup default stable
+      - run: npm ci
+      # The backend binary the installer ships as a resource (../target/release/proxi.exe).
+      - run: cargo build --release --locked
+      # Builds the shell (beforeBuildCommand runs `npm run app:build`), bundles NSIS with
+      # createUpdaterArtifacts, signs with TAURI_SIGNING_PRIVATE_KEY*, and publishes the Release
+      # with the installer, its .sig and latest.json (tauri-action@v1 writes latest.json to the
+      # repo root ./latest.json — tauri build never puts it in the bundle dir — and uploads json + sigs).
+      - uses: tauri-apps/tauri-action@v1
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: Proxi ${{ github.ref_name }}
+          releaseDraft: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # AC2 + AC3: offline minisign verification of latest.json against the embedded pubkey,
+      # and the size gate — a >= 15 000 000-byte installer fails the job. latest.json sits at the
+      # repo root (written there by tauri-action@v1), so pass --latest-json ./latest.json.
+      - name: Verify updater artifacts and size gate
+        shell: pwsh
+        run: node scripts/verify-release.mjs --bundle-dir src-tauri/target/release/bundle --latest-json ./latest.json --config src-tauri/tauri.conf.json
+      # AC4: silent per-user install on the clean runner, then the installed app must serve.
+      - name: Silent per-user install smoke
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Get-ChildItem -Recurse -File -Path src-tauri/target/release/bundle -Filter *-setup.exe | Select-Object -First 1
+          if (-not $installer) { throw "no *-setup.exe under src-tauri/target/release/bundle" }
+          # `& $installer /S` returns immediately for a GUI installer; -Wait -PassThru blocks and its ExitCode is reliable.
+          $setup = Start-Process -FilePath $installer.FullName -ArgumentList '/S' -Wait -PassThru
+          if ($setup.ExitCode -ne 0) { throw "installer exited $($setup.ExitCode)" }
+          $entry = Get-ChildItem HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall |
+            ForEach-Object { Get-ItemProperty $_.PSPath } |
+            Where-Object { $_.DisplayName -eq 'Proxi' } | Select-Object -First 1
+          if (-not $entry) { throw 'no HKCU uninstall entry for Proxi' }
+          if (-not $entry.InstallLocation -or -not $entry.InstallLocation.StartsWith($env:LOCALAPPDATA, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "install location is not per-user under LOCALAPPDATA: $($entry.InstallLocation)"
+          }
+          Write-Host "installed per-user at $($entry.InstallLocation)"
+          $exe = Get-ChildItem -File $entry.InstallLocation -Filter *.exe |
+            Where-Object { $_.Name -notmatch '^uninstall' -and $_.Name -ne 'proxi.exe' } | Select-Object -First 1
+          if (-not $exe) { throw "no app exe in $($entry.InstallLocation)" }
+          $env:PROXI_SKIP_MODEL = '1'
+          $proc = Start-Process -FilePath $exe.FullName -PassThru
+          try {
+            $ok = $false
+            for ($i = 0; $i -lt 180; $i++) { # 90 s budget, 500 ms polls (L49)
+              try {
+                $body = (Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 http://127.0.0.1:4317/api/settings).Content | ConvertFrom-Json
+                if ($body.teacherModel -is [string]) { $ok = $true; break }
+              } catch {}
+              Start-Sleep -Milliseconds 500
+            }
+            if (-not $ok) { throw 'the installed app did not answer /api/settings within 90 s' }
+            Write-Host 'installed app is serving /api/settings'
+          } finally {
+            taskkill /PID $proc.Id /T /F | Out-Null
+          }
