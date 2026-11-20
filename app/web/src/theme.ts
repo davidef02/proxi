@@ -2,17 +2,11 @@
 // computer. <html data-theme> carries the resolved mode (dark|light: Tailwind `dark:`, CodeMirror, canvas maths read it);
 // <html data-palette> carries the palette. styles.css keys every token off both attributes.
 import { useSyncExternalStore } from "react";
+import { setChrome } from "./desktop.ts";
 import { LEGACY_KEY, MODE_KEY, PALETTE_KEY, readModePref, readPalette, type ChromePair, type ChromePayload, type Mode, type ModePref, type Palette } from "./palettes.ts";
 
 export type { Mode, ModePref, Palette } from "./palettes.ts";
 export type Appearance = { mode: Mode; palette: Palette; key: string /* `${palette}-${mode}` */ };
-
-declare global {
-  interface Window {
-    /** Set by app/desktop/preload.cjs in the desktop app only. */
-    iaDesktop?: { setChrome?(c: ChromePayload): void; setZoom?(z: number): void; copyText?(t: string): void };
-  }
-}
 
 const HEX = /^#[0-9a-f]{6}$/;
 const mq = window.matchMedia("(prefers-color-scheme: dark)");
@@ -66,13 +60,11 @@ function apply() {
   el.dataset.theme = mode;
   el.dataset.palette = p;
   el.style.colorScheme = mode;
-  if (window.iaDesktop?.setChrome) {
-    // desktop app: recolour the native window controls. Before the stylesheet loads the tokens are missing: skip, so
-    // main keeps its persisted colours. An older preload may lack setChrome: then there is nothing to send.
-    const payload: ChromePayload = { modePref: modePref(), dark: chromeOf(p, "dark"), light: chromeOf(p, "light") };
-    const ok = [payload.dark.color, payload.dark.symbolColor, payload.light.color, payload.light.symbolColor].every((c) => HEX.test(c));
-    if (ok) window.iaDesktop.setChrome(payload);
-  }
+  // desktop app: recolour the native window controls. Before the stylesheet loads the tokens are missing: skip, so
+  // main keeps its persisted colours. An older preload may lack setChrome: then there is nothing to send.
+  const payload: ChromePayload = { modePref: modePref(), dark: chromeOf(p, "dark"), light: chromeOf(p, "light") };
+  const ok = [payload.dark.color, payload.dark.symbolColor, payload.light.color, payload.light.symbolColor].every((c) => HEX.test(c));
+  if (ok) void setChrome(payload);
   for (const f of listeners) f();
 }
 

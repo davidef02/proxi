@@ -2,6 +2,7 @@
 // In Electron, webContents.setZoomFactor scales the window and updates devicePixelRatio uniformly.
 // In the browser, CSS zoom on document.documentElement scales the entire interface.
 import { useSyncExternalStore } from "react";
+import { setZoom } from "./desktop.ts";
 
 export type ZoomPref = "90%" | "100%" | "110%" | "125%" | "150%";
 
@@ -41,11 +42,7 @@ export function zoomFactor(): number {
 function apply() {
   const factor = zoomFactor();
   if (typeof window !== "undefined") {
-    if (window.iaDesktop?.setZoom) {
-      window.iaDesktop.setZoom(factor);
-    } else {
-      (document.documentElement.style as any).zoom = String(factor);
-    }
+    if (!setZoom(factor)) (document.documentElement.style as any).zoom = String(factor);
   }
   for (const f of listeners) f();
 }

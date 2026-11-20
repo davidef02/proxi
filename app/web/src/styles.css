@@ -368,7 +368,7 @@
   button:not(:disabled), select, summary { cursor: pointer; }
   :focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
   dialog { color: inherit; }
-  /* Electron: the top bar drags the window; whatever is interactive inside it must not. */
+  /* Electron and Tauri (data-tauri-drag-region): the top bar drags the window; whatever is interactive inside it must not. */
   .topbar { -webkit-app-region: drag; }
   .topbar :is(button, a, input, select, textarea, [role="tab"]) { -webkit-app-region: no-drag; }
   /* The scrim starts below the 36px top bar (h-9, Shell.tsx): the bar keeps its true colour, which the native window

@@ -16,6 +16,7 @@ use tauri::webview::{NewWindowFeatures, NewWindowResponse, PermissionKind, Permi
 use tauri::{
     AppHandle, Manager, RunEvent, Url, Webview, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
+use tauri_plugin_window_controls_overlay::{TitleBarOverlayOptions, WindowControlsOverlayExt};
 
 mod guards;
 mod shell;
@@ -28,6 +29,127 @@ use shell::Vars;
 struct BackendState {
     pid: Mutex<Option<u32>>,
     quitting: AtomicBool,
+}
+
+struct ShellWindowState {
+    chrome: Mutex<window::Chrome>,
+    zoom: Mutex<f64>,
+    last_normal: Mutex<Option<(f64, f64, f64, f64)>>,
+}
+
+fn hex_to_color(hex: &str) -> Option<tauri::webview::Color> {
+    if hex.len() != 7 || !hex.starts_with('#') {
+        return None;
+    }
+    let r = u8::from_str_radix(&hex[1..3], 16).ok()?;
+    let g = u8::from_str_radix(&hex[3..5], 16).ok()?;
+    let b = u8::from_str_radix(&hex[5..7], 16).ok()?;
+    Some(tauri::webview::Color(r, g, b, 255))
+}
+
+fn save_current_window_state(app: &AppHandle) -> Result<(), String> {
+    let Some(win) = app.get_webview_window("main") else {
+        return Ok(());
+    };
+    let state = app.state::<ShellWindowState>();
+    let maximized = win.is_maximized().unwrap_or(false);
+    let scale = win.scale_factor().unwrap_or(1.0);
+    let (x, y, width, height) = if maximized {
+        state.last_normal.lock().unwrap().unwrap_or_else(|| {
+            let pos = win.outer_position().unwrap_or_default();
+            let size = win.inner_size().unwrap_or_default();
+            (
+                pos.x as f64 / scale,
+                pos.y as f64 / scale,
+                size.width as f64 / scale,
+                size.height as f64 / scale,
+            )
+        })
+    } else {
+        let pos = win.outer_position().unwrap_or_default();
+        let size = win.inner_size().unwrap_or_default();
+        let normal = (
+            pos.x as f64 / scale,
+            pos.y as f64 / scale,
+            size.width as f64 / scale,
+            size.height as f64 / scale,
+        );
+        *state.last_normal.lock().unwrap() = Some(normal);
+        normal
+    };
+    let save_state = window::SaveState {
+        x,
+        y,
+        width,
+        height,
+        maximized,
+        chrome: state.chrome.lock().unwrap().clone(),
+        zoom: *state.zoom.lock().unwrap(),
+    };
+    let path = app
+        .path()
+        .app_data_dir()
+        .map(|d| d.join("window.json"))
+        .map_err(|e| format!("cannot determine app data dir: {e}"))?;
+    window::save_window_state(path, &save_state)
+        .map_err(|e| format!("failed to save window state: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn set_chrome(app: AppHandle, webview: Webview, chrome: serde_json::Value) -> Result<(), String> {
+    if webview.label() != "main" {
+        return Ok(());
+    }
+    let Some(parsed) = window::parse_chrome(&chrome) else {
+        return Ok(());
+    };
+    let state = app.state::<ShellWindowState>();
+    *state.chrome.lock().unwrap() = parsed.clone();
+
+    let theme = match parsed.mode_pref.as_ref() {
+        "dark" => Some(tauri::Theme::Dark),
+        "light" => Some(tauri::Theme::Light),
+        _ => None,
+    };
+    let _ = app.set_theme(theme);
+
+    let os_dark = webview
+        .window()
+        .theme()
+        .map(|t| t == tauri::Theme::Dark)
+        .unwrap_or(false);
+    let pair = window::resolve_chrome(&parsed, os_dark);
+
+    let _ = app.window_controls_overlay().update(
+        &webview.window(),
+        TitleBarOverlayOptions::new()
+            .color(pair.color.clone())
+            .symbol_color(pair.symbol_color.clone())
+            .height(window::OVERLAY_HEIGHT as f64),
+    );
+    if let Some(color) = hex_to_color(&pair.color) {
+        let _ = webview.set_background_color(Some(color));
+    }
+
+    save_current_window_state(&app)?;
+    Ok(())
+}
+
+#[tauri::command]
+fn set_zoom(webview: Webview, zoom: f64) -> Result<(), String> {
+    if webview.label() != "main" {
+        return Ok(());
+    }
+    if !zoom.is_finite() {
+        return Ok(());
+    }
+    let clamped = window::clamp_zoom(zoom);
+    let app = webview.app_handle();
+    let state = app.state::<ShellWindowState>();
+    *state.zoom.lock().unwrap() = clamped;
+    let _ = webview.set_zoom(clamped);
+    Ok(())
 }
 
 fn main() {
@@ -61,45 +183,112 @@ fn main() {
     builder
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_window_controls_overlay::init())
+        .invoke_handler(tauri::generate_handler![set_chrome, set_zoom])
         .setup(move |app| {
             // The main window cannot come from tauri.conf.json: the guard handlers only exist on
             // the builders, so it is built here, before the backend URL is known (about:blank).
             let handle = app.handle().clone();
             app.manage(ShellGuards::default());
-            WebviewWindowBuilder::new(
+
+            let window_path = app
+                .path()
+                .app_data_dir()
+                .map(|d| d.join("window.json"))
+                .map_err(|e| format!("cannot determine app data dir: {e}"))?;
+
+            // Feed monitors from app.available_monitors() using work_area in logical DIP units
+            let monitors = app.available_monitors().unwrap_or_default();
+            let displays: Vec<(f64, f64, f64, f64)> = monitors
+                .iter()
+                .map(|m| {
+                    let scale = m.scale_factor();
+                    let area = m.work_area();
+                    (
+                        area.position.x as f64 / scale,
+                        area.position.y as f64 / scale,
+                        area.size.width as f64 / scale,
+                        area.size.height as f64 / scale,
+                    )
+                })
+                .collect();
+
+            let saved = window::load_window_state(&window_path, &displays);
+            let last_normal = saved.position.map(|(x, y)| (x, y, saved.width, saved.height));
+            app.manage(ShellWindowState {
+                chrome: Mutex::new(saved.chrome.clone()),
+                zoom: Mutex::new(saved.zoom),
+                last_normal: Mutex::new(last_normal),
+            });
+
+            let mut win_builder = WebviewWindowBuilder::new(
                 app,
                 "main",
                 WebviewUrl::External("about:blank".parse().unwrap()),
             )
             .title("Proxi")
-            .inner_size(1440.0, 920.0)
+            .decorations(false)
             .min_inner_size(1000.0, 680.0)
-            .visible(false)
-            .on_navigation({
-                let handle = handle.clone();
-                move |u| {
-                    let app_origin = handle.state::<ShellGuards>().app_origin();
-                    if guards::main_navigation_allowed(u, app_origin.as_deref()) {
-                        return true;
+            .visible(false);
+
+            // WebviewWindowBuilder::position and inner_size take logical DIP units in Tauri 2.12.6,
+            // so no physical conversion with scale_factor is required here.
+            if let Some((x, y)) = saved.position {
+                win_builder = win_builder.position(x, y).inner_size(saved.width, saved.height);
+            } else {
+                win_builder = win_builder.inner_size(saved.width, saved.height);
+            }
+
+            let win = win_builder
+                .on_navigation({
+                    let handle = handle.clone();
+                    move |u| {
+                        let app_origin = handle.state::<ShellGuards>().app_origin();
+                        if guards::main_navigation_allowed(u, app_origin.as_deref()) {
+                            return true;
+                        }
+                        // main.mjs will-navigate: a foreign http(s) URL goes to the system browser
+                        if guards::is_external_http(u.as_str()) {
+                            let _ = tauri_plugin_opener::open_url(u.as_str(), None::<&str>);
+                        }
+                        false
                     }
-                    // main.mjs will-navigate: a foreign http(s) URL goes to the system browser
-                    if guards::is_external_http(u.as_str()) {
-                        let _ = tauri_plugin_opener::open_url(u.as_str(), None::<&str>);
-                    }
-                    false
-                }
-            })
-            .on_new_window({
-                let handle = handle.clone();
-                move |url, features| new_window_response(&handle, url, features)
-            })
-            .on_permission_request({
-                let handle = handle.clone();
-                move |webview, kind| permission_response(&handle, &webview, kind)
-            })
-            .build()
-            .map(|_| ())
-            .map_err(|e| format!("failed to build the main window: {e}"))?;
+                })
+                .on_new_window({
+                    let handle = handle.clone();
+                    move |url, features| new_window_response(&handle, url, features)
+                })
+                .on_permission_request({
+                    let handle = handle.clone();
+                    move |webview, kind| permission_response(&handle, &webview, kind)
+                })
+                .build()
+                .map_err(|e| format!("failed to build the main window: {e}"))?;
+
+            if saved.maximized {
+                let _ = win.maximize();
+            }
+
+            let os_dark = win.theme().map(|t| t == tauri::Theme::Dark).unwrap_or(false);
+            let pair = window::resolve_chrome(&saved.chrome, os_dark);
+
+            let overlay_opts = TitleBarOverlayOptions::new()
+                .color(pair.color.clone())
+                .symbol_color(pair.symbol_color.clone())
+                .height(window::OVERLAY_HEIGHT as f64);
+            let _ = app.window_controls_overlay().enable(&win, overlay_opts);
+
+            let theme = match saved.chrome.mode_pref.as_ref() {
+                "dark" => Some(tauri::Theme::Dark),
+                "light" => Some(tauri::Theme::Light),
+                _ => None,
+            };
+            let _ = app.set_theme(theme);
+
+            if let Some(color) = hex_to_color(&pair.color) {
+                let _ = win.set_background_color(Some(color));
+            }
+
             if let Err(e) = start_backend(app, &env) {
                 eprintln!("{e}");
                 app.handle().exit(1);
@@ -111,15 +300,64 @@ fn main() {
         .run(|app, event| {
             match event {
                 RunEvent::ExitRequested { .. } | RunEvent::Exit => kill_backend_tree(app),
-                // a destroyed lesson pop-up frees its label and its slot in the window cap
                 RunEvent::WindowEvent {
                     label,
-                    event: WindowEvent::Destroyed,
+                    event: ref win_event,
                     ..
                 } => {
+                    if label == "main" {
+                        match win_event {
+                            WindowEvent::CloseRequested { .. } => {
+                                let _ = save_current_window_state(app);
+                            }
+                            WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
+                                if let Some(win) = app.get_webview_window("main") {
+                                    if !win.is_maximized().unwrap_or(false) {
+                                        let scale = win.scale_factor().unwrap_or(1.0);
+                                        if let (Ok(pos), Ok(size)) = (win.outer_position(), win.inner_size()) {
+                                            let normal = (
+                                                pos.x as f64 / scale,
+                                                pos.y as f64 / scale,
+                                                size.width as f64 / scale,
+                                                size.height as f64 / scale,
+                                            );
+                                            if let Some(state) = app.try_state::<ShellWindowState>() {
+                                                *state.last_normal.lock().unwrap() = Some(normal);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            WindowEvent::ThemeChanged(theme) => {
+                                if let Some(win) = app.get_webview_window("main") {
+                                    if let Some(state) = app.try_state::<ShellWindowState>() {
+                                        let chrome = state.chrome.lock().unwrap().clone();
+                                        if chrome.mode_pref == "system" {
+                                            let os_dark = *theme == tauri::Theme::Dark;
+                                            let pair = window::resolve_chrome(&chrome, os_dark);
+                                            let _ = app.window_controls_overlay().update(
+                                                &win,
+                                                TitleBarOverlayOptions::new()
+                                                    .color(pair.color.clone())
+                                                    .symbol_color(pair.symbol_color.clone())
+                                                    .height(window::OVERLAY_HEIGHT as f64),
+                                            );
+                                            if let Some(c) = hex_to_color(&pair.color) {
+                                                let _ = win.set_background_color(Some(c));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    // a destroyed lesson pop-up frees its label and its slot in the window cap
                     if label.starts_with(guards::POPUP_LABEL_PREFIX) {
-                        if let Some(g) = app.try_state::<ShellGuards>() {
-                            guards::release_popup(&mut g.gate.lock(), &label);
+                        if let WindowEvent::Destroyed = win_event {
+                            if let Some(g) = app.try_state::<ShellGuards>() {
+                                guards::release_popup(&mut g.gate.lock(), &label);
+                            }
                         }
                     }
                 }
@@ -253,6 +491,12 @@ fn start_backend(app: &tauri::App, env: &Vars) -> Result<(), String> {
             .map_err(|e| format!("invalid start URL {url}: {e}"))?,
     )
     .map_err(|e| format!("cannot open {url}: {e}"))?;
+    if let Some(state) = app.try_state::<ShellWindowState>() {
+        let zoom = *state.zoom.lock().unwrap();
+        if zoom != 1.0 {
+            let _ = win.set_zoom(zoom);
+        }
+    }
     let _ = win.show();
     let _ = win.set_focus();
 
