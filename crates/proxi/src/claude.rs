@@ -1144,6 +1144,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn locate_finds_extensionless_claude_outside_windows() {
         let dir = temp_dir("bin-unix");
         let target = dir.join("claude");

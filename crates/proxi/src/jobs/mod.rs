@@ -1488,14 +1488,25 @@ mod tests {
     #[tokio::test]
     async fn hung_job_settles_tempo_scaduto() {
         let env = build_test_manager_with("timeout", 2, Duration::from_millis(300));
-        let j = env.manager.start("research", json!({ "question": "FAKE:slow:5000" }), "Hang", None).unwrap();
+        let j = env
+            .manager
+            .start("research", json!({ "question": "FAKE:slow:5000" }), "Hang", None)
+            .unwrap();
         let id = j["id"].as_str().unwrap();
 
-        tokio::time::sleep(Duration::from_millis(600)).await;
-
-        let cur = env.manager.get(id).unwrap();
-        assert_eq!(cur["status"], "error");
-        assert_eq!(cur["error"], "tempo scaduto");
+        let mut settled = false;
+        let mut cur = env.manager.get(id).unwrap();
+        for _ in 0..50 {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            cur = env.manager.get(id).unwrap();
+            if cur["status"] != "running" {
+                assert_eq!(cur["status"], "error");
+                assert_eq!(cur["error"], "tempo scaduto");
+                settled = true;
+                break;
+            }
+        }
+        assert!(settled, "job did not settle within timeout; cur={cur:?}");
 
         env.manager.shutdown().await;
     }

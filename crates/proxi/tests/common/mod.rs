@@ -61,6 +61,8 @@ pub fn temp_dir(tag: &str) -> TempDir {
         std::process::id()
     ));
     fs::create_dir_all(&path).expect("create temp dir");
+    #[cfg(not(windows))]
+    let path = fs::canonicalize(&path).unwrap_or(path);
     TempDir(path)
 }
 

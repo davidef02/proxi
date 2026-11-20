@@ -38,12 +38,6 @@ try {
     process.exit(1);
   }
 
-  const electronExe = path.join(root, "node_modules", "electron", "dist", "electron.exe");
-  if (!fs.existsSync(electronExe)) throw new Error("Electron missing: run `npm install` first.");
-
-  // Fails fast with the `cargo build --release --locked` message instead of a mid-run Electron error.
-  proxiBinaryPath(root);
-
   let prev;
   if (opts.compare) {
     const prevPath = path.resolve(root, opts.compare);
@@ -55,6 +49,12 @@ try {
     const prevErrors = validateCompareFile(prev);
     if (prevErrors.length > 0) throw new Error(`--compare ${prevPath} is not a baseline file: ${prevErrors.join("; ")}`);
   }
+
+  const electronExe = path.join(root, "node_modules", "electron", "dist", "electron.exe");
+  if (!fs.existsSync(electronExe)) throw new Error("Electron missing: run `npm install` first.");
+
+  // Fails fast with the `cargo build --release --locked` message instead of a mid-run Electron error.
+  proxiBinaryPath(root);
 
   const appRoot = path.join(root, "app");
   const distIndex = path.join(appRoot, "web", "dist", "index.html");

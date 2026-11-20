@@ -75,6 +75,8 @@ fn temp_dir(tag: &str) -> TempDir {
         .unwrap_or(0);
     let path = std::env::temp_dir().join(format!("proxi-{tag}-{}-{nanos}", std::process::id()));
     fs::create_dir_all(&path).expect("create temp dir");
+    #[cfg(not(windows))]
+    let path = fs::canonicalize(&path).unwrap_or(path);
     TempDir(path)
 }
 

@@ -573,7 +573,10 @@ mod tests {
                 while !flag.load(Ordering::SeqCst) {
                     // A non-blocking accept keeps drop() from hanging on a silent socket.
                     match listener.accept() {
-                        Ok((stream, _)) => answer(stream, &note_ids),
+                        Ok((stream, _)) => {
+                            let _ = stream.set_nonblocking(false);
+                            answer(stream, &note_ids);
+                        }
                         Err(_) => std::thread::sleep(Duration::from_millis(5)),
                     }
                 }
@@ -841,11 +844,6 @@ mod tests {
     #[test]
     fn offline_sync_counts_every_card_as_failed() {
         let dir = temp_dir("offline-counts");
-        // A bound-then-dropped port refuses at once; long timeout so Windows' delay reads as offline.
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind a port to drop");
-        let port = listener.local_addr().expect("addr").port();
-        drop(listener);
-
         let mut warn = Vec::new();
         let result = sync_to_anki_connect(
             &SyncOptions {
@@ -854,7 +852,7 @@ mod tests {
                     { "type": "cloze", "text": "Il {{c1::x}}" }
                 ])),
                 topic: Some(json!("Demo")),
-                anki_url: Some(format!("http://127.0.0.1:{port}")),
+                anki_url: Some("http://127.0.0.1:1".to_string()),
                 timeout: Some("10000".to_string()),
                 base_dir: Some(dir.0.display().to_string()),
                 ..Default::default()
