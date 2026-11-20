@@ -1,7 +1,9 @@
 // Proxi desktop shell (Tauri v2 / WebView2). Spawns `proxi serve`, opens the hidden window on the
 // URL the backend prints, keeps a single instance, kills the backend tree on quit and relaunches
 // the app when the backend exits cleanly — the Electron contract of app/desktop/main.mjs, ported.
-// All spawn/port/URL logic lives in shell.rs where the unit tests exercise it directly.
+// All spawn/port/URL logic lives in shell.rs where the unit tests exercise it directly; the web
+// guards live in guards.rs and are attached to every window here. The main window is built in
+// setup (not tauri.conf.json) because tauri 2.12.6 exposes the guard handlers only on builders.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -10,9 +12,14 @@ use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
-use tauri::{AppHandle, Manager, RunEvent};
+use tauri::webview::{NewWindowFeatures, NewWindowResponse, PermissionKind, PermissionResponse};
+use tauri::{
+    AppHandle, Manager, RunEvent, Url, Webview, WebviewUrl, WebviewWindowBuilder, WindowEvent,
+};
 
+mod guards;
 mod shell;
+use guards::ShellGuards;
 use shell::Vars;
 
 /// The backend process the shell owns; `pid` is None while showing an already-running Proxi.
@@ -51,7 +58,47 @@ fn main() {
     }
 
     builder
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
+            // The main window cannot come from tauri.conf.json: the guard handlers only exist on
+            // the builders, so it is built here, before the backend URL is known (about:blank).
+            let handle = app.handle().clone();
+            app.manage(ShellGuards::default());
+            WebviewWindowBuilder::new(
+                app,
+                "main",
+                WebviewUrl::External("about:blank".parse().unwrap()),
+            )
+            .title("Proxi")
+            .inner_size(1440.0, 920.0)
+            .min_inner_size(1000.0, 680.0)
+            .visible(false)
+            .on_navigation({
+                let handle = handle.clone();
+                move |u| {
+                    let app_origin = handle.state::<ShellGuards>().app_origin();
+                    if guards::main_navigation_allowed(u, app_origin.as_deref()) {
+                        return true;
+                    }
+                    // main.mjs will-navigate: a foreign http(s) URL goes to the system browser
+                    if guards::is_external_http(u.as_str()) {
+                        let _ = tauri_plugin_opener::open_url(u.as_str(), None::<&str>);
+                    }
+                    false
+                }
+            })
+            .on_new_window({
+                let handle = handle.clone();
+                move |url, features| new_window_response(&handle, url, features)
+            })
+            .on_permission_request({
+                let handle = handle.clone();
+                move |webview, kind| permission_response(&handle, &webview, kind)
+            })
+            .build()
+            .map(|_| ())
+            .map_err(|e| format!("failed to build the main window: {e}"))?;
             if let Err(e) = start_backend(app, &env) {
                 eprintln!("{e}");
                 app.handle().exit(1);
@@ -61,10 +108,87 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("failed to build the Proxi shell")
         .run(|app, event| {
-            if let RunEvent::ExitRequested { .. } | RunEvent::Exit = event {
-                kill_backend_tree(app);
+            match event {
+                RunEvent::ExitRequested { .. } | RunEvent::Exit => kill_backend_tree(app),
+                // a destroyed lesson pop-up frees its label and its slot in the window cap
+                RunEvent::WindowEvent {
+                    label,
+                    event: WindowEvent::Destroyed,
+                    ..
+                } => {
+                    if label.starts_with(guards::POPUP_LABEL_PREFIX) {
+                        if let Some(g) = app.try_state::<ShellGuards>() {
+                            guards::release_popup(&mut g.gate.lock(), &label);
+                        }
+                    }
+                }
+                _ => {}
             }
         });
+}
+
+/// The `setWindowOpenHandler` of main.mjs, shared by the main window and every lesson pop-up:
+/// a `/files/` page of our own server opens as a guarded pop-up (capped by the gate locks),
+/// http(s) goes to the system browser, everything else is denied. The admission check, the label
+/// registration, the window count and the build all happen under one gate lock.
+fn new_window_response<R: tauri::Runtime>(
+    handle: &AppHandle<R>,
+    url: Url,
+    features: NewWindowFeatures,
+) -> NewWindowResponse<R> {
+    let guards = handle.state::<ShellGuards>();
+    let app_origin = guards.app_origin();
+    let mut gate = guards.gate.lock();
+    let Some(label) = guards::admit_popup(
+        &mut gate,
+        url.as_str(),
+        app_origin.as_deref(),
+        handle.webview_windows().len(),
+    ) else {
+        drop(gate);
+        if guards::is_external_http(url.as_str()) {
+            let _ = tauri_plugin_opener::open_url(url.as_str(), None::<&str>);
+        }
+        return NewWindowResponse::Deny;
+    };
+    let locked = url.as_str().to_string();
+    let popup = WebviewWindowBuilder::new(handle, &label, WebviewUrl::External(url.clone()))
+        .window_features(features)
+        .inner_size(1100.0, 800.0)
+        .min_inner_size(1000.0, 680.0)
+        .on_navigation({
+            let locked = locked.clone();
+            move |u| guards::popup_navigation_allowed(u, &locked)
+        })
+        .on_new_window({
+            let handle = handle.clone();
+            move |url, features| new_window_response(&handle, url, features)
+        })
+        .on_permission_request({
+            let handle = handle.clone();
+            move |webview, kind| permission_response(&handle, &webview, kind)
+        });
+    match popup.build() {
+        Ok(window) => NewWindowResponse::Create { window },
+        Err(e) => {
+            // the label must not stay held by a window that never existed
+            guards::release_popup(&mut gate, &label);
+            eprintln!("failed to open the lesson window {label}: {e}");
+            NewWindowResponse::Deny
+        }
+    }
+}
+
+/// The `setPermissionRequestHandler` of main.mjs: the microphone of the app origin, nothing else
+/// (see guards::permission_decision). A webview whose URL cannot be read counts as foreign.
+fn permission_response<R: tauri::Runtime>(
+    handle: &AppHandle<R>,
+    webview: &Webview<R>,
+    kind: PermissionKind,
+) -> PermissionResponse {
+    let webview_url = webview.url().map(|u| u.to_string()).unwrap_or_default();
+    let app_origin = handle.state::<ShellGuards>().app_origin();
+    guards::permission_decision(kind, &webview_url, app_origin.as_deref())
 }
 
 /// Shortcuts start us with a minimal PATH: make sure `claude` (native installer / npm global)
@@ -113,12 +237,21 @@ fn start_backend(app: &tauri::App, env: &Vars) -> Result<(), String> {
             url.clone()
         }
     };
+    // The guards stay closed until the origin is known (is_allowed_origin falls back to
+    // localhost); it is stored before anything navigates or opens a pop-up.
+    if let Ok(base_url) = Url::parse(&base) {
+        app.state::<ShellGuards>()
+            .set_app_origin(base_url.origin().ascii_serialization());
+    }
     let url = shell::start_url(&base, env.get("LEARNER_OPEN_HASH").map(String::as_str));
     let win = app
         .get_webview_window("main")
-        .ok_or_else(|| "the main window is missing from the config".to_string())?;
-    win.navigate(url.parse().map_err(|e| format!("invalid start URL {url}: {e}"))?)
-        .map_err(|e| format!("cannot open {url}: {e}"))?;
+        .ok_or_else(|| "the main window is missing from the setup".to_string())?;
+    win.navigate(
+        url.parse()
+            .map_err(|e| format!("invalid start URL {url}: {e}"))?,
+    )
+    .map_err(|e| format!("cannot open {url}: {e}"))?;
     let _ = win.show();
     let _ = win.set_focus();
 

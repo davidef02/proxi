@@ -10,18 +10,7 @@
     "frontendDist": "../app/web/dist"
   },
   "app": {
-    "windows": [
-      {
-        "label": "main",
-        "title": "Proxi",
-        "width": 1440,
-        "height": 920,
-        "minWidth": 1000,
-        "minHeight": 680,
-        "visible": false,
-        "url": "about:blank"
-      }
-    ]
+    "windows": []
   },
   "bundle": {
     "active": false,
