@@ -573,7 +573,10 @@ mod tests {
                 while !flag.load(Ordering::SeqCst) {
                     // A non-blocking accept keeps drop() from hanging on a silent socket.
                     match listener.accept() {
-                        Ok((stream, _)) => answer(stream, &note_ids),
+                        Ok((stream, _)) => {
+                            let _ = stream.set_nonblocking(false);
+                            answer(stream, &note_ids);
+                        }
                         Err(_) => std::thread::sleep(Duration::from_millis(5)),
                     }
                 }
