@@ -47,3 +47,8 @@ playwright-report/
 /docs/issues/
 /docs/plan/
 /docs/research/
+
+# Tauri updater signing keys (private key never committed; see docs/desktop.md)
+*.key
+*.key.pub
+

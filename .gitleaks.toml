@@ -21,3 +21,10 @@ paths = [
   '''(^|[\\/])playwright-report[\\/]''',
   '''(^|[\\/])docs[\\/](issues|plan|research)[\\/]''',
 ]
+
+[[allowlists]]
+description = "Committed minisign updater pubkey in tauri.conf.json"
+regexTarget = "line"
+paths = ['''(^|[\\/])src-tauri[\\/]tauri\.conf\.json$''']
+regexes = ['''"pubkey"\\s*:\\s*"dW50cnVzdGVk''']
+

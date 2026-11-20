@@ -48,7 +48,12 @@ behind a small splash window when stale. If a rebuild fails and an older build e
 An alternative Tauri v2 shell (WebView2) in `src-tauri/` keeps the Electron contract verbatim: spawn argv
 `serve --repo-root <abs> --dist-dir <abs> --port <N>` plus engine flags, readiness = stdout line
 `Proxi: http://127.0.0.1:<port>` within 30 s, kill = `taskkill /PID <pid> /T /F`, relaunch = backend exit
-code 0 while not quitting. The React UI is untouched; only routing changes. Build and try it with:
+code 0 while not quitting. The React UI is untouched; only routing changes.
+
+To install the pre-built desktop app without compiling, download the installer from the GitHub Release.
+See [Release (tag → Windows installer)](#release-tag--windows-installer) below for details.
+
+Build and try it with:
 
 ```bash
 npm run tauri:build   # tauri build (src-tauri/)
@@ -77,6 +82,99 @@ Four guards are ported 1:1 from the Electron main process (`app/desktop/main.mjs
 
 One Tauri 2.12.6 consequence: the guard handlers exist only on the window builders, so the main window is
 built in the Rust `setup` hook instead of coming from `tauri.conf.json` `app.windows` (that list is empty).
+
+## Release (tag → Windows installer)
+
+Pushing a git tag matching `v*` (e.g. `v0.1.0`) triggers `.github/workflows/release.yml` on `windows-latest`.
+
+### Release workflow step by step
+
+1. **Environment setup**: Checks out the repository, provisions Node 24 (with npm cache), and installs the minimal stable Rust toolchain.
+2. **Dependencies**: Runs `npm ci` with `PROXI_SKIP_MODEL=1` (skips downloading the embedding model during CI).
+3. **Backend build**: Builds the release backend binary `target/release/proxi.exe` via `cargo build --release --locked`.
+4. **Tauri build & packaging**: Runs `tauri-apps/tauri-action@v1`, which:
+   - Executes `tauri build` (triggering `beforeBuildCommand` to compile the web UI into `app/web/dist`).
+   - Packages the NSIS installer with the backend binary and web distribution as bundled resources.
+   - Signs updater artifacts with the minisign private key using secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
+   - Publishes a non-draft GitHub Release containing the installer and signature artifacts. Note that `tauri-action@v1` outputs `latest.json` at the repository root (`./latest.json`) rather than in the bundle directory.
+5. **Artifact & size verification**: Runs `node scripts/verify-release.mjs --bundle-dir src-tauri/target/release/bundle --latest-json ./latest.json --config src-tauri/tauri.conf.json` to verify the offline signature and ensure the installer satisfies the size gate.
+6. **Silent install smoke test**: Executes the installer silently with `/S`, verifies the per-user installation under `%LOCALAPPDATA%` and HKCU registry entry, launches the installed executable, verifies that `http://127.0.0.1:4317/api/settings` responds within 90 seconds, and terminates the process.
+
+### Published assets
+
+Each GitHub Release publishes:
+- **NSIS installer**: `Proxi_<version>_x64-setup.exe` (or `*-setup.exe`)
+- **Minisign signature**: `*-setup.exe.sig`
+- **Updater manifest**: `latest.json` (containing `version`, `notes`, `pub_date`, signature, and installer download URL)
+
+### Size gate
+
+The installer package is strictly gated under 15 000 000 bytes (15 MB). The release workflow fails if the installer equals or exceeds 15,000,000 bytes. To maintain this size bound, release profiles in both `Cargo.toml` and `src-tauri/Cargo.toml` are configured with:
+- `opt-level = "z"`
+- `lto = true`
+- `codegen-units = 1`
+- `strip = true`
+- `panic = "abort"`
+
+### Signing keys
+
+The updater uses minisign (Ed25519) signatures.
+- **Generate once**:
+  ```bash
+  npx @tauri-apps/cli signer generate --ci -p <password> -w src-tauri/proxi-updater.key
+  ```
+  (`npx tauri` cannot determine the executable in this repo; password-protected). This writes private key `src-tauri/proxi-updater.key` and public key `src-tauri/proxi-updater.key.pub`.
+- **Public key**: Committed to `src-tauri/tauri.conf.json` under `plugins.updater.pubkey`.
+- **Private key & password**: Never committed to git (both `*.key` and `*.key.pub` are gitignored). Stored only as GitHub repository secrets:
+  ```bash
+  gh secret set TAURI_SIGNING_PRIVATE_KEY --repo davidef02/proxi --body-file src-tauri/proxi-updater.key
+  gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD --repo davidef02/proxi --body-file .env.tauri-signing
+  ```
+  The signing password can be stored in `.env.tauri-signing` (gitignored).
+
+### Key rotation
+
+When rotating the signing key pair, publish a bridge release: build and sign a release using the existing (old) private key with `src-tauri/tauri.conf.json` updated to contain the new public key. Once installed, all subsequent updates can be signed using the new private key.
+
+### Offline verification
+
+Verify updater signatures and size constraints locally or in CI:
+```bash
+node scripts/verify-release.mjs --bundle-dir src-tauri/target/release/bundle --config src-tauri/tauri.conf.json
+```
+- **In CI**: Add `--latest-json ./latest.json` (since `tauri-action` writes `latest.json` to the repo root, never into the bundle directory).
+- **Locally**: `tauri build` emits only the `.sig` sidecar and no `latest.json`. Add `--from-sig` to synthesize `latest.json` from the `.sig` sidecar and the version in `tauri.conf.json`.
+
+Verification validates the minisign signature, verifies that the trusted comment binds the version (`version:<version>`), confirms Ed25519 signature validity against the embedded pubkey, and checks that the installer is below 15 000 000 bytes.
+
+### Local rehearsal
+
+To test the complete release build locally on Windows:
+```bash
+# 1. Install dependencies without downloading the model
+PROXI_SKIP_MODEL=1 npm ci
+
+# 2. Build the backend binary
+cargo build --release --locked
+
+# 3. Build the Tauri shell and package the installer
+TAURI_SIGNING_PRIVATE_KEY=src-tauri/proxi-updater.key TAURI_SIGNING_PRIVATE_KEY_PASSWORD=<pw> npm run tauri:build
+
+# 4. Verify offline with synthesized latest.json
+node scripts/verify-release.mjs --bundle-dir src-tauri/target/release/bundle --from-sig --config src-tauri/tauri.conf.json
+```
+
+### Install layout
+
+The NSIS installer runs in per-user mode (`currentUser`):
+- Installs to `%LOCALAPPDATA%` without requesting admin elevation.
+- Registry keys are stored in `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall`.
+- Bundled resources layout inside the install folder:
+  - Backend binary: `target/release/proxi.exe`
+  - Web frontend: `app/web/dist`
+  - Shell executable: `proxi-app.exe`
+  - User data and `.learner/` state remain in the installation directory.
+- The WebView2 bootstrapper is downloaded at install time if WebView2 runtime is missing (adding 0 MB to the installer size).
 
 ## Smoke test
 
