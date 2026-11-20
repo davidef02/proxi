@@ -19,6 +19,7 @@ use tauri::{
 
 mod guards;
 mod shell;
+mod window;
 use guards::ShellGuards;
 use shell::Vars;
 

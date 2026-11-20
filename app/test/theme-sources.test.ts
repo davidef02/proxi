@@ -12,7 +12,7 @@ import { regionLabelColor } from "../web/src/map/graph-canvas.ts";
 
 const here = import.meta.dirname;
 const read = (rel: string) => fs.readFileSync(path.join(here, rel), "utf8");
-const chromeModule = () => import(pathToFileURL(path.join(here, "../desktop/chrome.mjs")).href);
+const chromeModule = () => import(pathToFileURL(path.join(here, "../shared/chrome.mjs")).href);
 
 /** Recursively lists files under `dir` with one of `exts`. */
 function filesUnder(dir: string, exts: string[]): string[] {
