@@ -131,9 +131,72 @@ function foregroundPid() {
   return Number.isInteger(pid) && pid > 0 ? pid : -1;
 }
 
-/** Wait for the window belonging to targetPid to gain foreground focus. */
+/**
+ * Actively forces the Proxi window of targetPid to the foreground.
+ * Windows denies a plain SetForegroundWindow from a background process
+ * (foreground lock) whenever another app currently holds focus — the user's
+ * editor, a terminal or a parallel agent — so a passive wait can time out
+ * even on a healthy app. The AttachThreadInput + ALT-tap trick bypasses that
+ * lock (standard foreground-restoration recipe, same class of workaround as
+ * minimize+restore or SimulateInput hack).
+ */
+function forceWindowFocus(targetPid) {
+  spawnSync(
+    "powershell",
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "Add-Type -Namespace U -Name WFocus -MemberDefinition '" +
+        "[DllImport(\"user32.dll\")] public static extern bool SetProcessDpiAwarenessContext(IntPtr ctx); " +
+        "[DllImport(\"user32.dll\")] public static extern IntPtr GetForegroundWindow(); " +
+        "[DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd); " +
+        "[DllImport(\"user32.dll\")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow); " +
+        "[DllImport(\"user32.dll\")] public static extern bool IsIconic(IntPtr hWnd); " +
+        "[DllImport(\"user32.dll\")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId); " +
+        "[DllImport(\"user32.dll\")] public static extern uint GetCurrentThreadId(); " +
+        "[DllImport(\"user32.dll\")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach); " +
+        "[DllImport(\"user32.dll\")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo); " +
+        "[DllImport(\"user32.dll\")] public static extern bool EnumDesktopWindows(IntPtr hDesktop, EnumDesktopWindowsProc lpfn, IntPtr lParam); " +
+        "public delegate bool EnumDesktopWindowsProc(IntPtr hWnd, IntPtr lParam); " +
+        "[DllImport(\"user32.dll\")] public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder lpString, int nMaxCount); " +
+        "[DllImport(\"user32.dll\")] public static extern IntPtr GetAncestor(IntPtr hWnd, uint gaFlags); " +
+        "public static IntPtr GetProxiHwnd(uint targetPid) { " +
+        "  IntPtr found = IntPtr.Zero; EnumDesktopWindows(IntPtr.Zero, (hWnd, lParam) => { " +
+        "    uint p = 0; GetWindowThreadProcessId(hWnd, out p); " +
+        "    if (p == targetPid) { " +
+        "      System.Text.StringBuilder sb = new System.Text.StringBuilder(256); " +
+        "      GetWindowText(hWnd, sb, 256); " +
+        "      if (sb.ToString() == \"Proxi\") { IntPtr root = GetAncestor(hWnd, 2); found = root != IntPtr.Zero ? root : hWnd; return false; } " +
+        "    } return true; " +
+        "  }, IntPtr.Zero); return found; " +
+        "}'; [U.WFocus]::SetProcessDpiAwarenessContext([IntPtr]::new(-4)) | Out-Null; " +
+        "$h = [U.WFocus]::GetProxiHwnd(" + targetPid + "); " +
+        "if ($h -eq [IntPtr]::Zero) { exit 0 }; " +
+        "if ([U.WFocus]::IsIconic($h)) { [U.WFocus]::ShowWindowAsync($h, 9) | Out-Null }; " +
+        "$myTid = [U.WFocus]::GetCurrentThreadId(); " +
+        "$dummy = 0; $fg = [U.WFocus]::GetForegroundWindow(); $fgTid = 0; " +
+        "if ($fg -ne [IntPtr]::Zero) { $fgTid = [U.WFocus]::GetWindowThreadProcessId($fg, [ref]$dummy) }; " +
+        "$hTid = [U.WFocus]::GetWindowThreadProcessId($h, [ref]$dummy); " +
+        "[U.WFocus]::keybd_event(0x12, 0, 0, [UIntPtr]::Zero) | Out-Null; " +
+        "[U.WFocus]::AttachThreadInput($myTid, $hTid, $true) | Out-Null; " +
+        "if ($fg -ne [IntPtr]::Zero -and $fgTid -ne 0) { [U.WFocus]::AttachThreadInput($myTid, $fgTid, $true) | Out-Null }; " +
+        "[U.WFocus]::SetForegroundWindow($h) | Out-Null; " +
+        "[U.WFocus]::AttachThreadInput($myTid, $hTid, $false) | Out-Null; " +
+        "if ($fg -ne [IntPtr]::Zero -and $fgTid -ne 0) { [U.WFocus]::AttachThreadInput($myTid, $fgTid, $false) | Out-Null }; " +
+        "[U.WFocus]::keybd_event(0x12, 0, 2, [UIntPtr]::Zero) | Out-Null",
+    ],
+    { encoding: "utf8", windowsHide: true },
+  );
+}
+
+/** Wait for the window belonging to targetPid to gain foreground focus, forcing it if needed. */
 async function waitForWindowFocus(targetPid, budgetMs = 30_000) {
-  await until("the Proxi window gains focus", budgetMs, () => foregroundPid() === targetPid);
+  await until("the Proxi window gains focus", budgetMs, () => {
+    if (foregroundPid() === targetPid) return true;
+    forceWindowFocus(targetPid);
+    return foregroundPid() === targetPid;
+  });
 }
 
 /** Resizes and moves the foreground window using user32 SetWindowPos. */
@@ -415,9 +478,11 @@ try {
   await until("exactly one proxi.exe backend of this run remains", EXIT_BUDGET_MS, () => proxiCount(repo) === 1);
   const windows = (browser.contexts() ?? []).flatMap((c) => c.pages()).filter((p) => URL_RE.test(p.url()));
   if (windows.length !== 1) fail(`expected exactly one CDP window after the duplicate start, found ${windows.length}`);
-  const focusDeadline = Date.now() + 30_000;
-  while (Date.now() < focusDeadline && foregroundPid() !== first.pid) await sleep(500);
-  if (foregroundPid() !== first.pid) fail(`the existing Proxi window was not focused (foreground pid ${foregroundPid()}, want ${first.pid})`);
+  try {
+    await waitForWindowFocus(first.pid);
+  } catch {
+    fail(`the existing Proxi window was not focused (foreground pid ${foregroundPid()}, want ${first.pid})`);
+  }
   console.log("ok [AC2]: duplicate exited on its own, one shell + one backend left, existing window focused");
 
   await closeAppThroughCdp(page, first.pid, repo);
