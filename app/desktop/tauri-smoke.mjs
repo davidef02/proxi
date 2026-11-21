@@ -145,6 +145,7 @@ function resizeForegroundWindow(x, y, w, h, targetPid = 0) {
       "-NonInteractive",
       "-Command",
       "Add-Type -Namespace U -Name WResize -MemberDefinition '" +
+        "[DllImport(\"user32.dll\")] public static extern bool SetProcessDpiAwarenessContext(IntPtr ctx); " +
         "[DllImport(\"user32.dll\")] public static extern IntPtr GetForegroundWindow(); " +
         "[DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd); " +
         "[DllImport(\"user32.dll\")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId); " +
@@ -152,6 +153,9 @@ function resizeForegroundWindow(x, y, w, h, targetPid = 0) {
         "public delegate bool EnumDesktopWindowsProc(IntPtr hWnd, IntPtr lParam); " +
         "[DllImport(\"user32.dll\")] public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder lpString, int nMaxCount); " +
         "[DllImport(\"user32.dll\")] public static extern IntPtr GetAncestor(IntPtr hWnd, uint gaFlags); " +
+        "[StructLayout(LayoutKind.Sequential)] public struct RECT { public int left; public int top; public int right; public int bottom; } " +
+        "[DllImport(\"user32.dll\")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect); " +
+        "[DllImport(\"user32.dll\")] public static extern bool GetClientRect(IntPtr hWnd, out RECT lpRect); " +
         "[DllImport(\"user32.dll\")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags); " +
         "public static IntPtr GetProxiHwnd(uint targetPid) { " +
         "  if (targetPid > 0) { try { IntPtr mh = System.Diagnostics.Process.GetProcessById((int)targetPid).MainWindowHandle; if (mh != IntPtr.Zero) return mh; } catch {} } " +
@@ -171,10 +175,13 @@ function resizeForegroundWindow(x, y, w, h, targetPid = 0) {
         "      } " +
         "    } return true; " +
         "  }, IntPtr.Zero); return found != IntPtr.Zero ? found : fg; " +
-        "}'; $h = [U.WResize]::GetProxiHwnd(" + targetPid + "); " +
+        "}'; [U.WResize]::SetProcessDpiAwarenessContext([IntPtr]::new(-4)) | Out-Null; $h = [U.WResize]::GetProxiHwnd(" + targetPid + "); " +
         "if ($h -ne [IntPtr]::Zero) { " +
         "[U.WResize]::SetForegroundWindow($h) | Out-Null; " +
-        `[U.WResize]::SetWindowPos($h, [IntPtr]::Zero, ${x}, ${y}, ${w}, ${h}, 0x0044) | Out-Null; ` +
+        "$wr = New-Object U.WResize+RECT; [U.WResize]::GetWindowRect($h, [ref]$wr) | Out-Null; " +
+        "$cr = New-Object U.WResize+RECT; [U.WResize]::GetClientRect($h, [ref]$cr) | Out-Null; " +
+        "$bw = ($wr.right - $wr.left) - $cr.right; $bh = ($wr.bottom - $wr.top) - $cr.bottom; " +
+        `$newW = ${w} + $bw; $newH = ${h} + $bh; [U.WResize]::SetWindowPos($h, [IntPtr]::Zero, ${x}, ${y}, $newW, $newH, 0x0044) | Out-Null; ` +
         "} else { throw 'Proxi window not found'; }",
     ],
     { encoding: "utf8", windowsHide: true },
@@ -191,6 +198,7 @@ function getForegroundWindowRect(targetPid = 0) {
       "-NonInteractive",
       "-Command",
       "Add-Type -Namespace U -Name WRect -MemberDefinition '" +
+        "[DllImport(\"user32.dll\")] public static extern bool SetProcessDpiAwarenessContext(IntPtr ctx); " +
         "[DllImport(\"user32.dll\")] public static extern IntPtr GetForegroundWindow(); " +
         "[DllImport(\"user32.dll\")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId); " +
         "[DllImport(\"user32.dll\")] public static extern bool EnumDesktopWindows(IntPtr hDesktop, EnumDesktopWindowsProc lpfn, IntPtr lParam); " +
@@ -199,6 +207,7 @@ function getForegroundWindowRect(targetPid = 0) {
         "[DllImport(\"user32.dll\")] public static extern IntPtr GetAncestor(IntPtr hWnd, uint gaFlags); " +
         "[StructLayout(LayoutKind.Sequential)] public struct RECT { public int left; public int top; public int right; public int bottom; } " +
         "[DllImport(\"user32.dll\")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect); " +
+        "[DllImport(\"user32.dll\")] public static extern bool GetClientRect(IntPtr hWnd, out RECT lpRect); " +
         "[DllImport(\"user32.dll\")] public static extern bool IsZoomed(IntPtr hWnd); " +
         "public static IntPtr GetProxiHwnd(uint targetPid) { " +
         "  if (targetPid > 0) { try { IntPtr mh = System.Diagnostics.Process.GetProcessById((int)targetPid).MainWindowHandle; if (mh != IntPtr.Zero) return mh; } catch {} } " +
@@ -218,12 +227,12 @@ function getForegroundWindowRect(targetPid = 0) {
         "      } " +
         "    } return true; " +
         "  }, IntPtr.Zero); return found != IntPtr.Zero ? found : fg; " +
-        "}'; $h = [U.WRect]::GetProxiHwnd(" + targetPid + "); " +
+        "}'; [U.WRect]::SetProcessDpiAwarenessContext([IntPtr]::new(-4)) | Out-Null; $h = [U.WRect]::GetProxiHwnd(" + targetPid + "); " +
         "if ($h -eq [IntPtr]::Zero) { throw 'Proxi window not found'; } " +
-        "$r = New-Object U.WRect+RECT; " +
-        "[U.WRect]::GetWindowRect($h, [ref]$r) | Out-Null; " +
+        "$wr = New-Object U.WRect+RECT; [U.WRect]::GetWindowRect($h, [ref]$wr) | Out-Null; " +
+        "$cr = New-Object U.WRect+RECT; [U.WRect]::GetClientRect($h, [ref]$cr) | Out-Null; " +
         "$z = [U.WRect]::IsZoomed($h); " +
-        "Write-Output \"$($r.left),$($r.top),$($r.right - $r.left),$($r.bottom - $r.top),$z\"",
+        "Write-Output \"$($wr.left),$($wr.top),$($cr.right),$($cr.bottom),$z\"",
     ],
     { encoding: "utf8", windowsHide: true },
   ).stdout;
@@ -647,12 +656,12 @@ try {
     fail(`rewritten chrome ${JSON.stringify(rewritten.chrome)} != DEFAULT_CHROME ${JSON.stringify(DEFAULT_CHROME)}`);
   }
 
-  // Pre-seed off-screen: degrades to on-screen keeping 800x600 size
+  // Pre-seed off-screen: degrades to on-screen keeping 1100x750 size (>= min_inner_size 1000x680)
   const offscreen = {
     x: -32000,
     y: -32000,
-    width: 800,
-    height: 600,
+    width: 1100,
+    height: 750,
     maximized: false,
     chrome: DEFAULT_CHROME,
     zoom: 1,
@@ -667,8 +676,8 @@ try {
   if (degRect.left < -1000 || degRect.top < -1000) {
     fail(`window opened off-screen at ${degRect.left},${degRect.top}`);
   }
-  if (Math.abs(degRect.width - 800 * scale) > 4 || Math.abs(degRect.height - 600 * scale) > 4) {
-    fail(`degraded window size ${degRect.width}x${degRect.height} != 800x600 * scale ${scale}`);
+  if (Math.abs(degRect.width - 1100 * scale) > 4 || Math.abs(degRect.height - 750 * scale) > 4) {
+    fail(`degraded window size ${degRect.width}x${degRect.height} != 1100x750 * scale ${scale}`);
   }
 
   await closeAppThroughCdp(handles.page, handles.child.pid, repo);
