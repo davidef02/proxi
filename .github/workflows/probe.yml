@@ -1,0 +1,12 @@
+name: Probe token permissions
+on: workflow_dispatch
+permissions:
+  contents: write
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          curl -s -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" https://api.github.com/repos/davidef02/proxi/actions/runs/$GITHUB_RUN_ID -o /dev/null -w 'self GET: %{http_code}\n'
+          curl -s -X POST -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" -d '{"tag_name":"__probe__","name":"__probe__","draft":true}' https://api.github.com/repos/davidef02/proxi/releases | head -c 300; echo
+          curl -s -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/repos/davidef02/proxi/actions/permissions; echo
