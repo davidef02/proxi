@@ -8,9 +8,13 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - run: |
           echo '--- GITHUB_TOKEN create release for EXISTING tag v0.0.0-rc1 (draft) ---'
           gh api -X POST repos/davidef02/proxi/releases -f tag_name=v0.0.0-rc1 -f name='__probe2__' -F draft=true 2>&1 | head -c 400; echo
           echo '--- cleanup ---'
-          gh api repos/davidef02/proxi/releases/tags/v0.0.0-rc1 --jq '.id // empty' 2>/dev/null | while read id; do [ -n "$id" ] && gh api -X DELETE "repos/davidef02/proxi/releases/$id" && echo "DELETED $id"; done
+          id=$(gh api repos/davidef02/proxi/releases/tags/v0.0.0-rc1 --jq '.id // empty' 2>/dev/null)
+          echo "release id: $id"
+          if [ -n "$id" ]; then gh api -X DELETE "repos/davidef02/proxi/releases/$id" && echo "DELETED $id"; fi
