@@ -12,9 +12,10 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - run: |
-          echo '--- GITHUB_TOKEN create release for EXISTING tag v0.0.0-rc1 (draft) ---'
-          gh api -X POST repos/davidef02/proxi/releases -f tag_name=v0.0.0-rc1 -f name='__probe2__' -F draft=true 2>&1 | head -c 400; echo
+          echo '--- create PUBLISHED release for tag v0.0.0-rc1 with GITHUB_TOKEN ---'
+          gh api -X POST repos/davidef02/proxi/releases -f tag_name=v0.0.0-rc1 -f name='__probe3__' -F draft=false -F prerelease=true 2>&1 | head -c 300; echo
+          echo '--- get by tag ---'
+          gh api repos/davidef02/proxi/releases/tags/v0.0.0-rc1 --jq '.id, .draft, .tag_name' 2>&1 | head -3
           echo '--- cleanup ---'
           id=$(gh api repos/davidef02/proxi/releases/tags/v0.0.0-rc1 --jq '.id // empty' 2>/dev/null)
-          echo "release id: $id"
           if [ -n "$id" ]; then gh api -X DELETE "repos/davidef02/proxi/releases/$id" && echo "DELETED $id"; fi
