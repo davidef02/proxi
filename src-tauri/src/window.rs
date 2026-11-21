@@ -28,6 +28,7 @@ pub struct ChromePair {
 }
 
 impl ChromePair {
+    #[cfg(test)]
     pub fn new(
         color: impl Into<Cow<'static, str>>,
         symbol_color: impl Into<Cow<'static, str>>,
@@ -51,19 +52,6 @@ pub struct Chrome {
     pub light: ChromePair,
 }
 
-impl Chrome {
-    pub fn new(
-        mode_pref: impl Into<Cow<'static, str>>,
-        dark: ChromePair,
-        light: ChromePair,
-    ) -> Self {
-        Self {
-            mode_pref: mode_pref.into(),
-            dark,
-            light,
-        }
-    }
-}
 
 impl Default for Chrome {
     fn default() -> Self {
@@ -203,10 +191,12 @@ pub struct LoadedWindowState {
 }
 
 impl LoadedWindowState {
+    #[cfg(test)]
     pub fn x(&self) -> Option<f64> {
         self.position.map(|(x, _)| x)
     }
 
+    #[cfg(test)]
     pub fn y(&self) -> Option<f64> {
         self.position.map(|(_, y)| y)
     }
@@ -294,11 +284,6 @@ pub fn load_window_state(
             zoom,
         },
     }
-}
-
-/// Fallback helper to load window state without display bounds.
-pub fn load_window_state_without_displays(path: impl AsRef<Path>) -> LoadedWindowState {
-    load_window_state(path, &[])
 }
 
 /// State serialized to `window.json`.

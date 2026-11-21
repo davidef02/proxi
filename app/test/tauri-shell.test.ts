@@ -116,6 +116,8 @@ test("capabilities grant core:default, clipboard and opener to the main window o
     },
     "core:window:allow-start-dragging",
     "window-controls-overlay:default",
+    "allow-set-chrome",
+    "allow-set-zoom",
   ]);
 });
 
@@ -174,6 +176,8 @@ test("app.manifest declares Windows supportedOS GUIDs", () => {
 test("default.json contains dragging and overlay plugin default permissions", () => {
   assert.ok(caps.permissions.includes("core:window:allow-start-dragging"));
   assert.ok(caps.permissions.includes("window-controls-overlay:default"));
+  assert.ok(caps.permissions.includes("allow-set-chrome"));
+  assert.ok(caps.permissions.includes("allow-set-zoom"));
 });
 
 test("the shell keeps the engine spawn flags and the two-step port fallback", () => {

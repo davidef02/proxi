@@ -167,6 +167,8 @@ test("desktop capabilities and permissions pin the Tauri ACL", () => {
     },
     "core:window:allow-start-dragging",
     "window-controls-overlay:default",
+    "allow-set-chrome",
+    "allow-set-zoom",
   ]);
 
   assert.equal(
