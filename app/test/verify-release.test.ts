@@ -7,6 +7,8 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 import {
   ed25519Verify,
   findReleaseArtifacts,
+  GITHUB_RELEASE_ASSET_URL_RE,
+  isValidPlatformUrl,
   latestJsonFromSig,
   parseMinisignSignature,
   parseUpdaterPubkey,
@@ -419,5 +421,143 @@ describe("verifyRelease", () => {
     assert.equal(resWith.ok, true);
     assert.deepEqual(resWith.errors, []);
     assert.ok(resWith.installerBytes > 0);
+  });
+
+  it("(13) accepts empty notes string in latest.json", () => {
+    const fix = createFixture(tmp);
+    const latest = JSON.parse(fs.readFileSync(fix.latestJsonPath, "utf8"));
+    latest.notes = "";
+    fs.writeFileSync(fix.latestJsonPath, JSON.stringify(latest, null, 2));
+
+    const res = verifyRelease({
+      bundleDir: fix.bundleDir,
+      configPath: fix.configPath,
+      latestJsonPath: fix.latestJsonPath,
+    });
+    assert.equal(res.ok, true);
+    assert.deepEqual(res.errors, []);
+  });
+
+  it("(14) missing notes in latest.json fails", () => {
+    const fix = createFixture(tmp);
+    const latest = JSON.parse(fs.readFileSync(fix.latestJsonPath, "utf8"));
+    delete latest.notes;
+    fs.writeFileSync(fix.latestJsonPath, JSON.stringify(latest, null, 2));
+
+    const res = verifyRelease({
+      bundleDir: fix.bundleDir,
+      configPath: fix.configPath,
+      latestJsonPath: fix.latestJsonPath,
+    });
+    assert.equal(res.ok, false);
+    assert.ok(res.errors.some((e) => e.includes("latest.json missing notes")));
+  });
+
+  it("(15) accepts api.github.com release asset URL", () => {
+    const fix = createFixture(tmp);
+    const latest = JSON.parse(fs.readFileSync(fix.latestJsonPath, "utf8"));
+    latest.platforms["windows-x86_64"].url =
+      "https://api.github.com/repos/davidef02/proxi/releases/assets/775799807";
+    fs.writeFileSync(fix.latestJsonPath, JSON.stringify(latest, null, 2));
+
+    const res = verifyRelease({
+      bundleDir: fix.bundleDir,
+      configPath: fix.configPath,
+      latestJsonPath: fix.latestJsonPath,
+    });
+    assert.equal(res.ok, true);
+    assert.deepEqual(res.errors, []);
+  });
+
+  it("(16) accepts real tauri-action latest.json format with empty notes, api.github.com asset url and both windows-x86_64 and windows-x86_64-nsis", () => {
+    const fix = createFixture(tmp);
+    const realLatest = {
+      version: fix.version,
+      notes: "",
+      pub_date: new Date().toISOString(),
+      platforms: {
+        "windows-x86_64": {
+          signature: fix.sigB64,
+          url: "https://api.github.com/repos/davidef02/proxi/releases/assets/775799807",
+        },
+        "windows-x86_64-nsis": {
+          signature: fix.sigB64,
+          url: "https://api.github.com/repos/davidef02/proxi/releases/assets/775799807",
+        },
+      },
+    };
+    fs.writeFileSync(fix.latestJsonPath, JSON.stringify(realLatest, null, 2));
+
+    const res = verifyRelease({
+      bundleDir: fix.bundleDir,
+      configPath: fix.configPath,
+      latestJsonPath: fix.latestJsonPath,
+    });
+    assert.equal(res.ok, true);
+    assert.deepEqual(res.errors, []);
+  });
+
+  it("(17) multi-platform latest.json fails if windows-x86_64-nsis has invalid url", () => {
+    const fix = createFixture(tmp);
+    const realLatest = {
+      version: fix.version,
+      notes: "",
+      pub_date: new Date().toISOString(),
+      platforms: {
+        "windows-x86_64": {
+          signature: fix.sigB64,
+          url: "https://api.github.com/repos/davidef02/proxi/releases/assets/775799807",
+        },
+        "windows-x86_64-nsis": {
+          signature: fix.sigB64,
+          url: "https://example.com/download/other-name.exe",
+        },
+      },
+    };
+    fs.writeFileSync(fix.latestJsonPath, JSON.stringify(realLatest, null, 2));
+
+    const res = verifyRelease({
+      bundleDir: fix.bundleDir,
+      configPath: fix.configPath,
+      latestJsonPath: fix.latestJsonPath,
+    });
+    assert.equal(res.ok, false);
+    assert.ok(
+      res.errors.some((e) => e.includes(`must end with installer file name "${fix.installerName}"`)),
+    );
+  });
+
+  it("(18) isValidPlatformUrl validates installer filenames and GitHub asset URLs correctly", () => {
+    assert.equal(isValidPlatformUrl("proxi-setup.exe", "proxi-setup.exe"), true);
+    assert.equal(
+      isValidPlatformUrl("https://example.com/download/proxi-setup.exe", "proxi-setup.exe"),
+      true,
+    );
+    assert.equal(
+      isValidPlatformUrl(
+        "https://api.github.com/repos/davidef02/proxi/releases/assets/775799807",
+        "proxi-setup.exe",
+      ),
+      true,
+    );
+    assert.equal(
+      isValidPlatformUrl(
+        "https://api.github.com/repos/user-name/repo.name/releases/assets/12345",
+        "proxi-setup.exe",
+      ),
+      true,
+    );
+    assert.equal(
+      isValidPlatformUrl("https://example.com/download/other.exe", "proxi-setup.exe"),
+      false,
+    );
+    assert.equal(
+      isValidPlatformUrl(
+        "https://api.github.com/repos/user/repo/releases/assets/notanumber",
+        "proxi-setup.exe",
+      ),
+      false,
+    );
+    assert.equal(isValidPlatformUrl("", "proxi-setup.exe"), false);
   });
 });

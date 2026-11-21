@@ -6,8 +6,24 @@ import { fileURLToPath } from "node:url";
 const SELF = fileURLToPath(import.meta.url);
 export const MAX_INSTALLER_BYTES = 15000000;
 
+export const GITHUB_RELEASE_ASSET_URL_RE =
+  /^https:\/\/api\.github\.com\/repos\/[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+\/releases\/assets\/\d+$/;
+
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
 const RFC3339_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+
+export function isValidPlatformUrl(url, expectedName) {
+  if (typeof url !== "string" || url.length === 0) {
+    return false;
+  }
+  if (expectedName && url.endsWith(expectedName)) {
+    return true;
+  }
+  if (GITHUB_RELEASE_ASSET_URL_RE.test(url)) {
+    return true;
+  }
+  return false;
+}
 
 export function spkiFromRawEd25519(raw32) {
   const raw = Buffer.isBuffer(raw32) ? raw32 : Buffer.from(raw32);
@@ -253,7 +269,7 @@ export function verifyRelease({
     if (typeof latestJson.version !== "string" || latestJson.version.length === 0) {
       errors.push("latest.json missing version");
     }
-    if (typeof latestJson.notes !== "string" || latestJson.notes.length === 0) {
+    if (typeof latestJson.notes !== "string") {
       errors.push("latest.json missing notes");
     }
     if (
@@ -264,65 +280,101 @@ export function verifyRelease({
       errors.push("latest.json invalid or missing pub_date");
     }
 
-    const platform = latestJson.platforms?.["windows-x86_64"];
-    if (!platform) {
+    const platformsObj = latestJson.platforms;
+    const availableKeys =
+      platformsObj && typeof platformsObj === "object" ? Object.keys(platformsObj) : [];
+    const windowsKeys = availableKeys.filter(
+      (k) => k === "windows-x86_64" || k === "windows-x86_64-nsis",
+    );
+
+    if (
+      !platformsObj ||
+      typeof platformsObj !== "object" ||
+      (!platformsObj["windows-x86_64"] && windowsKeys.length === 0)
+    ) {
       errors.push('latest.json missing platforms."windows-x86_64"');
     } else {
-      if (typeof platform.signature !== "string" || platform.signature.length === 0) {
-        errors.push('latest.json missing platforms."windows-x86_64".signature');
-      }
-      if (typeof platform.url !== "string" || platform.url.length === 0) {
-        errors.push('latest.json missing platforms."windows-x86_64".url');
-      } else if (installerPath) {
-        const expectedName = path.basename(installerPath);
-        if (!platform.url.endsWith(expectedName)) {
-          errors.push(`url "${platform.url}" must end with installer file name "${expectedName}"`);
+      const keysToCheck = windowsKeys.length > 0 ? windowsKeys : ["windows-x86_64"];
+      for (const platformKey of keysToCheck) {
+        const platform = platformsObj[platformKey];
+        if (!platform) {
+          errors.push(`latest.json missing platforms."${platformKey}"`);
+          continue;
         }
-      }
-
-      if (pubkey && platform.signature && installerPath && fs.existsSync(installerPath)) {
-        try {
-          const parsed = parseMinisignSignature(platform.signature);
-          const installerData = fs.readFileSync(installerPath);
-          let fileOk = false;
-          if (parsed.alg === "ED") {
-            const hash = crypto.createHash("blake2b512").update(installerData).digest();
-            fileOk = ed25519Verify(pubkey.key, hash, parsed.signature);
-          } else if (parsed.alg === "Ed") {
-            fileOk = ed25519Verify(pubkey.key, installerData, parsed.signature);
-          } else {
-            const hash = crypto.createHash("blake2b512").update(installerData).digest();
-            fileOk =
-              ed25519Verify(pubkey.key, installerData, parsed.signature) ||
-              ed25519Verify(pubkey.key, hash, parsed.signature);
+        if (typeof platform.signature !== "string" || platform.signature.length === 0) {
+          errors.push(`latest.json missing platforms."${platformKey}".signature`);
+        }
+        if (typeof platform.url !== "string" || platform.url.length === 0) {
+          errors.push(`latest.json missing platforms."${platformKey}".url`);
+        } else if (installerPath) {
+          const expectedName = path.basename(installerPath);
+          if (!isValidPlatformUrl(platform.url, expectedName)) {
+            errors.push(
+              `url "${platform.url}" must end with installer file name "${expectedName}" or match GitHub release asset URL pattern`,
+            );
           }
-          if (!fileOk) {
-            errors.push("unsigned or unknown key");
-          }
+        }
 
-          const versionTag = `version:${latestJson.version}`;
-          if (!parsed.trustedComment || !parsed.trustedComment.includes(versionTag)) {
-            errors.push(`trusted comment does not contain ${versionTag}`);
-          }
-
-          let globalOk = false;
-          const variants = [
-            parsed.trustedComment,
-            parsed.trustedComment.replace(/^trusted comment:\s*/, ""),
-            `trusted comment: ${parsed.trustedComment.replace(/^trusted comment:\s*/, "")}`,
-          ];
-          for (const variant of variants) {
-            const msg = Buffer.concat([parsed.signature, Buffer.from(variant, "utf8")]);
-            if (ed25519Verify(pubkey.key, msg, parsed.globalSignature)) {
-              globalOk = true;
-              break;
+        if (pubkey && platform.signature && installerPath && fs.existsSync(installerPath)) {
+          try {
+            const parsed = parseMinisignSignature(platform.signature);
+            const installerData = fs.readFileSync(installerPath);
+            let fileOk = false;
+            if (parsed.alg === "ED") {
+              const hash = crypto.createHash("blake2b512").update(installerData).digest();
+              fileOk = ed25519Verify(pubkey.key, hash, parsed.signature);
+            } else if (parsed.alg === "Ed") {
+              fileOk = ed25519Verify(pubkey.key, installerData, parsed.signature);
+            } else {
+              const hash = crypto.createHash("blake2b512").update(installerData).digest();
+              fileOk =
+                ed25519Verify(pubkey.key, installerData, parsed.signature) ||
+                ed25519Verify(pubkey.key, hash, parsed.signature);
             }
+            if (!fileOk) {
+              errors.push(
+                keysToCheck.length > 1
+                  ? `[${platformKey}] unsigned or unknown key`
+                  : "unsigned or unknown key",
+              );
+            }
+
+            const versionTag = `version:${latestJson.version}`;
+            if (!parsed.trustedComment || !parsed.trustedComment.includes(versionTag)) {
+              errors.push(
+                keysToCheck.length > 1
+                  ? `[${platformKey}] trusted comment does not contain ${versionTag}`
+                  : `trusted comment does not contain ${versionTag}`,
+              );
+            }
+
+            let globalOk = false;
+            const variants = [
+              parsed.trustedComment,
+              parsed.trustedComment.replace(/^trusted comment:\s*/, ""),
+              `trusted comment: ${parsed.trustedComment.replace(/^trusted comment:\s*/, "")}`,
+            ];
+            for (const variant of variants) {
+              const msg = Buffer.concat([parsed.signature, Buffer.from(variant, "utf8")]);
+              if (ed25519Verify(pubkey.key, msg, parsed.globalSignature)) {
+                globalOk = true;
+                break;
+              }
+            }
+            if (!globalOk) {
+              errors.push(
+                keysToCheck.length > 1
+                  ? `[${platformKey}] global signature verification failed`
+                  : "global signature verification failed",
+              );
+            }
+          } catch (err) {
+            errors.push(
+              keysToCheck.length > 1
+                ? `[${platformKey}] signature verification error: ${err.message}`
+                : `signature verification error: ${err.message}`,
+            );
           }
-          if (!globalOk) {
-            errors.push("global signature verification failed");
-          }
-        } catch (err) {
-          errors.push(`signature verification error: ${err.message}`);
         }
       }
     }

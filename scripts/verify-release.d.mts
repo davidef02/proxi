@@ -42,6 +42,9 @@ export interface VerifyReleaseResult {
 }
 
 export const MAX_INSTALLER_BYTES: number;
+export const GITHUB_RELEASE_ASSET_URL_RE: RegExp;
+
+export function isValidPlatformUrl(url: string, expectedName: string): boolean;
 
 export function spkiFromRawEd25519(raw32: Uint8Array | Buffer): Buffer;
 
