@@ -59,7 +59,7 @@ npm run tauri:smoke   # real-run smoke of the built exe (app/desktop/tauri-smoke
 Four guards are ported 1:1 from the Electron main process (`app/desktop/main.mjs`, kept as the reference):
 
 - **Clipboard** — copy writes through `tauri-plugin-clipboard-manager` from the web call site. The Electron
-  10 000-char bound is enforced in `app/web/src/clipboard.ts` (the plugin command itself has none): longer
+  10 000-char bound is enforced in `app/web/src/desktop.ts` (the plugin command itself has none): longer
   strings return `false` before the plugin is invoked. The `iaDesktop` Electron branch and the
   `navigator.clipboard`/`execCommand` fallback are unchanged.
 - **External links** — `tauri-plugin-opener` opens http(s) URLs in the system browser (JS call sites route

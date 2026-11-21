@@ -114,6 +114,10 @@ test("capabilities grant core:default, clipboard and opener to the main window o
       identifier: "opener:allow-open-url",
       allow: [{ url: "http://*" }, { url: "https://*" }],
     },
+    "core:window:allow-start-dragging",
+    "window-controls-overlay:default",
+    "allow-set-chrome",
+    "allow-set-zoom",
   ]);
 });
 
@@ -135,7 +139,45 @@ test("the Rust dependency set matches the locked versions", () => {
   assert.match(cargo, /^name = "proxi-app"$/m);
   assert.match(cargo, /^tauri = \{ version = "2"/m);
   assert.match(cargo, /^tauri-plugin-single-instance = "2\.5\.5"$/m);
+  assert.match(cargo, /^tauri-plugin-window-controls-overlay = "0\.1\.0"$/m);
   assert.match(cargo, /^reqwest = \{ version = "0\.13\.5"/m);
+});
+
+test("window-controls-overlay plugin and window commands are registered", () => {
+  assert.match(main, /tauri_plugin_window_controls_overlay::init\(\)/);
+  assert.match(main, /generate_handler!\[set_chrome,\s*set_zoom\]/);
+});
+
+test("set_chrome and set_zoom guard on label == main", () => {
+  assert.match(main, /fn set_chrome[\s\S]*?webview\.label\(\)\s*!=\s*"main"/);
+  assert.match(main, /fn set_zoom[\s\S]*?webview\.label\(\)\s*!=\s*"main"/);
+});
+
+test("the main window builder disables decorations for the overlay plugin", () => {
+  assert.match(main, /WebviewWindowBuilder::new[\s\S]*?\.decorations\(false\)/);
+});
+
+test("window.json is saved on CloseRequested for the main window", () => {
+  assert.match(main, /WindowEvent::CloseRequested[\s\S]*?save_current_window_state/);
+  assert.match(main, /save_window_state/);
+});
+
+test("build.rs embeds the Windows app manifest", () => {
+  const buildRs = source("src-tauri/build.rs");
+  assert.match(buildRs, /app_manifest/);
+});
+
+test("app.manifest declares Windows supportedOS GUIDs", () => {
+  const manifest = source("src-tauri/app.manifest");
+  assert.match(manifest, /supportedOS/);
+  assert.match(manifest, /\{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a\}/);
+});
+
+test("default.json contains dragging and overlay plugin default permissions", () => {
+  assert.ok(caps.permissions.includes("core:window:allow-start-dragging"));
+  assert.ok(caps.permissions.includes("window-controls-overlay:default"));
+  assert.ok(caps.permissions.includes("allow-set-chrome"));
+  assert.ok(caps.permissions.includes("allow-set-zoom"));
 });
 
 test("the shell keeps the engine spawn flags and the two-step port fallback", () => {

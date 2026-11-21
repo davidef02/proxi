@@ -32,7 +32,7 @@ function ShellContent({ children }: { children: ReactNode }) {
   return (
     <TopBarSlotContext.Provider value={slot}>
       <div className="flex h-dvh flex-col overflow-hidden">
-        <header className="topbar flex h-9 shrink-0 items-center gap-2 border-b border-hairline pl-2 pr-[140px]">
+        <header data-tauri-drag-region className="topbar flex h-9 shrink-0 items-center gap-2 border-b border-hairline pl-2 pr-[140px]">
           <button
             type="button"
             onClick={toggle}
