@@ -11,6 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { APP_NAME } from "../shared/identity.mjs";
+import { DEFAULT_CHROME } from "../shared/chrome.mjs";
 import { OPEN_HASH } from "./bench-lib.mjs";
 import { proxiBinary } from "../shared/proxi-bin.mjs";
 
@@ -128,6 +129,113 @@ function foregroundPid() {
   ).stdout;
   const pid = Number(String(out).trim());
   return Number.isInteger(pid) && pid > 0 ? pid : -1;
+}
+
+/** Wait for the window belonging to targetPid to gain foreground focus. */
+async function waitForWindowFocus(targetPid, budgetMs = 30_000) {
+  await until("the Proxi window gains focus", budgetMs, () => foregroundPid() === targetPid);
+}
+
+/** Resizes and moves the foreground window using user32 SetWindowPos. */
+function resizeForegroundWindow(x, y, w, h, targetPid = 0) {
+  const res = spawnSync(
+    "powershell",
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "Add-Type -Namespace U -Name WResize -MemberDefinition '" +
+        "[DllImport(\"user32.dll\")] public static extern IntPtr GetForegroundWindow(); " +
+        "[DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd); " +
+        "[DllImport(\"user32.dll\")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId); " +
+        "[DllImport(\"user32.dll\")] public static extern bool EnumDesktopWindows(IntPtr hDesktop, EnumDesktopWindowsProc lpfn, IntPtr lParam); " +
+        "public delegate bool EnumDesktopWindowsProc(IntPtr hWnd, IntPtr lParam); " +
+        "[DllImport(\"user32.dll\")] public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder lpString, int nMaxCount); " +
+        "[DllImport(\"user32.dll\")] public static extern IntPtr GetAncestor(IntPtr hWnd, uint gaFlags); " +
+        "[DllImport(\"user32.dll\")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags); " +
+        "public static IntPtr GetProxiHwnd(uint targetPid) { " +
+        "  if (targetPid > 0) { try { IntPtr mh = System.Diagnostics.Process.GetProcessById((int)targetPid).MainWindowHandle; if (mh != IntPtr.Zero) return mh; } catch {} } " +
+        "  IntPtr fg = GetForegroundWindow(); " +
+        "  if (fg != IntPtr.Zero) { " +
+        "    IntPtr root = GetAncestor(fg, 2); if (root != IntPtr.Zero) fg = root; " +
+        "    uint p = 0; GetWindowThreadProcessId(fg, out p); if (targetPid == 0 || p == targetPid) return fg; " +
+        "  } " +
+        "  IntPtr found = IntPtr.Zero; " +
+        "  EnumDesktopWindows(IntPtr.Zero, (hWnd, lParam) => { " +
+        "    uint p = 0; GetWindowThreadProcessId(hWnd, out p); " +
+        "    if (targetPid == 0 || p == targetPid) { " +
+        "      System.Text.StringBuilder sb = new System.Text.StringBuilder(256); " +
+        "      GetWindowText(hWnd, sb, 256); " +
+        "      if (sb.ToString() == \"Proxi\") { " +
+        "        IntPtr root = GetAncestor(hWnd, 2); found = root != IntPtr.Zero ? root : hWnd; return false; " +
+        "      } " +
+        "    } return true; " +
+        "  }, IntPtr.Zero); return found != IntPtr.Zero ? found : fg; " +
+        "}'; $h = [U.WResize]::GetProxiHwnd(" + targetPid + "); " +
+        "if ($h -ne [IntPtr]::Zero) { " +
+        "[U.WResize]::SetForegroundWindow($h) | Out-Null; " +
+        `[U.WResize]::SetWindowPos($h, [IntPtr]::Zero, ${x}, ${y}, ${w}, ${h}, 0x0044) | Out-Null; ` +
+        "} else { throw 'Proxi window not found'; }",
+    ],
+    { encoding: "utf8", windowsHide: true },
+  );
+  if (res.status !== 0) fail(`SetWindowPos failed: ${res.stderr || res.stdout}`);
+}
+
+/** Reads the foreground window's bounds and maximized state via user32 GetWindowRect and IsZoomed. */
+function getForegroundWindowRect(targetPid = 0) {
+  const out = spawnSync(
+    "powershell",
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "Add-Type -Namespace U -Name WRect -MemberDefinition '" +
+        "[DllImport(\"user32.dll\")] public static extern IntPtr GetForegroundWindow(); " +
+        "[DllImport(\"user32.dll\")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId); " +
+        "[DllImport(\"user32.dll\")] public static extern bool EnumDesktopWindows(IntPtr hDesktop, EnumDesktopWindowsProc lpfn, IntPtr lParam); " +
+        "public delegate bool EnumDesktopWindowsProc(IntPtr hWnd, IntPtr lParam); " +
+        "[DllImport(\"user32.dll\")] public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder lpString, int nMaxCount); " +
+        "[DllImport(\"user32.dll\")] public static extern IntPtr GetAncestor(IntPtr hWnd, uint gaFlags); " +
+        "[StructLayout(LayoutKind.Sequential)] public struct RECT { public int left; public int top; public int right; public int bottom; } " +
+        "[DllImport(\"user32.dll\")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect); " +
+        "[DllImport(\"user32.dll\")] public static extern bool IsZoomed(IntPtr hWnd); " +
+        "public static IntPtr GetProxiHwnd(uint targetPid) { " +
+        "  if (targetPid > 0) { try { IntPtr mh = System.Diagnostics.Process.GetProcessById((int)targetPid).MainWindowHandle; if (mh != IntPtr.Zero) return mh; } catch {} } " +
+        "  IntPtr fg = GetForegroundWindow(); " +
+        "  if (fg != IntPtr.Zero) { " +
+        "    IntPtr root = GetAncestor(fg, 2); if (root != IntPtr.Zero) fg = root; " +
+        "    uint p = 0; GetWindowThreadProcessId(fg, out p); if (targetPid == 0 || p == targetPid) return fg; " +
+        "  } " +
+        "  IntPtr found = IntPtr.Zero; " +
+        "  EnumDesktopWindows(IntPtr.Zero, (hWnd, lParam) => { " +
+        "    uint p = 0; GetWindowThreadProcessId(hWnd, out p); " +
+        "    if (targetPid == 0 || p == targetPid) { " +
+        "      System.Text.StringBuilder sb = new System.Text.StringBuilder(256); " +
+        "      GetWindowText(hWnd, sb, 256); " +
+        "      if (sb.ToString() == \"Proxi\") { " +
+        "        IntPtr root = GetAncestor(hWnd, 2); found = root != IntPtr.Zero ? root : hWnd; return false; " +
+        "      } " +
+        "    } return true; " +
+        "  }, IntPtr.Zero); return found != IntPtr.Zero ? found : fg; " +
+        "}'; $h = [U.WRect]::GetProxiHwnd(" + targetPid + "); " +
+        "if ($h -eq [IntPtr]::Zero) { throw 'Proxi window not found'; } " +
+        "$r = New-Object U.WRect+RECT; " +
+        "[U.WRect]::GetWindowRect($h, [ref]$r) | Out-Null; " +
+        "$z = [U.WRect]::IsZoomed($h); " +
+        "Write-Output \"$($r.left),$($r.top),$($r.right - $r.left),$($r.bottom - $r.top),$z\"",
+    ],
+    { encoding: "utf8", windowsHide: true },
+  ).stdout;
+  const parts = String(out).trim().split(",");
+  if (parts.length !== 5) fail(`cannot read window rect: ${out}`);
+  return {
+    left: Number(parts[0]),
+    top: Number(parts[1]),
+    width: Number(parts[2]),
+    height: Number(parts[3]),
+    maximized: parts[4].toLowerCase() === "true",
+  };
 }
 
 /** The graceful close of a real user (WM_CLOSE); the fallback if the CDP close is ignored. */
@@ -429,6 +537,269 @@ try {
   console.log("ok [guards AC4]: 9 popup requests capped at 7 (8 windows total), navigation locked, IPC dead");
 } finally {
   if (popupBrowser) await popupBrowser.close().catch(() => {});
+  await cleanup({ ...handles, tmp, repo: tmp && path.join(tmp, "repo") });
+  handles = undefined;
+}
+
+// (a) Window AC1: bounds + maximized persist across restarts in window.json;
+// resize via SetWindowPos on foreground hwnd, close, verify JSON keys/values;
+// relaunch, assert GetWindowRect matches saved bounds (logical * scale factor) and maximized restores.
+try {
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), "proxi-tauri-smoke-window-ac1-"));
+  const repo = path.join(tmp, "repo");
+  handles = await launchApp(smokeEnv(tmp));
+  await assertAppPage(handles.page, { ephemeral: true, hash: true });
+  await waitForWindowFocus(handles.child.pid);
+
+  const scale = await handles.page.evaluate(() => window.devicePixelRatio);
+  const targetLogical = { x: 120, y: 120, width: 1100, height: 750 };
+  const physX = Math.round(targetLogical.x * scale);
+  const physY = Math.round(targetLogical.y * scale);
+  const physW = Math.round(targetLogical.width * scale);
+  const physH = Math.round(targetLogical.height * scale);
+
+  resizeForegroundWindow(physX, physY, physW, physH, handles.child.pid);
+  await sleep(300);
+
+  await closeAppThroughCdp(handles.page, handles.child.pid, repo);
+
+  const windowJsonPath = path.join(tmp, "userdata", "proxi", "window.json");
+  if (!fs.existsSync(windowJsonPath)) fail(`window.json not found at ${windowJsonPath}`);
+  const raw1 = fs.readFileSync(windowJsonPath, "utf8");
+  const json1 = JSON.parse(raw1);
+  const keys1 = Object.keys(json1);
+  const expectedKeys = ["x", "y", "width", "height", "maximized", "chrome", "zoom"];
+  if (JSON.stringify(keys1) !== JSON.stringify(expectedKeys)) {
+    fail(`window.json keys ${JSON.stringify(keys1)} != ${JSON.stringify(expectedKeys)}`);
+  }
+  if (json1.maximized !== false) fail(`expected maximized:false, got ${json1.maximized}`);
+  if (Math.abs(json1.width - targetLogical.width) > 4) fail(`saved width ${json1.width} != ${targetLogical.width}`);
+  if (Math.abs(json1.height - targetLogical.height) > 4) fail(`saved height ${json1.height} != ${targetLogical.height}`);
+
+  // Relaunch with same userdata: assert GetWindowRect matches saved bounds
+  handles = await launchApp(smokeEnv(tmp));
+  await assertAppPage(handles.page, { ephemeral: true, hash: true });
+  await waitForWindowFocus(handles.child.pid);
+
+  const rect1 = getForegroundWindowRect(handles.child.pid);
+  if (Math.abs(rect1.width - json1.width * scale) > 4) {
+    fail(`GetWindowRect width ${rect1.width} != saved ${json1.width} * scale ${scale}`);
+  }
+  if (Math.abs(rect1.height - json1.height * scale) > 4) {
+    fail(`GetWindowRect height ${rect1.height} != saved ${json1.height} * scale ${scale}`);
+  }
+  if (Math.abs(rect1.left - json1.x * scale) > 4) {
+    fail(`GetWindowRect left ${rect1.left} != saved ${json1.x} * scale ${scale}`);
+  }
+  if (Math.abs(rect1.top - json1.y * scale) > 4) {
+    fail(`GetWindowRect top ${rect1.top} != saved ${json1.y} * scale ${scale}`);
+  }
+
+  // Close and set maximized:true in window.json, then relaunch and assert restored maximized
+  await closeAppThroughCdp(handles.page, handles.child.pid, repo);
+  json1.maximized = true;
+  fs.writeFileSync(windowJsonPath, JSON.stringify(json1), "utf8");
+
+  handles = await launchApp(smokeEnv(tmp));
+  await assertAppPage(handles.page, { ephemeral: true, hash: true });
+  await waitForWindowFocus(handles.child.pid);
+
+  const maxRect = getForegroundWindowRect(handles.child.pid);
+  if (!maxRect.maximized) fail("saved maximized:true did not restore maximized state");
+
+  await closeAppThroughCdp(handles.page, handles.child.pid, repo);
+  console.log("ok [window/AC1]: bounds and maximized persisted in window.json and restored across restarts");
+} finally {
+  await cleanup({ ...handles, tmp, repo: tmp && path.join(tmp, "repo") });
+  handles = undefined;
+}
+
+// (b) Window AC2: pre-seeded legacy {"theme":"dark"} opens at 1440x920 inside primary monitor
+// and close rewrites full schema with DEFAULT_CHROME; pre-seeded off-screen bounds degrade to on-screen.
+try {
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), "proxi-tauri-smoke-window-ac2-"));
+  const repo = path.join(tmp, "repo");
+  const windowJsonPath = path.join(tmp, "userdata", "proxi", "window.json");
+  fs.mkdirSync(path.dirname(windowJsonPath), { recursive: true });
+  fs.writeFileSync(windowJsonPath, JSON.stringify({ theme: "dark" }), "utf8");
+
+  handles = await launchApp(smokeEnv(tmp));
+  await assertAppPage(handles.page, { ephemeral: true, hash: true });
+  await waitForWindowFocus(handles.child.pid);
+
+  const scale = await handles.page.evaluate(() => window.devicePixelRatio);
+  const rect = getForegroundWindowRect(handles.child.pid);
+  if (Math.abs(rect.width - 1440 * scale) > 4 || Math.abs(rect.height - 920 * scale) > 4) {
+    fail(`default size ${rect.width}x${rect.height} != 1440x920 * scale ${scale}`);
+  }
+  if (rect.left < 0 || rect.top < 0) {
+    fail(`window opened outside primary monitor: left=${rect.left}, top=${rect.top}`);
+  }
+
+  await closeAppThroughCdp(handles.page, handles.child.pid, repo);
+
+  const rewritten = JSON.parse(fs.readFileSync(windowJsonPath, "utf8"));
+  const expectedKeys = ["x", "y", "width", "height", "maximized", "chrome", "zoom"];
+  if (JSON.stringify(Object.keys(rewritten)) !== JSON.stringify(expectedKeys)) {
+    fail(`rewritten window.json keys ${JSON.stringify(Object.keys(rewritten))} != ${JSON.stringify(expectedKeys)}`);
+  }
+  if (JSON.stringify(rewritten.chrome) !== JSON.stringify(DEFAULT_CHROME)) {
+    fail(`rewritten chrome ${JSON.stringify(rewritten.chrome)} != DEFAULT_CHROME ${JSON.stringify(DEFAULT_CHROME)}`);
+  }
+
+  // Pre-seed off-screen: degrades to on-screen keeping 800x600 size
+  const offscreen = {
+    x: -32000,
+    y: -32000,
+    width: 800,
+    height: 600,
+    maximized: false,
+    chrome: DEFAULT_CHROME,
+    zoom: 1,
+  };
+  fs.writeFileSync(windowJsonPath, JSON.stringify(offscreen), "utf8");
+
+  handles = await launchApp(smokeEnv(tmp));
+  await assertAppPage(handles.page, { ephemeral: true, hash: true });
+  await waitForWindowFocus(handles.child.pid);
+
+  const degRect = getForegroundWindowRect(handles.child.pid);
+  if (degRect.left < -1000 || degRect.top < -1000) {
+    fail(`window opened off-screen at ${degRect.left},${degRect.top}`);
+  }
+  if (Math.abs(degRect.width - 800 * scale) > 4 || Math.abs(degRect.height - 600 * scale) > 4) {
+    fail(`degraded window size ${degRect.width}x${degRect.height} != 800x600 * scale ${scale}`);
+  }
+
+  await closeAppThroughCdp(handles.page, handles.child.pid, repo);
+  console.log("ok [window/AC2]: legacy theme rewritten with DEFAULT_CHROME, off-screen bounds degraded on-screen");
+} finally {
+  await cleanup({ ...handles, tmp, repo: tmp && path.join(tmp, "repo") });
+  handles = undefined;
+}
+
+// (c) Window AC3: invoke("set_chrome", ...) applies palette, topbar background matches
+// the --background token, and window.json persists the lowercased payload.
+try {
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), "proxi-tauri-smoke-window-ac3-"));
+  const repo = path.join(tmp, "repo");
+  handles = await launchApp(smokeEnv(tmp));
+  await assertAppPage(handles.page, { ephemeral: true, hash: true });
+
+  const testPayload = {
+    modePref: "dark",
+    dark: { color: "#2B2C2D", symbolColor: "#A1A2A3" },
+    light: { color: "#F1F2F3", symbolColor: "#616263" },
+  };
+
+  await handles.page.evaluate(async (chrome) => {
+    await window.__TAURI_INTERNALS__.invoke("set_chrome", { chrome });
+  }, testPayload);
+
+  const { topbarBg, rootBg, backgroundToken } = await handles.page.evaluate(() => {
+    const topbar = document.querySelector(".topbar");
+    const root = document.documentElement;
+    return {
+      topbarBg: topbar ? getComputedStyle(topbar).backgroundColor : null,
+      rootBg: getComputedStyle(root).backgroundColor,
+      backgroundToken: getComputedStyle(root).getPropertyValue("--background").trim().toLowerCase(),
+    };
+  });
+  if (!topbarBg) fail("topbar element not found in DOM");
+  const hexToRgb = (hex) => {
+    const m = hex.match(/^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i);
+    return m ? `rgb(${parseInt(m[1], 16)}, ${parseInt(m[2], 16)}, ${parseInt(m[3], 16)})` : hex;
+  };
+  const rgbToken = hexToRgb(backgroundToken);
+  const matches =
+    topbarBg === backgroundToken ||
+    topbarBg === rgbToken ||
+    (topbarBg === "rgba(0, 0, 0, 0)" && rootBg === rgbToken);
+  if (!matches) {
+    fail(`topbar background ${topbarBg} does not match --background token ${backgroundToken} (root ${rootBg})`);
+  }
+
+  await closeAppThroughCdp(handles.page, handles.child.pid, repo);
+
+  const windowJsonPath = path.join(tmp, "userdata", "proxi", "window.json");
+  const saved = JSON.parse(fs.readFileSync(windowJsonPath, "utf8"));
+  if (
+    saved.chrome?.modePref !== "dark" ||
+    saved.chrome?.dark?.color !== "#2b2c2d" ||
+    saved.chrome?.dark?.symbolColor !== "#a1a2a3" ||
+    saved.chrome?.light?.color !== "#f1f2f3" ||
+    saved.chrome?.light?.symbolColor !== "#616263"
+  ) {
+    fail(`window.json did not carry lowercased chrome payload: ${JSON.stringify(saved.chrome)}`);
+  }
+  console.log("ok [window/AC3]: set_chrome applied, topbar background matches --background, payload persisted lowercased");
+} finally {
+  await cleanup({ ...handles, tmp, repo: tmp && path.join(tmp, "repo") });
+  handles = undefined;
+}
+
+// (d) Window AC4: invoke("set_zoom", { zoom: 2.5 }) applied (window.innerWidth shrinks by ≈2.5x)
+// and persisted; invoke("set_zoom", { zoom: 0.1 }) clamped to 0.5 in window.json.
+try {
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), "proxi-tauri-smoke-window-ac4-"));
+  const repo = path.join(tmp, "repo");
+  handles = await launchApp(smokeEnv(tmp));
+  await assertAppPage(handles.page, { ephemeral: true, hash: true });
+
+  const initialWidth = await handles.page.evaluate(() => window.innerWidth);
+  await handles.page.evaluate(async () => {
+    await window.__TAURI_INTERNALS__.invoke("set_zoom", { zoom: 2.5 });
+  });
+
+  await until("zoom 2.5 applied", 5_000, async () => {
+    const currentWidth = await handles.page.evaluate(() => window.innerWidth);
+    return Math.abs(initialWidth / currentWidth - 2.5) < 0.2;
+  });
+
+  await closeAppThroughCdp(handles.page, handles.child.pid, repo);
+
+  const windowJsonPath = path.join(tmp, "userdata", "proxi", "window.json");
+  const saved25 = JSON.parse(fs.readFileSync(windowJsonPath, "utf8"));
+  if (Math.abs(saved25.zoom - 2.5) > 0.001) {
+    fail(`expected zoom 2.5 in window.json, got ${saved25.zoom}`);
+  }
+
+  // Relaunch to test clamp of 0.1 to 0.5
+  handles = await launchApp(smokeEnv(tmp));
+  await assertAppPage(handles.page, { ephemeral: true, hash: true });
+
+  await handles.page.evaluate(async () => {
+    await window.__TAURI_INTERNALS__.invoke("set_zoom", { zoom: 0.1 });
+  });
+
+  await closeAppThroughCdp(handles.page, handles.child.pid, repo);
+
+  const saved01 = JSON.parse(fs.readFileSync(windowJsonPath, "utf8"));
+  if (Math.abs(saved01.zoom - 0.5) > 0.001) {
+    fail(`expected clamped zoom 0.5 in window.json, got ${saved01.zoom}`);
+  }
+  console.log("ok [window/AC4]: set_zoom 2.5 applied and persisted, 0.1 clamped to 0.5");
+} finally {
+  await cleanup({ ...handles, tmp, repo: tmp && path.join(tmp, "repo") });
+  handles = undefined;
+}
+
+// (e) Window AC5: topbar has data-tauri-drag-region attribute over CDP.
+try {
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), "proxi-tauri-smoke-window-ac5-"));
+  const repo = path.join(tmp, "repo");
+  handles = await launchApp(smokeEnv(tmp));
+  await assertAppPage(handles.page, { ephemeral: true, hash: true });
+
+  const hasDrag = await handles.page.evaluate(() => {
+    const bar = document.querySelector(".topbar");
+    return bar !== null && bar.hasAttribute("data-tauri-drag-region");
+  });
+  if (!hasDrag) fail("topbar does not have data-tauri-drag-region attribute");
+
+  await closeAppThroughCdp(handles.page, handles.child.pid, repo);
+  console.log("ok [window/AC5]: topbar has data-tauri-drag-region attribute");
+} finally {
   await cleanup({ ...handles, tmp, repo: tmp && path.join(tmp, "repo") });
   handles = undefined;
 }

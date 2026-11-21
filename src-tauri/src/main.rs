@@ -47,6 +47,16 @@ fn hex_to_color(hex: &str) -> Option<tauri::webview::Color> {
     Some(tauri::webview::Color(r, g, b, 255))
 }
 
+fn resolve_window_path(app: &AppHandle) -> Result<PathBuf, String> {
+    if let Some(dir) = std::env::var_os("LEARNER_USER_DATA").filter(|d| !d.is_empty()) {
+        return Ok(PathBuf::from(dir).join("proxi").join("window.json"));
+    }
+    app.path()
+        .app_data_dir()
+        .map(|d| d.join("window.json"))
+        .map_err(|e| format!("cannot determine app data dir: {e}"))
+}
+
 fn save_current_window_state(app: &AppHandle) -> Result<(), String> {
     let Some(win) = app.get_webview_window("main") else {
         return Ok(());
@@ -86,11 +96,7 @@ fn save_current_window_state(app: &AppHandle) -> Result<(), String> {
         chrome: state.chrome.lock().unwrap().clone(),
         zoom: *state.zoom.lock().unwrap(),
     };
-    let path = app
-        .path()
-        .app_data_dir()
-        .map(|d| d.join("window.json"))
-        .map_err(|e| format!("cannot determine app data dir: {e}"))?;
+    let path = resolve_window_path(app)?;
     window::save_window_state(path, &save_state)
         .map_err(|e| format!("failed to save window state: {e}"))?;
     Ok(())
@@ -191,11 +197,7 @@ fn main() {
             let handle = app.handle().clone();
             app.manage(ShellGuards::default());
 
-            let window_path = app
-                .path()
-                .app_data_dir()
-                .map(|d| d.join("window.json"))
-                .map_err(|e| format!("cannot determine app data dir: {e}"))?;
+            let window_path = resolve_window_path(&handle)?;
 
             // Feed monitors from app.available_monitors() using work_area in logical DIP units
             let monitors = app.available_monitors().unwrap_or_default();
