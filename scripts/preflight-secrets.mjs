@@ -72,10 +72,10 @@ export function exportTree(repoRoot, destDir, ref = "HEAD") {
     encoding: "utf8",
   }).trim();
   fs.mkdirSync(destDir, { recursive: true });
-  const tmpTar = path.join(os.tmpdir(), `proxi-export-${process.pid}-${Date.now()}.tar`);
+  const tmpTar = path.join(destDir, `proxi-export-${process.pid}-${Date.now()}.tar`);
   try {
     execFileSync("git", ["archive", "--format=tar", "-o", tmpTar, ref], { cwd: repoRoot, stdio: "pipe" });
-    execFileSync("tar", ["-xf", tmpTar, "-C", destDir], { stdio: "pipe" });
+    execFileSync("tar", ["-xf", path.basename(tmpTar)], { cwd: destDir, stdio: "pipe" });
   } finally {
     fs.rmSync(tmpTar, { force: true });
   }

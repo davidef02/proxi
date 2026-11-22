@@ -7,14 +7,36 @@
     "beforeDevCommand": "npm run app:web",
     "devUrl": "http://localhost:5173",
     "beforeBuildCommand": "npm run app:build",
-    "frontendDist": "../app/web/dist"
+    "frontendDist": "capabilities"
   },
   "app": {
     "windows": []
   },
   "bundle": {
-    "active": false,
+    "active": true,
     "targets": ["nsis"],
-    "icon": ["../app/desktop/icon.ico"]
+    "icon": ["../app/desktop/icon.ico"],
+    "createUpdaterArtifacts": true,
+    "resources": {
+      "../target/release/proxi.exe": "target/release/proxi.exe",
+      "../app/web/dist": "app/web/dist"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      },
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQyQzAzNUZBMEJENEMxOEUKUldTT3dkUUwralhBUW55ZDIxUFZTM3lZN0NPSFZDVE5YNjJNRGhmQTBqQXFweXBabStPZWROSGUK",
+      "endpoints": [
+        "https://github.com/davidef02/proxi/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

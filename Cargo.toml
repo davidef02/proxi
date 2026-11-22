@@ -3,3 +3,11 @@ members = ["crates/proxi"]
 resolver = "3"
 
 [profile.release]
+opt-level = "z"
+# Thin LTO keeps release binaries small. The macOS-only link of
+# ___isPlatformVersionAtLeast (referenced by ort's prebuilt onnxruntime CoreML
+# objects) is handled in crates/proxi/build.rs, which links clang_rt.osx.
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"
