@@ -32,7 +32,12 @@ jobs:
       - run: rustup toolchain install stable --profile minimal && rustup default stable
       # All checks live in scripts/gate.sh — the same script the AGENTS.md Gate: line runs,
       # so CI and the local gate can never drift apart.
+      # MACOSX_DEPLOYMENT_TARGET: rustc's default aarch64-apple-darwin target (11.0) cannot link
+      # ort's prebuilt onnxruntime, whose CoreML objects reference ___isPlatformVersionAtLeast
+      # (needs >= 13.0; the prebuilt is built for 13.4). Ignored on Windows/Linux.
       - run: bash scripts/gate.sh
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "13.4"
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
