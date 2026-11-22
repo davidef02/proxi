@@ -26,13 +26,13 @@ const validBaseline = () => ({
   dirty: false,
   machine: { cpu: "Test CPU", cores: 8, ram_gb: 16 },
   os: { platform: "win32", release: "10.0.26100", version: "10.0.26100", arch: "x64" },
-  runtime: { electron: "45.0.0" },
+  runtime: { tauri: "2.0.0" },
   method: {
     fixture: "demo",
     open_hash: "#/c/demo",
     settle_ms: 10000,
     warmup_runs: 1,
-    ram_metric: "Win32 WorkingSetPrivate summed over the Electron process tree (MB = 2^20 bytes)",
+    ram_metric: "Win32 WorkingSetPrivate summed over the Tauri process tree (MB = 2^20 bytes)",
     interactive: "[data-testid=next-action] visible and enabled on #/c/demo",
     cold_start: "launch to interactive, prebuilt UI",
   },
@@ -119,7 +119,7 @@ test("buildBaseline: medians of the runs, key order, and a valid document", asyn
     dirty: false,
     machine: { cpu: "Test CPU", cores: 8, ram_gb: 16 },
     os: { platform: "win32", release: "10.0.26100", version: "10.0.26100", arch: "x64" },
-    electron: "45.0.0",
+    tauri: "2.0.0",
     warmupRuns: 1,
   });
   assert.equal(baseline.app, "electron+rust");
@@ -148,18 +148,29 @@ test("buildBaseline: medians of the runs, key order, and a valid document", asyn
 test("buildBaseline: a missing base commit stays null", async () => {
   const { buildBaseline } = await bench();
   const { runs, ...rest } = validBaseline();
-  const baseline = buildBaseline({ runs, baseCommit: undefined, ...rest, electron: "45.0.0", warmupRuns: 1 });
+  const baseline = buildBaseline({ runs, baseCommit: undefined, ...rest, tauri: "2.0.0", warmupRuns: 1 });
   assert.equal(baseline.base_commit, null);
 });
 
 test("buildBaseline: the method records the fixture, route and settle time", async () => {
   const { buildBaseline } = await bench();
   const { runs, ...rest } = validBaseline();
-  const baseline = buildBaseline({ runs, ...rest, electron: "45.0.0", warmupRuns: 1 });
+  const baseline = buildBaseline({ runs, ...rest, tauri: "2.0.0", warmupRuns: 1 });
   assert.equal(baseline.method.open_hash, "#/c/demo");
   assert.equal(baseline.method.settle_ms, 10000);
   assert.match(baseline.method.ram_metric, /WorkingSetPrivate/);
   assert.match(baseline.method.interactive, /next-action/);
+});
+
+test("buildBaseline: emits runtime.tauri with the Tauri ram_metric string", async () => {
+  const { buildBaseline } = await bench();
+  const { runs, ...rest } = validBaseline();
+  const baseline = buildBaseline({ runs, ...rest, tauri: "2.0.0", warmupRuns: 1 });
+  assert.deepEqual(baseline.runtime, { tauri: "2.0.0" });
+  assert.equal(
+    baseline.method.ram_metric,
+    "Win32 WorkingSetPrivate summed over the Tauri process tree (MB = 2^20 bytes)",
+  );
 });
 
 test("validateBaseline: rejects a wrong run count", async () => {
@@ -243,10 +254,18 @@ test("validateBaseline: rejects missing os fields", async () => {
   }
 });
 
-test("validateBaseline: rejects a missing Electron version", async () => {
+test("validateBaseline: accepts a legacy runtime: { electron: \"45.0.0\" } document", async () => {
   const { validateBaseline } = await bench();
   const obj = validBaseline();
-  obj.runtime.electron = "";
+  delete (obj.runtime as { tauri?: string; electron?: string }).tauri;
+  (obj.runtime as { electron?: string }).electron = "45.0.0";
+  assert.deepEqual(validateBaseline(obj), []);
+});
+
+test("validateBaseline: rejects an empty runtime.tauri", async () => {
+  const { validateBaseline } = await bench();
+  const obj = validBaseline();
+  obj.runtime.tauri = "";
   assert.notDeepEqual(validateBaseline(obj), []);
 });
 
@@ -317,6 +336,36 @@ test("drift: the limit is configurable for a required re-measurement", async () 
   assert.equal(drift({ ram_idle_mb: 100, cold_start_ms: 1000 }, { ram_idle_mb: 110, cold_start_ms: 1000 }, 0.05).ok, false);
 });
 
+test("targetThresholds: computes 144.6 and 740 targets from M05 baseline", async () => {
+  const { targetThresholds } = await bench();
+  assert.deepEqual(targetThresholds({ ram_idle_mb: 170.1, cold_start_ms: 740 }), {
+    ram_idle_mb: 144.6,
+    cold_start_ms: 740,
+  });
+});
+
+test("drift: with targets performs one-sided upper bound assert", async () => {
+  const { drift } = await bench();
+  const targets = { ram_idle_mb: 144.6, cold_start_ms: 740 };
+  const prev = { ram_idle_mb: 170.1, cold_start_ms: 740 };
+
+  // -15% improvement, symmetric drift 15% is ok: true
+  const improved = drift(prev, { ram_idle_mb: 144.6, cold_start_ms: 700 }, 0.1, targets);
+  assert.equal(improved.ok, true);
+
+  // 1.7% drift, above the ram target is ok: false
+  const regressedRam = drift(prev, { ram_idle_mb: 145.0, cold_start_ms: 740 }, 0.1, targets);
+  assert.equal(regressedRam.ok, false);
+
+  // 0.14% drift, above the cold target is ok: false
+  const regressedCold = drift(prev, { ram_idle_mb: 144.6, cold_start_ms: 741 }, 0.1, targets);
+  assert.equal(regressedCold.ok, false);
+
+  // the boundary is ok: true
+  const boundary = drift(prev, { ram_idle_mb: 144.6, cold_start_ms: 740 }, 0.1, targets);
+  assert.equal(boundary.ok, true);
+});
+
 test("validateCompareFile: accepts a baseline with any run count", async () => {
   const { buildBaseline, validateCompareFile } = await bench();
   assert.deepEqual(validateCompareFile(validBaseline()), []);
@@ -329,7 +378,7 @@ test("validateCompareFile: accepts a baseline with any run count", async () => {
     dirty: false,
     machine: { cpu: "Test CPU", cores: 8, ram_gb: 16 },
     os: { platform: "win32", release: "10.0.26100", version: "10.0.26100", arch: "x64" },
-    electron: "45.0.0",
+    tauri: "2.0.0",
     warmupRuns: 1,
   });
   assert.deepEqual(validateCompareFile(one), []);
@@ -376,13 +425,16 @@ test(
 
 test("parseArgs: defaults, all four flags, every error case", async () => {
   const { parseArgs } = await bench();
-  assert.deepEqual(parseArgs([]), { runs: 5, out: "docs/benchmark-baseline.json", compare: undefined, driftLimit: 0.1 });
+  assert.deepEqual(parseArgs([]), { runs: 5, out: "docs/benchmark-baseline.json", compare: undefined, driftLimit: 0.1, drift: false });
   assert.deepEqual(parseArgs(["--runs", "2", "--out", "x.json", "--compare", "y.json", "--drift-limit", "0.5"]), {
     runs: 2,
     out: "x.json",
     compare: "y.json",
     driftLimit: 0.5,
+    drift: false,
   });
+  assert.equal(parseArgs(["--drift"]).drift, true);
+  assert.equal(parseArgs(["--runs", "2", "--drift"]).drift, true);
   assert.throws(() => parseArgs(["--runs", "0"]), /--runs needs a positive integer/);
   assert.throws(() => parseArgs(["--runs", "1.5"]), /--runs needs a positive integer/);
   assert.throws(() => parseArgs(["--runs", "nope"]), /--runs needs a positive integer/);

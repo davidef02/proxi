@@ -3,6 +3,8 @@
 export const RUNS = 5;
 export const SETTLE_MS = 10_000;
 export const DRIFT_LIMIT = 0.10;
+export const RAM_TARGET_FACTOR = 0.85;
+export const COLD_TARGET_FACTOR = 1.0;
 export const OPEN_HASH = "#/c/demo";
 export const INTERACTIVE_SELECTOR = '[data-testid="next-action"]';
 
@@ -52,7 +54,7 @@ $rows = @(Get-CimInstance Win32_PerfRawData_PerfProc_Process | Where-Object { $t
 ConvertTo-Json -InputObject $rows -Compress`;
 }
 
-export function buildBaseline({ app, runs, date, commit, baseCommit, dirty, machine, os, electron, warmupRuns }) {
+export function buildBaseline({ app, runs, date, commit, baseCommit, dirty, machine, os, tauri, warmupRuns }) {
   return {
     schema: 1,
     app,
@@ -62,13 +64,13 @@ export function buildBaseline({ app, runs, date, commit, baseCommit, dirty, mach
     dirty,
     machine,
     os,
-    runtime: { electron },
+    runtime: { tauri },
     method: {
       fixture: "demo",
       open_hash: OPEN_HASH,
       settle_ms: SETTLE_MS,
       warmup_runs: warmupRuns,
-      ram_metric: "Win32 WorkingSetPrivate summed over the Electron process tree (MB = 2^20 bytes)",
+      ram_metric: "Win32 WorkingSetPrivate summed over the Tauri process tree (MB = 2^20 bytes)",
       interactive: "[data-testid=next-action] visible and enabled on #/c/demo",
       cold_start: "launch to interactive, prebuilt UI",
     },
@@ -101,7 +103,9 @@ export function validateBaseline(obj, { runs = RUNS } = {}) {
   for (const key of ["release", "version", "arch"]) {
     if (!nonEmpty(obj.os?.[key])) errors.push(`os.${key} must be a non-empty string`);
   }
-  if (!nonEmpty(obj.runtime?.electron)) errors.push("runtime.electron must be a non-empty string");
+  if (!nonEmpty(obj.runtime?.tauri) && !nonEmpty(obj.runtime?.electron)) {
+    errors.push("runtime.tauri must be a non-empty string (legacy runtime.electron accepted for M05 baselines)");
+  }
   if (obj.method?.settle_ms !== SETTLE_MS) errors.push(`method.settle_ms must be ${SETTLE_MS}`);
 
   if (!Array.isArray(obj.runs) || obj.runs.length !== runs) {
@@ -141,14 +145,26 @@ export function validateCompareFile(obj) {
   return validateBaseline(obj, { runs });
 }
 
-export function drift(prev, next, limit = DRIFT_LIMIT) {
+export function targetThresholds(prev, { ramFactor = RAM_TARGET_FACTOR, coldFactor = COLD_TARGET_FACTOR } = {}) {
+  return {
+    ram_idle_mb: round1(prev.ram_idle_mb * ramFactor),
+    cold_start_ms: Math.round(prev.cold_start_ms * coldFactor),
+  };
+}
+
+export function drift(prev, next, limit = DRIFT_LIMIT, targets = undefined) {
   const ram = Math.abs(next.ram_idle_mb - prev.ram_idle_mb) / prev.ram_idle_mb;
   const cold = Math.abs(next.cold_start_ms - prev.cold_start_ms) / prev.cold_start_ms;
+  if (targets) {
+    const ramOk = next.ram_idle_mb <= targets.ram_idle_mb;
+    const coldOk = next.cold_start_ms <= targets.cold_start_ms;
+    return { ram, cold, ramOk, coldOk, ok: ramOk && coldOk };
+  }
   return { ram, cold, ok: ram < limit && cold < limit };
 }
 
 export function parseArgs(argv) {
-  const opts = { runs: RUNS, out: "docs/benchmark-baseline.json", compare: undefined, driftLimit: DRIFT_LIMIT };
+  const opts = { runs: RUNS, out: "docs/benchmark-baseline.json", compare: undefined, driftLimit: DRIFT_LIMIT, drift: false };
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
     if (flag === "--runs") {
@@ -161,6 +177,8 @@ export function parseArgs(argv) {
       const value = argv[++i];
       if (value === undefined || !/^\d+(\.\d+)?$/.test(value)) throw new Error("--drift-limit needs a non-negative number");
       opts.driftLimit = Number(value);
+    } else if (flag === "--drift") {
+      opts.drift = true;
     } else if (flag === "--out" || flag === "--compare") {
       const value = argv[++i];
       if (value === undefined || value === "") throw new Error(`${flag} needs a path`);
