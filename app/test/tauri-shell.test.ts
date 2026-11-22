@@ -129,8 +129,13 @@ test("capabilities grant core:default, clipboard and opener to the main window o
 test("the npm scripts exist and the CLI twin is a devDependency", () => {
   assert.equal(pkg.scripts["tauri:dev"], "tauri dev");
   assert.equal(pkg.scripts["tauri:build"], "tauri build");
-  assert.equal(pkg.scripts["tauri:smoke"], "node app/desktop/tauri-smoke.mjs");
+  assert.equal(pkg.scripts["tauri:smoke"], "node scripts/tauri-smoke.mjs");
   assert.match(String(pkg.devDependencies?.["@tauri-apps/cli"]), /\^2\./);
+  assert.equal(pkg.devDependencies?.electron, undefined);
+  assert.deepEqual(
+    Object.keys(pkg.scripts).filter((s) => s.startsWith("desktop") || s === "bench:baseline"),
+    [],
+  );
 });
 
 test("the identity contract is untouched: deck root, app name and user model id", () => {
