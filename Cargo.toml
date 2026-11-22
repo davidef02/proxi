@@ -4,9 +4,9 @@ resolver = "3"
 
 [profile.release]
 opt-level = "z"
-# Thin, not fat, LTO: with rustc >= 1.87, `lto = true` (fat) + opt-level >= 2 stops resolving
-# compiler-rt symbols such as ___isPlatformVersionAtLeast, which ort's prebuilt onnxruntime
-# CoreML objects reference — the macOS link fails with "symbol(s) not found for architecture arm64".
+# Thin LTO keeps release binaries small. The macOS-only link of
+# ___isPlatformVersionAtLeast (referenced by ort's prebuilt onnxruntime CoreML
+# objects) is handled in crates/proxi/build.rs, which links clang_rt.osx.
 lto = "thin"
 codegen-units = 1
 strip = true
