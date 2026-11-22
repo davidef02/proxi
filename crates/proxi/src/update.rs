@@ -259,6 +259,8 @@ impl UpdateManager {
                 .unwrap_or_default();
             return self.finish(UpdateStatus {
                 state: UpdateState::Available,
+                version: None,
+                notes: None,
                 behind,
                 commits: Some(commits),
                 checked_at: Some(events::iso_now()),
@@ -271,6 +273,8 @@ impl UpdateManager {
         if build_pending(repo).exists() {
             return self.finish(UpdateStatus {
                 state: UpdateState::Available,
+                version: None,
+                notes: None,
                 behind: 1,
                 commits: None,
                 checked_at: Some(events::iso_now()),
@@ -280,6 +284,8 @@ impl UpdateManager {
 
         self.finish(UpdateStatus {
             state: UpdateState::UpToDate,
+            version: None,
+            notes: None,
             behind: 0,
             commits: None,
             checked_at: Some(events::iso_now()),
@@ -425,6 +431,8 @@ impl UpdateManager {
 
         self.set(UpdateStatus {
             state: UpdateState::Relaunching,
+            version: None,
+            notes: None,
             behind: 0,
             commits: None,
             checked_at: Some(events::iso_now()),

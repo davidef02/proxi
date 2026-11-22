@@ -136,6 +136,10 @@ pub struct UpdateCommitInfo {
 #[serde(rename_all = "camelCase")]
 pub struct UpdateStatus {
     pub state: UpdateState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
     pub behind: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub commits: Option<Vec<UpdateCommitInfo>>,
@@ -149,6 +153,8 @@ impl Default for UpdateStatus {
     fn default() -> Self {
         Self {
             state: UpdateState::Idle,
+            version: None,
+            notes: None,
             behind: 0,
             commits: None,
             checked_at: None,
@@ -859,6 +865,8 @@ mod tests {
     fn update_status_keeps_node_key_order() {
         let status = UpdateStatus {
             state: UpdateState::Error,
+            version: Some("9.9.9".to_string()),
+            notes: Some("n".to_string()),
             behind: 2,
             commits: Some(vec![UpdateCommitInfo {
                 hash: "h".to_string(),
@@ -870,7 +878,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&status).unwrap(),
-            r#"{"state":"error","behind":2,"commits":[{"hash":"h","subject":"s","relativeTime":"r"}],"checkedAt":"t","error":"e"}"#
+            r#"{"state":"error","version":"9.9.9","notes":"n","behind":2,"commits":[{"hash":"h","subject":"s","relativeTime":"r"}],"checkedAt":"t","error":"e"}"#
         );
     }
 
@@ -1043,6 +1051,8 @@ mod tests {
         let response = UpdateStatusResponse {
             status: UpdateStatus {
                 state: UpdateState::UpToDate,
+                version: None,
+                notes: None,
                 behind: 0,
                 commits: None,
                 checked_at: Some("t".to_string()),

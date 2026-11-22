@@ -490,6 +490,11 @@ impl JobManager {
         pids
     }
 
+    pub fn unsettled_count(&self) -> usize {
+        let state = self.state.lock().expect("state lock");
+        state.entries.values().filter(|e| !e.settled).count()
+    }
+
     pub fn renderer(&self) -> &Arc<Renderer> {
         &self.opts.renderer
     }
@@ -1727,6 +1732,31 @@ mod tests {
         let (host, tools) = env.manager.mcp_host(id2).unwrap();
         assert_eq!(host.job_id(), id2);
         assert_eq!(tools.iter().map(|t| t.name).collect::<Vec<_>>(), ["submit_research"]);
+
+        env.manager.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn unsettled_count_tracks_running_and_settled_jobs() {
+        let env = build_test_manager("unsettled-count");
+        assert_eq!(env.manager.unsettled_count(), 0);
+
+        let j = env
+            .manager
+            .start(
+                "research",
+                json!({ "question": "FAKE:slow:5000" }),
+                "Slow Job",
+                None,
+            )
+            .unwrap();
+        let id = j["id"].as_str().unwrap().to_string();
+
+        assert_eq!(env.manager.unsettled_count(), 1);
+
+        env.manager.cancel(&id);
+
+        assert_eq!(env.manager.unsettled_count(), 0);
 
         env.manager.shutdown().await;
     }

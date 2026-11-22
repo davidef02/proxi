@@ -323,6 +323,47 @@ impl std::fmt::Debug for Backend {
     }
 }
 
+/// The silent flag for NSIS installer runs.
+pub const NSIS_SILENT: [&str; 1] = ["/S"];
+
+/// `<root>/target/release/proxi.update-pending`
+pub fn pending_marker_path(root: &Path) -> PathBuf {
+    root.join("target").join("release").join("proxi.update-pending")
+}
+
+/// Reads the pending update marker and returns the installer path if it exists on disk.
+/// Missing or corrupt marker, or a missing installer file, returns `None`.
+pub fn read_pending_installer(root: &Path) -> Option<PathBuf> {
+    let marker = pending_marker_path(root);
+    let content = std::fs::read_to_string(&marker).ok()?;
+    let value: Value = serde_json::from_str(&content).ok()?;
+    let installer_str = value.get("installer")?.as_str()?;
+    let installer = PathBuf::from(installer_str);
+    if installer.exists() {
+        Some(installer)
+    } else {
+        None
+    }
+}
+
+/// Removes the pending update marker file if present.
+pub fn clear_pending(root: &Path) {
+    let _ = std::fs::remove_file(pending_marker_path(root));
+}
+
+/// Runs the NSIS installer silently (`/S`) and waits for completion.
+pub fn run_installer(path: &Path) -> std::io::Result<std::process::ExitStatus> {
+    let mut cmd = Command::new(path);
+    cmd.args(NSIS_SILENT);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd.status()
+}
+
 /// Best-effort kill of a whole process tree; run these args on exit (backend.mjs killTreeSync).
 pub fn kill_tree_args(pid: u32) -> Vec<String> {
     vec![
@@ -595,6 +636,76 @@ mod tests {
         let exe_dir = tmp.join("src-tauri").join("target").join("release");
         std::fs::create_dir_all(&exe_dir).unwrap();
         assert_eq!(repo_root(&Vars::new(), &exe_dir), tmp.join("src-tauri"));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn nsis_silent_flag_matches_contract() {
+        assert_eq!(NSIS_SILENT, ["/S"]);
+    }
+
+    #[test]
+    fn pending_marker_path_format() {
+        let root = Path::new("C:/proxi");
+        assert_eq!(
+            pending_marker_path(root),
+            PathBuf::from("C:/proxi/target/release/proxi.update-pending")
+        );
+    }
+
+    #[test]
+    fn pending_installer_roundtrip_and_clear() {
+        let tmp = std::env::temp_dir().join("proxi-pending-roundtrip");
+        let _ = std::fs::remove_dir_all(&tmp);
+        let release_dir = tmp.join("target").join("release");
+        std::fs::create_dir_all(&release_dir).unwrap();
+
+        let installer_path = release_dir.join("proxi-setup.exe");
+        std::fs::write(&installer_path, b"mock-installer").unwrap();
+
+        let marker_content = serde_json::json!({
+            "installer": installer_path.to_str().unwrap(),
+            "version": "1.2.3"
+        });
+        std::fs::write(pending_marker_path(&tmp), marker_content.to_string()).unwrap();
+
+        let found = read_pending_installer(&tmp);
+        assert_eq!(found, Some(installer_path));
+
+        clear_pending(&tmp);
+        assert!(!pending_marker_path(&tmp).exists());
+        assert_eq!(read_pending_installer(&tmp), None);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn pending_installer_missing_or_corrupt_returns_none() {
+        let tmp = std::env::temp_dir().join("proxi-pending-corrupt");
+        let _ = std::fs::remove_dir_all(&tmp);
+        let release_dir = tmp.join("target").join("release");
+        std::fs::create_dir_all(&release_dir).unwrap();
+
+        // 1. Missing marker
+        assert_eq!(read_pending_installer(&tmp), None);
+
+        // 2. Corrupt JSON
+        std::fs::write(pending_marker_path(&tmp), "not-json").unwrap();
+        assert_eq!(read_pending_installer(&tmp), None);
+
+        // 3. JSON missing "installer" key
+        std::fs::write(pending_marker_path(&tmp), r#"{"version":"1.2.3"}"#).unwrap();
+        assert_eq!(read_pending_installer(&tmp), None);
+
+        // 4. Installer file does not exist on disk
+        let non_existent = release_dir.join("missing-setup.exe");
+        let marker_content = serde_json::json!({
+            "installer": non_existent.to_str().unwrap(),
+            "version": "1.2.3"
+        });
+        std::fs::write(pending_marker_path(&tmp), marker_content.to_string()).unwrap();
+        assert_eq!(read_pending_installer(&tmp), None);
+
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }

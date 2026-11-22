@@ -459,6 +459,8 @@ export interface UpdateCommitInfo {
 }
 export interface UpdateStatus {
   state: UpdateState;
+  version?: string;
+  notes?: string;
   behind: number;
   commits?: UpdateCommitInfo[];
   error?: string;

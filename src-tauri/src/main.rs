@@ -504,14 +504,14 @@ fn start_backend(app: &tauri::App, env: &Vars) -> Result<(), String> {
 
     if let shell::ServerStart::Own(backend) = started {
         *app.state::<BackendState>().pid.lock().expect("pid mutex") = Some(backend.pid);
-        watch_backend(app.handle().clone(), backend);
+        watch_backend(app.handle().clone(), backend, root);
     }
     Ok(())
 }
 
 /// The backend exiting with code 0 while we are not quitting is the self-update relaunch signal
 /// (serve_cli exits after the relaunch notify); anything else is a crash: log it, never relaunch.
-fn watch_backend(app: AppHandle, backend: shell::Backend) {
+fn watch_backend(app: AppHandle, backend: shell::Backend, root: PathBuf) {
     let shell::Backend { exit_code, .. } = backend;
     std::thread::spawn(move || {
         let code = exit_code.recv().unwrap_or(None);
@@ -520,6 +520,11 @@ fn watch_backend(app: AppHandle, backend: shell::Backend) {
             return;
         }
         if code == Some(0) {
+            if let Some(installer) = shell::read_pending_installer(&root) {
+                let status = shell::run_installer(&installer);
+                eprintln!("installer finished: {status:?}");
+                shell::clear_pending(&root);
+            }
             app.restart();
         }
         eprintln!("backend exited with code {}", shell::exit_code_text(code));
