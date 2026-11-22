@@ -1,76 +1,85 @@
-// GET/POST /api/update over plain HTTP: checks, refusals, fast-forward, rebuild and relaunch.
+// GET/POST /api/update over plain HTTP: checks, refusals, signature verification and relaunch.
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
 import type { GlobalEvent } from "../shared/protocol.ts";
-import { startServer, type TestServer } from "./harness.ts";
+import { FakeHttpServer } from "./fake-servers.ts";
+import { fakeClaude, removeTree, startServer, type TestServer } from "./harness.ts";
 
 type UpdateEvent = Extract<GlobalEvent, { type: "update" }>;
 
-const DIRTY_TREE =
-  "Modifiche locali non salvate nel repository. Impossibile aggiornare senza rischiare di sovrascrivere il tuo lavoro.";
-const DIVERGED = "I commit locali sono divergenti da quelli remoti. Impossibile eseguire un aggiornamento fast-forward.";
+const SESSIONS_RUNNING =
+  "C'è una sessione in corso. Chiudila o conferma per interromperla prima di aggiornare.";
 
-function execGit(cwd: string, args: string[]): string {
-  return execFileSync("git", args, { cwd, encoding: "utf8", windowsHide: true }).trim();
+const TEST_PUBKEY =
+  "untrusted comment: minisign public key E7620F1842B4E81F\nRWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3\n";
+
+const VALID_PREHASHED_SIG =
+  "untrusted comment: signature from minisign secret key\n" +
+  "RUQf6LRCGA9i559r3g7V1qNyJDApGip8MfqcadIgT9CuhV3EMhHoN1mGTkUidF/z7SrlQgXdy8ofjb7bNJJylDOocrCo8KLzZwo=\n" +
+  "trusted comment: timestamp:1556193335\tfile:test\n" +
+  "y/rUw2y8/hOUYjZU71eHp/Wo1KZ40fGy2VJEDl34XMJM+TX48Ss/17u3IvIfbVR1FkZZSNCisQbuQY+bHwhEBg==\n";
+
+const VALID_SIG_B64 = Buffer.from(VALID_PREHASHED_SIG, "utf8").toString("base64");
+
+function makeLatestJson(baseUrl: string, version = "9.9.9", notes = "Note di release", sigB64 = VALID_SIG_B64) {
+  return {
+    version,
+    notes,
+    platforms: {
+      "windows-x86_64": {
+        url: `${baseUrl}/proxi-setup.exe`,
+        signature: sigB64,
+      },
+    },
+  };
 }
 
-function initGitRepo(dir: string): void {
-  fs.mkdirSync(dir, { recursive: true });
-  execGit(dir, ["init", "-b", "main"]);
-  execGit(dir, ["config", "user.name", "Test User"]);
-  execGit(dir, ["config", "user.email", "test@example.com"]);
-  fs.writeFileSync(path.join(dir, "README.md"), "# Test\n");
-  // The build writes target/release: keep it out of the dirty-tree check.
-  fs.writeFileSync(path.join(dir, ".gitignore"), "target/\n");
-  execGit(dir, ["add", "README.md", ".gitignore"]);
-  execGit(dir, ["commit", "-m", "initial commit"]);
+function seedDemoCourse(data: string): void {
+  fs.writeFileSync(
+    path.join(data, "curriculum.json"),
+    JSON.stringify({ chapters: [{ title: "Demo", slug: "demo", lessons: [{ title: "Prima lezione", slug: "prima-lezione", plannedNodes: 2 }] }] }),
+  );
+  fs.mkdirSync(path.join(data, "courses", "demo", "lessons"), { recursive: true });
+  fs.writeFileSync(path.join(data, "courses", "demo", "MISSION.md"), "# Mission\n");
+  fs.writeFileSync(path.join(data, "courses", "demo", "NOTES.md"), "# Notes\n");
 }
 
-function cloneGitRepo(src: string, dest: string): void {
-  execFileSync("git", ["clone", src, dest], { encoding: "utf8", windowsHide: true });
-  execGit(dest, ["config", "user.name", "Test User"]);
-  execGit(dest, ["config", "user.email", "test@example.com"]);
-}
-
-function commitFile(dir: string, name: string, content: string, message: string): void {
-  fs.writeFileSync(path.join(dir, name), content);
-  execGit(dir, ["add", name]);
-  execGit(dir, ["commit", "-m", message]);
-}
-
-/** A remote and a fresh clone of it under `tmp`. */
-function cloneFixture(tmp: string): { root: string; remote: string } {
-  const remote = path.join(tmp, "remote");
-  const root = path.join(tmp, "local");
-  initGitRepo(remote);
-  cloneGitRepo(remote, root);
-  return { root, remote };
-}
-
-/**
- * One fresh tmp root and server per test: in binary mode a successful apply ends the process,
- * and Node's update status is process-global, so nothing can be shared.
- */
-async function withRepo(
-  setup: (tmp: string) => { root: string; remote?: string },
-  fn: (server: TestServer, f: { tmp: string; root: string; remote: string }) => Promise<void>,
+async function withServer(
+  setupFake: (fake: FakeHttpServer) => void | Promise<void>,
+  fn: (ctx: { server: TestServer; repo: string; data: string; fake: FakeHttpServer; fakeUrl: string }) => Promise<void>,
+  options: { seedData?: boolean } = {},
 ): Promise<void> {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "api-update-"));
+  const repo = path.join(tmp, "repo");
   const data = path.join(tmp, "data");
-  fs.mkdirSync(data);
-  const { root, remote = "" } = setup(tmp);
+  fs.mkdirSync(repo, { recursive: true });
+  fs.mkdirSync(data, { recursive: true });
+  if (options.seedData) {
+    seedDemoCourse(data);
+  }
+  const keyFile = path.join(tmp, "update_key.pub");
+  fs.writeFileSync(keyFile, TEST_PUBKEY);
+
+  const fake = new FakeHttpServer("releases");
   let server: TestServer | undefined;
   try {
-    // Every successful apply rebuilds: the fake keeps cargo out of the fixture repo.
-    server = await startServer({ repoRoot: root, dataRoot: data, bins: { cargo: fakeBuild(tmp) } });
-    await fn(server, { tmp, root, remote });
+    const fakeUrl = await fake.start();
+    await setupFake(fake);
+    server = await startServer({
+      repoRoot: repo,
+      dataRoot: data,
+      fakes: { releases: `${fakeUrl}/latest.json` },
+      updatePubkeyFile: keyFile,
+      claude: fakeClaude(),
+    });
+    await fn({ server, repo, data, fake, fakeUrl });
   } finally {
     await server?.close();
-    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 3 });
+    await fake.close();
+    await removeTree(tmp);
   }
 }
 
@@ -87,10 +96,10 @@ function post(server: TestServer, p: string, body?: unknown): Promise<Response> 
 }
 
 /** Same poll as integration.test.ts. */
-async function waitFor<T>(fn: () => T | undefined | false, ms = 5000): Promise<T> {
+async function waitFor<T>(fn: () => T | undefined | false | Promise<T | undefined | false>, ms = 5000): Promise<T> {
   const end = Date.now() + ms;
   for (;;) {
-    const v = fn();
+    const v = await fn();
     if (v) return v;
     if (Date.now() > end) throw new Error("waitFor timed out");
     await new Promise((r) => setTimeout(r, 25));
@@ -136,149 +145,148 @@ function sse(url: string) {
   return { events, ready, close: () => ac.abort() };
 }
 
-/** Fake cargo: logs its command line next to the script, then writes a new exe in the repo root. */
-function fakeBuild(dir: string): string {
-  if (process.platform === "win32") {
-    const script = path.join(dir, "fake-cargo.cmd");
-    fs.writeFileSync(
-      script,
-      [
-        "@echo off",
-        '>>"%~dp0build-log.txt" echo %* GIT_TERMINAL_PROMPT=%GIT_TERMINAL_PROMPT%',
-        "if not exist target\\release mkdir target\\release",
-        "echo new build> target\\release\\proxi.exe",
-        "exit /b 0",
-        "",
-      ].join("\r\n"),
-    );
-    return script;
-  }
-  const script = path.join(dir, "fake-cargo.sh");
-  fs.writeFileSync(
-    script,
-    [
-      "#!/bin/sh",
-      'echo "$* GIT_TERMINAL_PROMPT=$GIT_TERMINAL_PROMPT" >> "$(dirname "$0")/build-log.txt"',
-      "mkdir -p target/release && echo new build > target/release/proxi",
-      "",
-    ].join("\n"),
-  );
-  fs.chmodSync(script, 0o755);
-  return script;
-}
-
 describe("/api/update", () => {
-  // First in the file: Node's update status is process-global, so no earlier test may have checked.
   it("GET /api/update starts idle", async () => {
-    await withRepo(
-      (tmp) => ({ root: tmp }),
-      async (server) => {
+    await withServer(
+      () => {},
+      async ({ server }) => {
         const res = await fetch(`${server.url}/api/update`);
         assert.equal(res.status, 200);
-        assert.deepEqual(await res.json(), { state: "idle", behind: 0, activeSessions: 0 });
+        assert.deepEqual(await res.json(), { state: "idle", activeSessions: 0 });
       },
     );
   });
 
   it("check: up to date", async () => {
-    await withRepo(cloneFixture, async (server) => {
-      const res = await post(server, "/api/update/check");
-      assert.equal(res.status, 200);
-      const body = await res.json();
-      assert.equal(body.state, "up_to_date");
-      assert.equal(body.behind, 0);
-      assert.deepEqual(Object.keys(body), ["state", "behind", "checkedAt", "activeSessions"]);
-      assert.ok(!Number.isNaN(Date.parse(body.checkedAt)));
-    });
-  });
-
-  it("check: available commits", async () => {
-    await withRepo(cloneFixture, async (server, { remote }) => {
-      commitFile(remote, "file1.txt", "hello\n", "feature: add file1");
-
-      const res = await post(server, "/api/update/check");
-      assert.equal(res.status, 200);
-      const body = await res.json();
-      assert.equal(body.state, "available");
-      assert.equal(body.behind, 1);
-      assert.deepEqual(Object.keys(body), ["state", "behind", "commits", "checkedAt", "activeSessions"]);
-      assert.equal(body.commits[0].subject, "feature: add file1");
-      assert.deepEqual(Object.keys(body.commits[0]), ["hash", "subject", "relativeTime"]);
-      assert.ok(body.commits[0].hash);
-      assert.ok(body.commits[0].relativeTime);
-    });
-  });
-
-  it("check: a non-git directory is idle", async () => {
-    await withRepo(
-      (tmp) => ({ root: tmp }),
-      async (server) => {
+    await withServer(
+      (fake) => {
+        fake.on("GET", "/latest.json", {
+          body: makeLatestJson(fake.url, "0.1.0"),
+        });
+      },
+      async ({ server }) => {
         const res = await post(server, "/api/update/check");
         assert.equal(res.status, 200);
-        const body = await res.json();
-        assert.equal(body.state, "idle");
-        assert.equal(body.behind, 0);
+        const body = (await res.json()) as Record<string, unknown>;
+        assert.equal(body.state, "up_to_date");
+        assert.equal(body.activeSessions, 0);
+        assert.deepEqual(Object.keys(body), ["state", "checkedAt", "activeSessions"]);
+        assert.ok(!Number.isNaN(Date.parse(body.checkedAt as string)));
       },
     );
   });
 
-  it("check: a feature branch without upstream tracks origin/main", async () => {
-    await withRepo(cloneFixture, async (server, { root, remote }) => {
-      execGit(root, ["checkout", "-b", "feature-test-branch"]);
-      commitFile(remote, "feature2.txt", "hello feature 2\n", "feature: add feature2");
+  it("check: available version and notes", async () => {
+    await withServer(
+      (fake) => {
+        fake.on("GET", "/latest.json", {
+          body: makeLatestJson(fake.url, "9.9.9", "Note di release"),
+        });
+      },
+      async ({ server }) => {
+        const res = await post(server, "/api/update/check");
+        assert.equal(res.status, 200);
+        const body = (await res.json()) as Record<string, unknown>;
+        assert.equal(body.state, "available");
+        assert.equal(body.version, "9.9.9");
+        assert.equal(body.notes, "Note di release");
+        assert.equal(body.activeSessions, 0);
+        assert.deepEqual(Object.keys(body), ["state", "version", "notes", "checkedAt", "activeSessions"]);
+        assert.ok(!Number.isNaN(Date.parse(body.checkedAt as string)));
+      },
+    );
+  });
 
+  it("check: an unreachable releases URL returns idle", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "api-update-unreachable-"));
+    const repo = path.join(tmp, "repo");
+    const data = path.join(tmp, "data");
+    fs.mkdirSync(repo, { recursive: true });
+    fs.mkdirSync(data, { recursive: true });
+    const keyFile = path.join(tmp, "update_key.pub");
+    fs.writeFileSync(keyFile, TEST_PUBKEY);
+    let server: TestServer | undefined;
+    try {
+      server = await startServer({
+        repoRoot: repo,
+        dataRoot: data,
+        fakes: { releases: "http://127.0.0.1:1/latest.json" },
+        updatePubkeyFile: keyFile,
+      });
       const res = await post(server, "/api/update/check");
       assert.equal(res.status, 200);
-      const body = await res.json();
-      assert.equal(body.state, "available");
-      assert.ok(body.behind >= 1);
-      assert.ok(body.commits.some((c: { subject: string }) => c.subject === "feature: add feature2"));
-    });
+      const body = (await res.json()) as Record<string, unknown>;
+      assert.equal(body.state, "idle");
+      assert.equal(body.activeSessions, 0);
+    } finally {
+      await server?.close();
+      await removeTree(tmp);
+    }
   });
 
-  it("apply: refuses a dirty tree", async () => {
-    await withRepo(cloneFixture, async (server, { root }) => {
-      fs.writeFileSync(path.join(root, "uncommitted.txt"), "dirty work");
+  it("check: pending marker present reports available", async () => {
+    await withServer(
+      () => {},
+      async ({ server, repo }) => {
+        const targetDir = path.join(repo, "target", "release");
+        fs.mkdirSync(targetDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(targetDir, "proxi.update-pending"),
+          JSON.stringify({ installer: path.join(targetDir, "proxi-setup-9.9.9.exe"), version: "9.9.9" }),
+        );
 
-      const res = await post(server, "/api/update/apply", {});
-      assert.equal(res.status, 409);
-      assert.deepEqual(await res.json(), { error: DIRTY_TREE, code: "dirty_tree" });
-    });
-  });
-
-  it("apply: refuses diverged history", async () => {
-    await withRepo(cloneFixture, async (server, { root, remote }) => {
-      commitFile(remote, "remote-file.txt", "remote\n", "remote commit");
-      commitFile(root, "local-file.txt", "local\n", "local conflicting commit");
-      execGit(root, ["fetch", "origin"]);
-
-      const res = await post(server, "/api/update/apply", {});
-      assert.equal(res.status, 409);
-      assert.deepEqual(await res.json(), { error: DIVERGED, code: "diverged" });
-    });
-  });
-
-  it("apply: reports a missing upstream", async () => {
-    await withRepo(
-      (tmp) => {
-        const root = path.join(tmp, "repo");
-        initGitRepo(root);
-        return { root };
-      },
-      async (server) => {
-        const res = await post(server, "/api/update/apply", {});
-        assert.equal(res.status, 400);
-        assert.deepEqual(await res.json(), { error: "Nessun branch upstream configurato." });
+        const res = await post(server, "/api/update/check");
+        assert.equal(res.status, 200);
+        const body = (await res.json()) as Record<string, unknown>;
+        assert.equal(body.state, "available");
+        assert.equal(body.version, "9.9.9");
       },
     );
   });
 
-  it("apply: fast-forwards, rebuilds and relaunches", async () => {
-    await withRepo(
-      (tmp) => cloneFixture(tmp),
-      async (server, { tmp, root, remote }) => {
-        commitFile(remote, "new-feature.txt", "feature v2\n", "feature v2");
+  it("apply: refuses a tampered signature", async () => {
+    await withServer(
+      (fake) => {
+        fake.on("GET", "/latest.json", {
+          body: makeLatestJson(fake.url, "9.9.9", "Note di release"),
+        });
+        fake.on("GET", "/proxi-setup.exe", {
+          headers: { "content-type": "application/octet-stream" },
+          body: "Test",
+        });
+      },
+      async ({ server, repo }) => {
+        const res = await post(server, "/api/update/apply", {});
+        assert.equal(res.status, 500);
+        const body = (await res.json()) as { error: string };
+        assert.match(body.error, /Firma dell'installer non valida/);
 
+        const markerPath = path.join(repo, "target", "release", "proxi.update-pending");
+        assert.ok(!fs.existsSync(markerPath));
+        const installerPath = path.join(repo, "target", "release", "proxi-setup-9.9.9.exe");
+        assert.ok(!fs.existsSync(installerPath));
+
+        const statusRes = await fetch(`${server.url}/api/update`);
+        assert.equal(statusRes.status, 200);
+        const statusBody = (await statusRes.json()) as Record<string, unknown>;
+        assert.equal(statusBody.state, "error");
+        assert.match(statusBody.error as string, /Firma dell'installer non valida/);
+      },
+    );
+  });
+
+  it("apply: downloads, verifies, writes marker and relaunches", async () => {
+    await withServer(
+      (fake) => {
+        fake.on("GET", "/latest.json", {
+          body: makeLatestJson(fake.url, "9.9.9", "Note di release"),
+        });
+        fake.on("GET", "/proxi-setup.exe", {
+          headers: { "content-type": "application/octet-stream" },
+          body: "test",
+        });
+      },
+      async ({ server, repo }) => {
         const stream = sse(`${server.url}/api/events`);
         try {
           assert.equal((await stream.ready).status, 200);
@@ -286,8 +294,6 @@ describe("/api/update", () => {
           const res = await post(server, "/api/update/apply", { force: true });
           assert.equal(res.status, 200);
           assert.deepEqual(await res.json(), { ok: true, relaunching: true });
-
-          assert.equal(execGit(root, ["rev-parse", "HEAD"]), execGit(remote, ["rev-parse", "HEAD"]));
 
           const states = await waitFor(() => {
             const seen = stream.events.filter((e): e is UpdateEvent => e.type === "update").map((e) => e.status.state);
@@ -299,29 +305,66 @@ describe("/api/update", () => {
           stream.close();
         }
 
-        const exe = path.join(root, "target", "release", process.platform === "win32" ? "proxi.exe" : "proxi");
-        assert.equal(fs.readFileSync(exe, "utf8").trim(), "new build");
-
-        const log = fs.readFileSync(path.join(tmp, "build-log.txt"), "utf8");
-        const lines = log.split(/\r?\n/).filter((line) => line.trim());
-        assert.equal(lines.length, 1, `build log: ${log}`);
-        assert.ok(lines[0].includes("build --release"), `build log: ${log}`);
-        assert.ok(lines[0].includes("GIT_TERMINAL_PROMPT=0"), `build log: ${log}`);
+        const markerPath = path.join(repo, "target", "release", "proxi.update-pending");
+        assert.ok(fs.existsSync(markerPath), "marker file exists");
+        const marker = JSON.parse(fs.readFileSync(markerPath, "utf8")) as { installer: string; version: string };
+        assert.equal(marker.version, "9.9.9");
+        assert.ok(fs.existsSync(marker.installer), "installer file exists");
+        assert.equal(fs.readFileSync(marker.installer, "utf8"), "test");
 
         await within(server.exited!, 5000, "the binary exits");
       },
     );
   });
 
-  it("apply: switches a clean feature branch to main", async () => {
-    await withRepo(cloneFixture, async (server, { root, remote }) => {
-      execGit(root, ["checkout", "-b", "feature-work"]);
-      commitFile(remote, "feature3.txt", "feature v3\n", "feature v3");
+  it("apply: refuses a live session without force, then force succeeds", async () => {
+    await withServer(
+      (fake) => {
+        fake.on("GET", "/latest.json", {
+          body: makeLatestJson(fake.url, "9.9.9", "Note di release"),
+        });
+        fake.on("GET", "/proxi-setup.exe", {
+          headers: { "content-type": "application/octet-stream" },
+          body: "test",
+        });
+      },
+      async ({ server }) => {
+        const sessionRes = await post(server, "/api/sessions", {
+          kind: "practice",
+          course: "demo",
+          model: "haiku",
+        });
+        assert.equal(sessionRes.status, 200);
+        const { id } = (await sessionRes.json()) as { id: string };
 
-      const res = await post(server, "/api/update/apply", {});
-      assert.equal(res.status, 200);
-      assert.equal(execGit(root, ["rev-parse", "--abbrev-ref", "HEAD"]), "main");
-      assert.equal(execGit(root, ["rev-parse", "HEAD"]), execGit(remote, ["rev-parse", "HEAD"]));
-    });
+        const sessionStatus = async () => {
+          const res = await fetch(`${server.url}/api/sessions/${id}`);
+          return ((await res.json()) as { status: string }).status;
+        };
+        await waitFor(async () => (await sessionStatus()) === "idle");
+
+        const msgRes = await post(server, `/api/sessions/${id}/message`, { text: "FAKE:slow:500" });
+        assert.equal(msgRes.status, 200);
+
+        await waitFor(async () => (await sessionStatus()) === "running");
+
+        const updateRes = await fetch(`${server.url}/api/update`);
+        const updateBody = (await updateRes.json()) as { activeSessions: number };
+        assert.equal(updateBody.activeSessions, 1);
+
+        const conflictRes = await post(server, "/api/update/apply", {});
+        assert.equal(conflictRes.status, 409);
+        const conflictBody = (await conflictRes.json()) as { error: string; code: string };
+        assert.equal(conflictBody.code, "sessions_running");
+        assert.equal(conflictBody.error, SESSIONS_RUNNING);
+
+        const forceRes = await post(server, "/api/update/apply", { force: true });
+        assert.equal(forceRes.status, 200);
+        assert.deepEqual(await forceRes.json(), { ok: true, relaunching: true });
+
+        await within(server.exited!, 5000, "the binary exits");
+      },
+      { seedData: true },
+    );
   });
 });

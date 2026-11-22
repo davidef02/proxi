@@ -25,15 +25,17 @@ describe("binaryArgs", () => {
     assert.equal(args[args.indexOf("--port") + 1], "0");
   });
 
-  it("forwards fake URLs and bins", () => {
-    assert.deepEqual(binaryArgs("r", "d", { transcription: "http://t" }, { git: "g", cargo: "c" }), [
+  it("forwards fake URLs and update pubkey", () => {
+    assert.deepEqual(binaryArgs("r", "d", { transcription: "http://t", releases: "http://rel" }, "key.pub"), [
       "serve", "--port", "0", "--repo-root", "r", "--data-root", "d", "--memory-secrets", "--no-update-check",
-      "--transcription-url", "http://t", "--git-bin", "g", "--cargo-bin", "c",
+      "--releases-url", "http://rel", "--transcription-url", "http://t", "--update-pubkey", "key.pub",
     ]);
   });
 
-  it("omits bins that are not set", () => {
+  it("omits options that are not set", () => {
     const args = binaryArgs("r", "d");
+    assert.ok(!args.includes("--releases-url"));
+    assert.ok(!args.includes("--update-pubkey"));
     assert.ok(!args.includes("--git-bin"));
     assert.ok(!args.includes("--cargo-bin"));
   });
