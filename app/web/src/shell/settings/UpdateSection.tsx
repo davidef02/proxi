@@ -33,8 +33,8 @@ export function UpdateSection({
                 ? "Aggiornamento in corso…"
                 : checkingUpdate || update?.state === "checking"
                 ? "Verifica in corso…"
-                : update && update.behind > 0
-                ? `Aggiornamento disponibile (${update.behind} commit)`
+                : update?.state === "available"
+                ? `Aggiornamento disponibile (${update.version})`
                 : `${APP_NAME} è aggiornato`
             }
             hint={
@@ -52,14 +52,14 @@ export function UpdateSection({
             >
               {checkingUpdate ? "Verifico…" : "Verifica disponibilità"}
             </button>
-            {update && update.behind > 0 && (
+            {update?.state === "available" && (
               <button
                 type="button"
                 onClick={() => onApply(false)}
-                disabled={checkingUpdate || applyingUpdate || update.state === "updating" || update.state === "relaunching"}
+                disabled={checkingUpdate || applyingUpdate}
                 className="rounded-md bg-info px-2.5 py-1 text-xs font-medium text-background hover:bg-info/90 disabled:opacity-50"
               >
-                {applyingUpdate || update.state === "updating" ? "Aggiorno…" : "Aggiorna ora"}
+                {applyingUpdate ? "Aggiorno…" : "Aggiorna ora"}
               </button>
             )}
           </div>
@@ -91,15 +91,9 @@ export function UpdateSection({
             </div>
           </div>
         )}
-        {update && update.commits && update.commits.length > 0 && (
-          <div className="mt-2.5 max-h-40 space-y-1.5 overflow-y-auto rounded-md border border-border/60 bg-background/50 p-2 text-xs">
-            {update.commits.map((c) => (
-              <div key={c.hash} className="flex items-baseline gap-2">
-                <code className="shrink-0 font-mono text-[11px] text-info">{c.hash}</code>
-                <span className="min-w-0 flex-1 truncate text-foreground/90">{c.subject}</span>
-                <span className="shrink-0 text-[10px] text-muted-foreground">{c.relativeTime}</span>
-              </div>
-            ))}
+        {update?.notes && (
+          <div className="mt-2.5 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md border border-border/60 bg-background/50 p-2 text-xs text-foreground/90">
+            {update.notes}
           </div>
         )}
       </div>

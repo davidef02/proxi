@@ -452,17 +452,10 @@ export interface QuotaLimits {
 // ───────────────────────────── app updates ─────────────────────────────
 
 export type UpdateState = "idle" | "checking" | "up_to_date" | "available" | "updating" | "relaunching" | "error";
-export interface UpdateCommitInfo {
-  hash: string;
-  subject: string;
-  relativeTime: string;
-}
 export interface UpdateStatus {
   state: UpdateState;
   version?: string;
   notes?: string;
-  behind: number;
-  commits?: UpdateCommitInfo[];
   error?: string;
   checkedAt?: string;
 }

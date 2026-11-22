@@ -60,12 +60,12 @@ use crate::sync::routes::spawn_auto;
 use crate::sync::secrets::{ElectronDecryptor, KeychainStore, MemoryStore, SecretStore};
 use crate::sync::service::{SyncConfig, SyncService};
 use crate::tools::tools_for;
-use crate::update::{self, ActiveWork, NoActiveWork, UpdateConfig, UpdateManager};
+use crate::update::{self, ActiveWork, UpdateConfig, UpdateManager, DEFAULT_LATEST_JSON, UPDATER_PUBKEY};
 
 /// Shown instead of the SPA when `app/web/dist` has not been built (main.ts:536-537).
 const MISSING_UI: &str = "Proxi: la UI non è stata compilata. Esegui `npm run app:build` e riapri questa pagina.";
 
-/// Base URLs for tests; `None` = the real service. Anki, GitHub, Google, Hugging Face and
+/// Base URLs for tests; `None` = the real service. Anki, GitHub, Google, Hugging Face, releases and
 /// transcription are honoured now; the rest by the issue that ports each client.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Endpoints {
@@ -73,6 +73,7 @@ pub struct Endpoints {
     pub github: Option<String>,
     pub google: Option<String>,
     pub huggingface: Option<String>,
+    pub releases: Option<String>,
     pub transcription: Option<String>,
 }
 
@@ -84,9 +85,7 @@ pub struct EngineBins {
     pub agy_args: Vec<String>,
     pub opencode: Option<PathBuf>,
     pub opencode_args: Vec<String>,
-    pub git: Option<PathBuf>,
     pub npm: Option<PathBuf>,
-    pub cargo: Option<PathBuf>,
 }
 
 pub struct ServerOptions {
@@ -104,7 +103,7 @@ pub struct ServerOptions {
     pub memory_secrets: bool,
     /// None = no relaunch signal (library and tests).
     pub relaunch: Option<Arc<dyn Fn() + Send + Sync>>,
-    pub active_work: Arc<dyn ActiveWork>,
+    pub update_pubkey: Option<String>,
     pub check_update_on_start: bool,
     /// Mirrors Node `fetchModelOnStart` (main.ts:569); `None` = decide from the repo root and the
     /// Hugging Face URL.
@@ -125,7 +124,7 @@ impl ServerOptions {
             browser: None,
             memory_secrets: false,
             relaunch: None,
-            active_work: Arc::new(NoActiveWork),
+            update_pubkey: None,
             check_update_on_start: false,
             fetch_model_on_start: None,
         }
@@ -199,6 +198,23 @@ struct AppState {
     touched: std::sync::Mutex<HashMap<String, std::time::Instant>>,
 }
 
+struct LiveWork {
+    sessions: SessionManager,
+    jobs: Arc<JobManager>,
+}
+
+impl ActiveWork for LiveWork {
+    fn count(&self) -> usize {
+        self.sessions.live_count() + self.jobs.unsettled_count()
+    }
+
+    fn shutdown(&self) -> futures_util::future::BoxFuture<'_, ()> {
+        Box::pin(async {
+            tokio::join!(self.sessions.shutdown(), self.jobs.shutdown());
+        })
+    }
+}
+
 pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
     let repo_root = data_root::resolve_path(&opts.repo_root);
     let (data_root, data_root_from_env) = match &opts.data_root {
@@ -218,9 +234,6 @@ pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
         .unwrap_or_else(|| repo_root.join("app").join("web").join("dist"));
     let transcription = opts.endpoints.transcription.clone();
 
-    // A previous build may have left its exe aside; it is not the running process anymore.
-    update::remove_leftover(&repo_root);
-
     // The flag wins over the env, read once at start (Node read it per request; flags are the test seam).
     let anki_url = anki_client::resolve_anki_url(
         opts.endpoints.anki.as_deref(),
@@ -239,18 +252,6 @@ pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
     // Bound before the service: the Google redirect URI points back at this port.
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", opts.port)).await?;
     let port = listener.local_addr()?.port();
-    let update = Arc::new(UpdateManager::new(UpdateConfig {
-        repo_root: repo_root.clone(),
-        git: opts.bins.git.clone().unwrap_or_else(|| PathBuf::from("git")),
-        cargo: opts
-            .bins
-            .cargo
-            .clone()
-            .unwrap_or_else(|| PathBuf::from("cargo")),
-        events: events.clone(),
-        active_work: opts.active_work,
-        relaunch: opts.relaunch,
-    }));
     let check_update_on_start = opts.check_update_on_start;
 
     // Node starts the fetch after listen and never waits for it (main.ts:569-570). Detached on purpose:
@@ -392,6 +393,25 @@ pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
     let bound = sessions.clone();
     jobs.bind_sessions(Arc::new(move |job| bound.on_job(job)));
 
+    let http = reqwest::Client::new();
+    let update = Arc::new(UpdateManager::new(UpdateConfig {
+        repo_root: repo_root.clone(),
+        releases_url: opts
+            .endpoints
+            .releases
+            .unwrap_or_else(|| DEFAULT_LATEST_JSON.to_string()),
+        pubkey: opts
+            .update_pubkey
+            .unwrap_or_else(|| UPDATER_PUBKEY.to_string()),
+        http: http.clone(),
+        events: events.clone(),
+        active_work: Arc::new(LiveWork {
+            sessions: sessions.clone(),
+            jobs: jobs.clone(),
+        }),
+        relaunch: opts.relaunch,
+    }));
+
     let state = Arc::new(AppState {
         repo_str: repo_root.display().to_string(),
         data_str: data_root.display().to_string(),
@@ -406,7 +426,7 @@ pub async fn start(opts: ServerOptions) -> std::io::Result<RunningServer> {
         limits,
         update: update.clone(),
         transcription,
-        http: reqwest::Client::new(),
+        http,
         anki,
         imports,
         graph,
@@ -1718,15 +1738,15 @@ pub struct ServeArgs {
     /// Extra argument before OpenCode's own (repeatable; tests: the fake script)
     #[arg(long = "opencode-bin-arg", value_name = "ARG", allow_hyphen_values = true)]
     pub opencode_bin_arg: Vec<String>,
-    /// Git executable (tests: a fake)
-    #[arg(long, value_name = "PATH")]
-    pub git_bin: Option<PathBuf>,
     /// npm executable (tests: a fake)
     #[arg(long, value_name = "PATH")]
     pub npm_bin: Option<PathBuf>,
-    /// cargo executable for the update build (tests: a fake)
+    /// GitHub Releases latest.json URL (tests: a local fake)
+    #[arg(long, value_name = "URL")]
+    pub releases_url: Option<String>,
+    /// Update public key file (tests: a custom key)
     #[arg(long, value_name = "PATH")]
-    pub cargo_bin: Option<PathBuf>,
+    pub update_pubkey: Option<PathBuf>,
     /// AnkiConnect base URL (tests: a local fake)
     #[arg(long, value_name = "URL")]
     pub anki_url: Option<String>,
@@ -1819,11 +1839,19 @@ impl ServeArgs {
         options.dist_dir = self.dist_dir;
         options.add_dirs = add_dirs;
         options.port = port;
+        let update_pubkey = match self.update_pubkey {
+            Some(path) => Some(
+                std::fs::read_to_string(&path)
+                    .map_err(|err| format!("{}: {err}", path.display()))?,
+            ),
+            None => None,
+        };
         options.endpoints = Endpoints {
             anki: self.anki_url,
             github: self.github_url,
             google: self.google_url,
             huggingface: self.huggingface_url,
+            releases: self.releases_url,
             transcription: self.transcription_url,
         };
         options.bins = EngineBins {
@@ -1834,10 +1862,9 @@ impl ServeArgs {
             // Node never reads an opencode env (main.ts:627-636): flags only.
             opencode: self.opencode_bin,
             opencode_args: self.opencode_bin_arg,
-            git: self.git_bin,
             npm: self.npm_bin,
-            cargo: self.cargo_bin,
         };
+        options.update_pubkey = update_pubkey;
         options.memory_secrets = self.memory_secrets;
         options.check_update_on_start = !self.no_update_check;
         Ok(options)
@@ -1931,6 +1958,19 @@ mod tests {
             .map(|parsed| parsed.args)
     }
 
+    fn temp_dir(tag: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "proxi-server-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = std::fs::create_dir_all(&path);
+        path
+    }
+
     #[test]
     fn serve_args_port_flag_wins_over_env() {
         let env = ServeEnv {
@@ -1985,12 +2025,10 @@ mod tests {
             "o",
             "--opencode-bin-arg",
             "y",
-            "--git-bin",
-            "g",
             "--npm-bin",
             "n",
-            "--cargo-bin",
-            "b",
+            "--releases-url",
+            "http://releases",
             "--anki-url",
             "http://anki",
             "--github-url",
@@ -2019,6 +2057,7 @@ mod tests {
                 github: Some("http://github".to_string()),
                 google: Some("http://google".to_string()),
                 huggingface: Some("http://hf".to_string()),
+                releases: Some("http://releases".to_string()),
                 transcription: Some("http://stt".to_string()),
             }
         );
@@ -2031,13 +2070,39 @@ mod tests {
                 agy_args: vec!["x".to_string()],
                 opencode: Some(PathBuf::from("o")),
                 opencode_args: vec!["y".to_string()],
-                git: Some(PathBuf::from("g")),
                 npm: Some(PathBuf::from("n")),
-                cargo: Some(PathBuf::from("b")),
             }
         );
+        assert_eq!(opts.update_pubkey, None);
         assert!(opts.memory_secrets);
         assert!(!opts.check_update_on_start);
+    }
+
+    #[test]
+    fn serve_args_update_pubkey_reads_file() {
+        let dir = temp_dir("pubkey-read");
+        let key_file = dir.join("test.pub");
+        std::fs::write(&key_file, "custom-pubkey-content").expect("write test.pub");
+        let path_str = key_file.display().to_string();
+
+        let args = parse_serve_args(&["--update-pubkey", &path_str]).expect("parse flags");
+        let opts = args
+            .into_options(&ServeEnv::default())
+            .expect("into options");
+        assert_eq!(opts.update_pubkey, Some("custom-pubkey-content".to_string()));
+    }
+
+    #[test]
+    fn serve_args_update_pubkey_missing_file_is_an_error() {
+        let dir = temp_dir("pubkey-missing");
+        let key_file = dir.join("nonexistent.pub");
+        let path_str = key_file.display().to_string();
+
+        let args = parse_serve_args(&["--update-pubkey", &path_str]).expect("parse flags");
+        let Err(err) = args.into_options(&ServeEnv::default()) else {
+            panic!("expected error on missing pubkey file");
+        };
+        assert!(err.contains(&path_str), "{err}");
     }
 
     #[test]

@@ -263,7 +263,7 @@ export function Sidebar({ onSettings }: { onSettings(): void }) {
         <button type="button" onClick={onSettings} aria-label="Impostazioni" className={`${item(false)} text-muted-foreground`}>
           <Settings size={13} />
           <span className="min-w-0 flex-1 truncate">Impostazioni</span>
-          {updateStatus && updateStatus.behind > 0 && (
+          {updateStatus?.state === "available" && (
             <span className="size-2 rounded-full bg-info" title="Aggiornamento disponibile" />
           )}
         </button>

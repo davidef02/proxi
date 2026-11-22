@@ -16,7 +16,7 @@ function ShellContent({ children }: { children: ReactNode }) {
   const route = useRoute();
   const { updateStatus, sync, settingsSection, openSettings, closeSettings } = useData();
   const [open, setOpen] = useState(() => localStorage.getItem(KEY) !== "0");
-  const [dismissedBehind, setDismissedBehind] = useState<number | null>(null);
+  const [dismissedVersion, setDismissedVersion] = useState<string | null>(null);
   const [el, setEl] = useState<HTMLElement | null>(null);
   const [count, setCount] = useState(0);
   const bump = useCallback((d: 1 | -1) => setCount((n) => n + d), []);
@@ -27,7 +27,8 @@ function ShellContent({ children }: { children: ReactNode }) {
       return !o;
     });
 
-  const showBanner = updateStatus && updateStatus.behind > 0 && dismissedBehind !== updateStatus.behind;
+  const version = updateStatus?.version;
+  const showBanner = updateStatus?.state === "available" && dismissedVersion !== (version ?? "");
 
   return (
     <TopBarSlotContext.Provider value={slot}>
@@ -48,7 +49,7 @@ function ShellContent({ children }: { children: ReactNode }) {
         {showBanner && (
           <div className="flex items-center justify-between border-b border-info/30 bg-info/10 px-3 py-1.5 text-xs text-info">
             <span className="truncate">
-              Aggiornamento disponibile ({updateStatus.behind} commit)
+              Aggiornamento disponibile ({version})
             </span>
             <div className="ml-2 flex shrink-0 items-center gap-2">
               <button
@@ -60,7 +61,7 @@ function ShellContent({ children }: { children: ReactNode }) {
               </button>
               <button
                 type="button"
-                onClick={() => setDismissedBehind(updateStatus.behind)}
+                onClick={() => setDismissedVersion(version ?? "")}
                 aria-label="Chiudi notifica aggiornamento"
                 className="rounded p-0.5 text-info/70 hover:text-info"
               >
