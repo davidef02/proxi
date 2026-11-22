@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="app/desktop/icon.png" width="96" alt="Proxi logo">
+  <img src="src-tauri/icons/icon.png" width="96" alt="Proxi logo">
   <h1>Proxi</h1>
   <p><b>Learn it with an AI teacher. Keep it with Anki.</b></p>
 </div>
@@ -31,14 +31,7 @@ Every idea you pass becomes an Anki card, if you said yes at the start of the le
 
 ## Install
 
-```bash
-git clone https://github.com/davidef02/proxi.git
-cd proxi
-npm install
-npm run desktop
-```
-
-On Windows, `npm run desktop:install` adds Start menu and Desktop shortcuts and puts the `proxi` command on your PATH.
+Download the NSIS installer (`Proxi_<version>_x64-setup.exe`) from the latest GitHub Release and run it — on Windows it installs per-user and adds the install directory to your PATH, so `proxi` works from a new shell; building from source is under `## Build` below.
 
 ## Requirements
 

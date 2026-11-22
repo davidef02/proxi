@@ -48,51 +48,6 @@ describe("identity", () => {
     assert.ok(cardsToTsv([]).includes(`#deck:${DECK_ROOT}::General`));
   });
 
-  it("the desktop shell sets the app name and AppUserModelId", () => {
-    // Electron does not load under node:test, so probe the source text.
-    const main = fs.readFileSync(path.join(repoRoot, "app", "desktop", "main.mjs"), "utf8");
-    assert.ok(main.includes('from "../shared/identity.mjs"'));
-    assert.ok(main.includes("app.setName(APP_ID)"));
-    assert.ok(main.includes("app.setAppUserModelId(APP_USER_MODEL_ID)"));
-  });
-
-  it("the shortcut installer removes the shortcut named in the identity", () => {
-    const installer = fs.readFileSync(path.join(repoRoot, "app", "desktop", "install-shortcuts.mjs"), "utf8");
-    assert.ok(installer.includes('from "../shared/identity.mjs"'));
-    assert.ok(installer.includes("const NAME = SHORTCUT_NAME"));
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "proxi-shortcut-"));
-    try {
-      fs.writeFileSync(path.join(dir, SHORTCUT_NAME), "");
-      const r = spawnSync(
-        process.execPath,
-        [path.join(repoRoot, "app", "desktop", "install-shortcuts.mjs"), "--uninstall", "--dir", dir],
-        { encoding: "utf8" },
-      );
-      assert.equal(r.status, 0, r.stderr);
-      assert.ok(r.stdout.includes("removed"), r.stdout);
-      assert.equal(fs.existsSync(path.join(dir, SHORTCUT_NAME)), false);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("the desktop splash shows the identity name", () => {
-    // The splash lives in a data: URL built by main.mjs; Electron does not load under node:test, so check its text.
-    const main = fs.readFileSync(path.join(repoRoot, "app", "desktop", "main.mjs"), "utf8");
-    assert.ok(main.includes("<div>${APP_NAME}<br>"), "the splash must interpolate APP_NAME");
-  });
-
-  it("the desktop shell and the shortcut installer keep no legacy rename", () => {
-    // D4: fresh installs only. The old profile carry-over and the old .lnk removal must be gone.
-    const oldApp = ["ia", "learner"].join("-");
-    const desktop = path.join(repoRoot, "app", "desktop");
-    for (const file of ["main.mjs", "install-shortcuts.mjs"]) {
-      const text = fs.readFileSync(path.join(desktop, file), "utf8");
-      assert.equal(text.includes(oldApp), false, `${file} still carries the old profile/shortcut name`);
-    }
-    assert.equal(fs.readFileSync(path.join(desktop, "install-shortcuts.mjs"), "utf8").includes("LEGACY"), false);
-  });
-
   it("package.json and package-lock.json carry the identity names", () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
     const lock = JSON.parse(fs.readFileSync(path.join(repoRoot, "package-lock.json"), "utf8"));
