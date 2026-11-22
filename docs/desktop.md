@@ -35,13 +35,13 @@ Uninstall via Windows Settings. Window position is stored in
 - External links open in the default browser; `/files/...` (lessons, exercises) open in a new app window created by the main process with the same guards (no navigation away from the server origin, window cap, sandbox, no permissions granted).
 - Env overrides (tests): `LEARNER_REPO_ROOT`, `LEARNER_PORT`, `LEARNER_USER_DATA`, `LEARNER_CLAUDE_BIN`,
   `LEARNER_CLAUDE_BIN_ARGS`, `LEARNER_ADD_DIRS`, `LEARNER_OPEN_HASH` (e.g. `#/c/demo`: the main window opens at that
-  route; used by `npm run bench:baseline`).
+  route; used by `npm run tauri:smoke`).
 - The title bar is hidden with a 36px native overlay for the window buttons: the web shell must leave that strip
   free and mark a drag region (`-webkit-app-region: drag`).
 
 ## Tauri shell
 
-An alternative Tauri v2 shell (WebView2) in `src-tauri/` keeps the desktop contract verbatim: spawn argv
+The Tauri v2 shell (WebView2) in `src-tauri/` keeps the desktop contract verbatim: spawn argv
 `serve --repo-root <abs> --dist-dir <abs> --port <N>` plus engine flags, readiness = stdout line
 `Proxi: http://127.0.0.1:<port>` within 30 s, kill = `taskkill /PID <pid> /T /F`, relaunch = backend exit
 code 0 while not quitting. The React UI is untouched; only routing changes.
