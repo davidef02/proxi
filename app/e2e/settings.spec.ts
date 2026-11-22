@@ -156,22 +156,24 @@ test("settings: the update banner opens the Aggiornamenti section", async ({ pag
     route.fulfill({
       json: {
         state: "available",
-        behind: 2,
+        version: "9.9.9",
+        notes: "Note di release",
         activeSessions: 0,
         checkedAt: new Date().toISOString(),
-        commits: [{ hash: "abc1234", subject: "feat: demo change", relativeTime: "2 ore fa" }],
       },
     }),
   );
   await page.goto("/#/c/demo");
-  await page.getByRole("button", { name: "Vedi", exact: true }).click();
+  const banner = page.locator("div.bg-info\\/10");
+  await expect(banner.getByText("Aggiornamento disponibile (9.9.9)")).toBeVisible();
+  await banner.getByRole("button", { name: "Vedi", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Impostazioni" });
   await expect(dialog).toBeVisible();
   await expect(tab(dialog, "Aggiornamenti")).toHaveAttribute("aria-selected", "true");
   await expect(tab(dialog, "Aggiornamenti")).toBeFocused();
   const panel = dialog.getByRole("tabpanel", { name: "Aggiornamenti" });
-  await expect(panel.getByText("Aggiornamento disponibile (2 commit)")).toBeVisible();
-  await expect(panel.getByText("feat: demo change")).toBeVisible();
+  await expect(panel.getByText("Aggiornamento disponibile (9.9.9)")).toBeVisible();
+  await expect(panel.getByText("Note di release")).toBeVisible();
   // the sidebar button opens with no target: Generali, not the last section
   await dialog.getByRole("button", { name: "Chiudi" }).click();
   await expect(dialog).toBeHidden();
@@ -184,10 +186,8 @@ test("settings: the app is titled Proxi and Aggiornamenti says Proxi è aggiorna
     route.fulfill({
       json: {
         state: "idle",
-        behind: 0,
         activeSessions: 0,
         checkedAt: new Date().toISOString(),
-        commits: [],
       },
     }),
   );
@@ -197,6 +197,71 @@ test("settings: the app is titled Proxi and Aggiornamenti says Proxi è aggiorna
   await tab(dialog, "Aggiornamenti").click();
   const panel = dialog.getByRole("tabpanel", { name: "Aggiornamenti" });
   await expect(panel.getByText("Proxi è aggiornato")).toBeVisible();
+});
+
+test("settings: tampered update installer shows error alert", async ({ page }) => {
+  await page.route(/\/api\/update$/, (route) =>
+    route.fulfill({
+      json: {
+        state: "available",
+        version: "9.9.9",
+        notes: "Note di release",
+        activeSessions: 0,
+        checkedAt: new Date().toISOString(),
+      },
+    }),
+  );
+  await page.route(/\/api\/update\/apply$/, (route) =>
+    route.fulfill({
+      status: 500,
+      json: { error: "Firma dell'installer non valida: aggiornamento annullato." },
+    }),
+  );
+  await page.goto("/#/c/demo");
+  const dialog = await openFromSidebar(page);
+  await tab(dialog, "Aggiornamenti").click();
+  const panel = dialog.getByRole("tabpanel", { name: "Aggiornamenti" });
+  await panel.getByRole("button", { name: "Aggiorna ora" }).click();
+  const alert = panel.getByRole("alert");
+  await expect(alert).toBeVisible();
+  await expect(alert).toContainText("Firma dell'installer non valida");
+});
+
+test("settings: live session prompts confirm before updating and clicking it forces apply", async ({ page }) => {
+  let appliedForce: boolean | undefined;
+  await page.route(/\/api\/update$/, (route) =>
+    route.fulfill({
+      json: {
+        state: "available",
+        version: "9.9.9",
+        notes: "Note di release",
+        activeSessions: 1,
+        checkedAt: new Date().toISOString(),
+      },
+    }),
+  );
+  await page.route(/\/api\/update\/apply$/, (route) => {
+    const postData = route.request().postDataJSON();
+    if (!postData?.force) {
+      return route.fulfill({
+        status: 409,
+        json: { error: "Sessioni in corso", code: "sessions_running" },
+      });
+    }
+    appliedForce = true;
+    return route.fulfill({
+      json: { ok: true, relaunching: true },
+    });
+  });
+  await page.goto("/#/c/demo");
+  const dialog = await openFromSidebar(page);
+  await tab(dialog, "Aggiornamenti").click();
+  const panel = dialog.getByRole("tabpanel", { name: "Aggiornamenti" });
+  await panel.getByRole("button", { name: "Aggiorna ora" }).click();
+  const confirmBtn = panel.getByRole("button", { name: "Interrompi e aggiorna" });
+  await expect(confirmBtn).toBeVisible();
+  await confirmBtn.click();
+  await expect.poll(() => appliedForce).toBe(true);
 });
 
 test("settings: every section is reachable and still saves, a key typed before switching tab is kept", async ({ page }) => {

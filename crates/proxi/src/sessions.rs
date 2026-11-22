@@ -2693,6 +2693,29 @@ impl SessionManager {
             .collect()
     }
 
+    pub fn live_count(&self) -> usize {
+        let sessions: Vec<Arc<Mutex<Session>>> = self
+            .0
+            .sessions
+            .lock()
+            .expect("sessions lock")
+            .values()
+            .cloned()
+            .collect();
+        sessions
+            .iter()
+            .filter(|session| {
+                session
+                    .lock()
+                    .expect("session lock")
+                    .data
+                    .state
+                    .status
+                    .is_busy()
+            })
+            .count()
+    }
+
     /// Server shutdown: stop every process and persist. The retry flag is written before `stop`
     /// clears it, so a crashed turn stays retryable across a graceful quit (Node writes false here;
     /// its `state.retryable` covers the reload either way).
@@ -3167,5 +3190,52 @@ mod tests {
             .collect();
         assert!(item_ids.contains(&"exercise:01-first"));
         assert!(item_ids.contains(&"exercise:02-second"));
+    }
+
+    #[test]
+    fn live_count_busy_sessions_count_and_idle_ignored() {
+        let (manager, shared) = test_shared();
+        let s_idle = make_session(
+            &shared,
+            saved_state(),
+            "claude".to_string(),
+            None,
+            None,
+            false,
+        );
+        shared
+            .sessions
+            .lock()
+            .expect("sessions lock")
+            .insert("s_idle".to_string(), s_idle);
+        assert_eq!(manager.live_count(), 0);
+
+        for (i, status) in [
+            SessionStatus::Starting,
+            SessionStatus::Running,
+            SessionStatus::Waiting,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut busy_state = saved_state();
+            let id = format!("s_busy_{i}");
+            busy_state.id = id.clone();
+            busy_state.status = status;
+            let s_busy = make_session(
+                &shared,
+                busy_state,
+                "claude".to_string(),
+                None,
+                None,
+                false,
+            );
+            shared
+                .sessions
+                .lock()
+                .expect("sessions lock")
+                .insert(id, s_busy);
+        }
+        assert_eq!(manager.live_count(), 3);
     }
 }

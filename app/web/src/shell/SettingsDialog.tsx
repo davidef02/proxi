@@ -86,23 +86,15 @@ export function SettingsDialog({ section, onClose }: { section: SettingsSection 
   };
 
   const handleApplyUpdate = async (force = false) => {
-    if (update && update.activeSessions > 0 && !force) {
-      setConfirmForce(true);
-      return;
-    }
     setConfirmForce(false);
     setApplyingUpdate(true);
     setUpdateError(undefined);
     try {
       await api.applyUpdate(force);
-      setUpdate((u) => u && { ...u, state: "relaunching", behind: 0 });
+      setUpdate((u) => u && { ...u, state: "relaunching" });
     } catch (e: any) {
       if (e?.code === "sessions_running") {
         setConfirmForce(true);
-      } else if (e?.code === "dirty_tree") {
-        setUpdateError("Modifiche locali non salvate nel repository. Impossibile aggiornare senza rischiare di sovrascrivere il tuo lavoro.");
-      } else if (e?.code === "diverged") {
-        setUpdateError("I commit locali sono divergenti da quelli remoti. Impossibile eseguire un aggiornamento fast-forward.");
       } else {
         setUpdateError(e?.message ?? "Aggiornamento fallito");
       }

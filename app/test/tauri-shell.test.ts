@@ -61,11 +61,16 @@ test("every exit path tree-kills the owned backend with taskkill (AC3)", () => {
     /RunEvent::ExitRequested[\s\S]*kill_backend_tree/,
     "the run event handler kills the backend on the exit events",
   );
-  assert.match(main, /fn kill_backend_tree[\s\S]*kill_tree_args\(pid\)/, "the tree kill uses kill_tree_args");
+  assert.match(main, /fn kill_backend_tree[\s\S]*kill_tree\(pid\)/, "the tree kill uses kill_tree");
   assert.match(
     shell,
     /fn kill_tree_args\(pid: u32\)[\s\S]*"taskkill"[\s\S]*"\/T"[\s\S]*"\/F"/,
     "the kill is taskkill /PID <pid> /T /F",
+  );
+  assert.match(
+    shell,
+    /fn kill_tree\(pid: u32\)[\s\S]*kill_tree_args\(pid\)/,
+    "kill_tree delegates to kill_tree_args",
   );
 });
 

@@ -45,6 +45,7 @@ export interface FakeUrls {
   github?: string;
   google?: string;
   huggingface?: string;
+  releases?: string;
   transcription?: string;
 }
 
@@ -56,6 +57,7 @@ const SERVICES: readonly Service[] = [
   { key: "github", flag: "--github-url", origins: ["https://api.github.com", "https://github.com"] },
   { key: "google", flag: "--google-url", origins: ["https://accounts.google.com", "https://oauth2.googleapis.com", "https://www.googleapis.com"] },
   { key: "huggingface", flag: "--huggingface-url", origins: ["https://huggingface.co"] },
+  { key: "releases", flag: "--releases-url", origins: ["https://github.com"] },
   { key: "transcription", flag: "--transcription-url", origins: ["https://api.groq.com", "https://api.deepgram.com"] },
 ];
 
@@ -88,8 +90,7 @@ export interface StartOptions {
   /** The engines to run instead of the real agy and opencode (tests: `fakeAgy()`, `fakeOpencode()`). */
   agy?: { cmd: string; args?: string[] };
   opencode?: { cmd: string; args?: string[] };
-  /** Fake executables. */
-  bins?: { git?: string; cargo?: string };
+  updatePubkeyFile?: string;
 }
 
 /** The spawned binary behind every HTTP test (no token, manager or jobs). */
@@ -104,23 +105,22 @@ export interface TestServer {
 export async function startServer(opts: StartOptions): Promise<TestServer> {
   const repoRoot = path.resolve(opts.repoRoot);
   const dataRoot = path.resolve(opts.dataRoot ?? opts.repoRoot);
-  return startBinary(repoRoot, dataRoot, opts.fakes, opts.bins, opts.claude, opts.agy, opts.opencode);
+  return startBinary(repoRoot, dataRoot, opts.fakes, opts.updatePubkeyFile, opts.claude, opts.agy, opts.opencode);
 }
 
-/** The `serve` arguments the HTTP tests use: no startup update check, secrets in memory, fakes and bins. */
+/** The `serve` arguments the HTTP tests use: no startup update check, secrets in memory, fakes and options. */
 export function binaryArgs(
   repoRoot: string,
   dataRoot: string,
   fakes?: FakeUrls,
-  bins?: StartOptions["bins"],
+  updatePubkeyFile?: string,
 ): string[] {
   const args = ["serve", "--port", "0", "--repo-root", repoRoot, "--data-root", dataRoot, "--memory-secrets", "--no-update-check"];
   for (const service of SERVICES) {
     const url = fakes?.[service.key];
     if (url) args.push(service.flag, url);
   }
-  if (bins?.git) args.push("--git-bin", bins.git);
-  if (bins?.cargo) args.push("--cargo-bin", bins.cargo);
+  if (updatePubkeyFile) args.push("--update-pubkey", updatePubkeyFile);
   return args;
 }
 
@@ -128,12 +128,12 @@ async function startBinary(
   repoRoot: string,
   dataRoot: string,
   fakes?: FakeUrls,
-  bins?: StartOptions["bins"],
+  updatePubkeyFile?: string,
   claude?: { cmd: string; args?: string[] },
   agy?: { cmd: string; args?: string[] },
   opencode?: { cmd: string; args?: string[] },
 ): Promise<TestServer> {
-  const args = binaryArgs(repoRoot, dataRoot, fakes, bins);
+  const args = binaryArgs(repoRoot, dataRoot, fakes, updatePubkeyFile);
   if (claude) {
     args.push("--claude-bin", claude.cmd);
     for (const arg of claude.args ?? []) args.push("--claude-bin-arg", arg);

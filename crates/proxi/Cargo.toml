@@ -29,6 +29,7 @@ indexmap = { version = "2.14.2", features = ["serde"] }
 process-wrap = { version = "10.0.1", default-features = false, features = ["tokio1", "job-object", "kill-on-drop", "process-group", "creation-flags"] }
 chromiumoxide = "0.9.1"
 regex = "1.13.1"
+minisign-verify = "0.3.0"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.191"

@@ -123,22 +123,15 @@ pub enum UpdateState {
     Error,
 }
 
-#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct UpdateCommitInfo {
-    pub hash: String,
-    pub subject: String,
-    pub relative_time: String,
-}
-
 /// Field order is Node's runtime order: `error` is spread onto the previous status, so it comes last.
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateStatus {
     pub state: UpdateState,
-    pub behind: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub commits: Option<Vec<UpdateCommitInfo>>,
+    pub version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub checked_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -149,8 +142,8 @@ impl Default for UpdateStatus {
     fn default() -> Self {
         Self {
             state: UpdateState::Idle,
-            behind: 0,
-            commits: None,
+            version: None,
+            notes: None,
             checked_at: None,
             error: None,
         }
@@ -790,7 +783,7 @@ mod tests {
     fn update_status_default_is_idle() {
         assert_eq!(
             serde_json::to_string(&UpdateStatus::default()).unwrap(),
-            r#"{"state":"idle","behind":0}"#
+            r#"{"state":"idle"}"#
         );
     }
 
@@ -859,18 +852,14 @@ mod tests {
     fn update_status_keeps_node_key_order() {
         let status = UpdateStatus {
             state: UpdateState::Error,
-            behind: 2,
-            commits: Some(vec![UpdateCommitInfo {
-                hash: "h".to_string(),
-                subject: "s".to_string(),
-                relative_time: "r".to_string(),
-            }]),
+            version: Some("9.9.9".to_string()),
+            notes: Some("n".to_string()),
             checked_at: Some("t".to_string()),
             error: Some("e".to_string()),
         };
         assert_eq!(
             serde_json::to_string(&status).unwrap(),
-            r#"{"state":"error","behind":2,"commits":[{"hash":"h","subject":"s","relativeTime":"r"}],"checkedAt":"t","error":"e"}"#
+            r#"{"state":"error","version":"9.9.9","notes":"n","checkedAt":"t","error":"e"}"#
         );
     }
 
@@ -1043,8 +1032,8 @@ mod tests {
         let response = UpdateStatusResponse {
             status: UpdateStatus {
                 state: UpdateState::UpToDate,
-                behind: 0,
-                commits: None,
+                version: None,
+                notes: None,
                 checked_at: Some("t".to_string()),
                 error: None,
             },
@@ -1052,7 +1041,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&response).unwrap(),
-            r#"{"state":"up_to_date","behind":0,"checkedAt":"t","activeSessions":0}"#
+            r#"{"state":"up_to_date","checkedAt":"t","activeSessions":0}"#
         );
     }
 
@@ -1081,7 +1070,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&event).unwrap(),
-            r#"{"type":"update","status":{"state":"idle","behind":0}}"#
+            r#"{"type":"update","status":{"state":"idle"}}"#
         );
     }
 }
