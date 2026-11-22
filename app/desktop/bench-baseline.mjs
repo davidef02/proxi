@@ -1,9 +1,10 @@
-// Measures the real desktop app: idle RAM (Windows Private Working Set summed over the Electron process tree) and
+// Measures the real desktop app: idle RAM (Windows Private Working Set summed over the Tauri process tree) and
 // cold start (launch to the course page's next action). One discarded warm-up plus N measured runs, medians only.
-// Run: npm run bench:baseline [-- --runs n] [--out file] [--compare file] [--drift-limit frac]
-import { _electron } from "playwright-core";
-import { execFileSync } from "node:child_process";
+// Run: npm run bench:baseline [-- --runs n] [--out file] [--compare file] [--drift-limit frac] [--drift]
+import { chromium } from "playwright-core";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,6 +21,7 @@ import {
   parseArgs,
   parseProcessSample,
   processSampleScript,
+  targetThresholds,
   toMb,
   validateBaseline,
   validateCompareFile,
@@ -30,6 +32,17 @@ const root = path.resolve(here, "../..");
 
 const alive = (pid) => execFileSync("tasklist", ["/FI", `PID eq ${pid}`, "/NH"], { encoding: "utf8" }).includes(String(pid));
 const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const s = net.createServer();
+    s.once("error", reject);
+    s.listen(0, "127.0.0.1", () => {
+      const port = s.address().port;
+      s.close(() => resolve(port));
+    });
+  });
+}
 
 try {
   const opts = parseArgs(process.argv.slice(2));
@@ -50,10 +63,10 @@ try {
     if (prevErrors.length > 0) throw new Error(`--compare ${prevPath} is not a baseline file: ${prevErrors.join("; ")}`);
   }
 
-  const electronExe = path.join(root, "node_modules", "electron", "dist", "electron.exe");
-  if (!fs.existsSync(electronExe)) throw new Error("Electron missing: run `npm install` first.");
+  const tauriExe = path.join(root, "src-tauri", "target", "release", "proxi-app.exe");
+  if (!fs.existsSync(tauriExe)) throw new Error(`Tauri app missing at ${tauriExe}: run \`npm run tauri:build\` first.`);
 
-  // Fails fast with the `cargo build --release --locked` message instead of a mid-run Electron error.
+  // Fails fast with the `cargo build --release --locked` message instead of a mid-run error.
   proxiBinaryPath(root);
 
   const appRoot = path.join(root, "app");
@@ -73,6 +86,9 @@ try {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "proxi-bench-"));
     const repo = path.join(tmp, "repo");
     fs.cpSync(path.join(appRoot, "test", "fixtures", "repo"), repo, { recursive: true });
+    fs.cpSync(path.join(appRoot, "web", "dist"), path.join(repo, "app", "web", "dist"), { recursive: true });
+
+    const cdpPort = await freePort();
     const env = {
       ...process.env,
       LEARNER_REPO_ROOT: repo,
@@ -85,15 +101,42 @@ try {
       LEARNER_OPEN_HASH: OPEN_HASH,
       // The app resolves the binary under LEARNER_REPO_ROOT (the temp fixture repo): point it at the real one.
       PROXI_BIN: proxiBinary(root, process.env),
+      WEBVIEW2_USER_DATA_FOLDER: path.join(tmp, "webview2"),
+      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${cdpPort}`,
     };
-    delete env.ELECTRON_RUN_AS_NODE;
-    let electronApp, pid;
+
+    let child, browser, pid;
     try {
       const t0 = performance.now();
-      electronApp = await _electron.launch({ executablePath: electronExe, args: [path.join(here, "main.mjs")], env, timeout: 60000 });
-      pid = electronApp.process().pid;
-      const page = await electronApp.firstWindow({ timeout: 60000 });
-      await page.locator(INTERACTIVE_SELECTOR + ":enabled").waitFor({ state: "visible", timeout: 60000 });
+      child = spawn(tauriExe, [], { env, stdio: "ignore" });
+      pid = child.pid;
+
+      const deadlineCdp = Date.now() + 60_000;
+      while (true) {
+        let ok = false;
+        try {
+          const res = await fetch(`http://127.0.0.1:${cdpPort}/json/version`);
+          ok = res.ok;
+        } catch {}
+        if (ok) break;
+        if (Date.now() > deadlineCdp) throw new Error(`${label}: DevTools endpoint did not answer within 60 s`);
+        if (!alive(pid)) throw new Error(`${label}: Tauri app process exited prematurely`);
+        await new Promise((r) => setTimeout(r, 50));
+      }
+
+      browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdpPort}`);
+
+      let page;
+      const deadlinePage = Date.now() + 90_000;
+      while (true) {
+        page = (browser.contexts() ?? []).flatMap((c) => c.pages()).find((p) => /^http:\/\/127\.0\.0\.1:\d+/.test(p.url()));
+        if (page) break;
+        if (Date.now() > deadlinePage) throw new Error(`${label}: app page not found within 90 s`);
+        if (!alive(pid)) throw new Error(`${label}: Tauri app process exited prematurely`);
+        await new Promise((r) => setTimeout(r, 50));
+      }
+
+      await page.locator(INTERACTIVE_SELECTOR + ":enabled").waitFor({ state: "visible", timeout: 90_000 });
       const cold = performance.now() - t0;
       if (!page.url().endsWith("/" + OPEN_HASH)) throw new Error(`${label}: window at ${page.url()}, expected ${OPEN_HASH}`);
       if (fs.statSync(distIndex).mtimeMs !== distMtime) throw new Error("UI was rebuilt during a timed run");
@@ -112,22 +155,29 @@ try {
           await new Promise((r) => setTimeout(r, 1000));
         }
       }
-      // coverage only: the metric comes from PowerShell, not from getAppMetrics
-      const metricPids = await electronApp.evaluate(({ app }) => app.getAppMetrics().map((m) => m.pid));
-      const missing = metricPids.filter((p) => !sample.pids.includes(p));
-      if (missing.length > 0) throw new Error(`${label}: Electron pids ${missing} not in the sampled tree`);
-      const electron = await electronApp.evaluate(() => process.versions.electron);
 
-      await electronApp.close();
-      electronApp = undefined;
+      await browser.close();
+      browser = undefined;
       const ram = toMb(sample.bytes);
       const coldMs = Math.round(cold);
       console.log(`${label}: cold_start_ms=${coldMs} ram_idle_mb=${ram} processes=${sample.processes}`);
-      return { ram_idle_mb: ram, cold_start_ms: coldMs, processes: sample.processes, electron };
+      return { ram_idle_mb: ram, cold_start_ms: coldMs, processes: sample.processes };
     } finally {
-      if (electronApp) await electronApp.close().catch(() => {});
-      if (pid && alive(pid)) execFileSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore" });
-      fs.rmSync(tmp, { recursive: true, force: true });
+      if (browser) await browser.close().catch(() => {});
+      if (pid && alive(pid)) {
+        try {
+          execFileSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore" });
+        } catch {}
+      }
+      for (let attempt = 1; attempt <= 10; attempt++) {
+        try {
+          fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 3 });
+          break;
+        } catch (e) {
+          if (attempt === 10) throw e;
+          await new Promise((r) => setTimeout(r, 200));
+        }
+      }
     }
   }
 
@@ -142,8 +192,11 @@ try {
   } catch {}
   const dirty = git("status", "--porcelain") !== "";
 
+  const tauriConf = JSON.parse(fs.readFileSync(path.join(root, "src-tauri", "tauri.conf.json"), "utf8"));
+  const tauriVersion = tauriConf.version;
+
   const baseline = buildBaseline({
-    app: "electron+rust",
+    app: "tauri+rust",
     runs: measured.map(({ ram_idle_mb, cold_start_ms, processes }) => ({ ram_idle_mb, cold_start_ms, processes })),
     date: new Date().toISOString(),
     commit,
@@ -151,7 +204,7 @@ try {
     dirty,
     machine: { cpu: os.cpus()[0].model.trim(), cores: os.cpus().length, ram_gb: Math.round(os.totalmem() / 2 ** 30) },
     os: { platform: process.platform, release: os.release(), version: os.version(), arch: process.arch },
-    electron: measured[0].electron,
+    tauri: tauriVersion,
     warmupRuns: 1,
   });
 
@@ -164,9 +217,17 @@ try {
   console.log(`wrote ${path.relative(root, outPath) || outPath}: ram_idle_mb=${baseline.ram_idle_mb} cold_start_ms=${baseline.cold_start_ms}`);
 
   if (prev) {
-    const d = drift(prev, baseline, opts.driftLimit);
-    console.log(`drift ram=${(d.ram * 100).toFixed(1)}% cold=${(d.cold * 100).toFixed(1)}% (limit ${(opts.driftLimit * 100).toFixed(0)}%)`);
-    if (!d.ok) process.exitCode = 1;
+    if (opts.drift) {
+      const d = drift(prev, baseline, opts.driftLimit);
+      console.log(`drift ram=${(d.ram * 100).toFixed(1)}% cold=${(d.cold * 100).toFixed(1)}% (limit ${(opts.driftLimit * 100).toFixed(0)}%)`);
+      if (!d.ok) process.exitCode = 1;
+    } else {
+      const targets = targetThresholds(prev);
+      const d = drift(prev, baseline, opts.driftLimit, targets);
+      console.log(`targets ram_idle_mb<=${targets.ram_idle_mb} cold_start_ms<=${targets.cold_start_ms} (from --compare ${opts.compare})`);
+      console.log(`drift ram=${(d.ram * 100).toFixed(1)}% cold=${(d.cold * 100).toFixed(1)}%`);
+      if (!d.ok) process.exitCode = 1;
+    }
   }
 } catch (e) {
   console.error(`bench:baseline failed: ${e?.message || e}`);
