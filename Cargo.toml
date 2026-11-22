@@ -4,7 +4,10 @@ resolver = "3"
 
 [profile.release]
 opt-level = "z"
-lto = true
+# Thin, not fat, LTO: with rustc >= 1.87, `lto = true` (fat) + opt-level >= 2 stops resolving
+# compiler-rt symbols such as ___isPlatformVersionAtLeast, which ort's prebuilt onnxruntime
+# CoreML objects reference — the macOS link fails with "symbol(s) not found for architecture arm64".
+lto = "thin"
 codegen-units = 1
 strip = true
 panic = "abort"
