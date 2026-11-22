@@ -27,5 +27,6 @@ description = "Committed minisign updater pubkey in tauri.conf.json"
 regexTarget = "line"
 regexes = [
   '''"pubkey"\s*:\s*"dW50cnVzdGVk''',
+  '''untrusted comment: minisign public key:''',
 ]
 
