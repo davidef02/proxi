@@ -10,13 +10,14 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { APP_NAME } from "../shared/identity.mjs";
-import { DEFAULT_CHROME } from "../shared/chrome.mjs";
-import { OPEN_HASH } from "./bench-lib.mjs";
-import { proxiBinary } from "../shared/proxi-bin.mjs";
+import { APP_ID, APP_NAME } from "../app/shared/identity.mjs";
+import { DEFAULT_CHROME } from "../app/shared/chrome.mjs";
+import { proxiBinary } from "../app/shared/proxi-bin.mjs";
+
+const OPEN_HASH = "#/c/demo";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const root = path.resolve(here, "../..");
+const root = path.resolve(here, "..");
 const EXE = path.join(root, "src-tauri", "target", "release", "proxi-app.exe");
 
 const URL_RE = /^http:\/\/127\.0\.0\.1:\d+/;
@@ -637,7 +638,7 @@ try {
 
   await closeAppThroughCdp(handles.page, handles.child.pid, repo);
 
-  const windowJsonPath = path.join(tmp, "userdata", "proxi", "window.json");
+  const windowJsonPath = path.join(tmp, "userdata", APP_ID, "window.json");
   if (!fs.existsSync(windowJsonPath)) fail(`window.json not found at ${windowJsonPath}`);
   const raw1 = fs.readFileSync(windowJsonPath, "utf8");
   const json1 = JSON.parse(raw1);
@@ -693,7 +694,7 @@ try {
 try {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "proxi-tauri-smoke-window-ac2-"));
   const repo = path.join(tmp, "repo");
-  const windowJsonPath = path.join(tmp, "userdata", "proxi", "window.json");
+  const windowJsonPath = path.join(tmp, "userdata", APP_ID, "window.json");
   fs.mkdirSync(path.dirname(windowJsonPath), { recursive: true });
   fs.writeFileSync(windowJsonPath, JSON.stringify({ theme: "dark" }), "utf8");
 
@@ -795,7 +796,7 @@ try {
 
   await closeAppThroughCdp(handles.page, handles.child.pid, repo);
 
-  const windowJsonPath = path.join(tmp, "userdata", "proxi", "window.json");
+  const windowJsonPath = path.join(tmp, "userdata", APP_ID, "window.json");
   const saved = JSON.parse(fs.readFileSync(windowJsonPath, "utf8"));
   if (
     saved.chrome?.modePref !== "dark" ||
@@ -832,7 +833,7 @@ try {
 
   await closeAppThroughCdp(handles.page, handles.child.pid, repo);
 
-  const windowJsonPath = path.join(tmp, "userdata", "proxi", "window.json");
+  const windowJsonPath = path.join(tmp, "userdata", APP_ID, "window.json");
   const saved25 = JSON.parse(fs.readFileSync(windowJsonPath, "utf8"));
   if (Math.abs(saved25.zoom - 2.5) > 0.001) {
     fail(`expected zoom 2.5 in window.json, got ${saved25.zoom}`);

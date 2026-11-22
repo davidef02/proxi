@@ -160,30 +160,6 @@ test("parseChrome: rejects malformed pairs and ignores extra keys", async () => 
   assert.equal(input.dark.color, "#000000");
 });
 
-test("desktop: legacy theme bridge is gone, chrome IPC replaces it, the overlay is always 36 px", () => {
-  const main = read("../desktop/main.mjs");
-  const preload = read("../desktop/preload.cjs");
-  for (const f of filesUnder(path.join(here, "../desktop"), [".mjs", ".cjs", ".js"])) {
-    const src = fs.readFileSync(f, "utf8");
-    for (const legacy of ["ia:theme", "setTheme", "CHROME["]) assert.ok(!src.includes(legacy), `${legacy} left in ${path.basename(f)}`);
-  }
-  assert.match(preload, /setChrome:\s*\(c\)\s*=>\s*ipcRenderer\.send\("ia:chrome", c\)/);
-  assert.match(main, /ipcMain\.on\("ia:chrome"/);
-  assert.match(main, /parseChrome\(payload\)/, "the renderer payload is validated");
-  // every overlay goes through currentChrome(), which carries OVERLAY_HEIGHT
-  assert.match(main, /height:\s*OVERLAY_HEIGHT/);
-  assert.ok(!/height:\s*\d+\s*\}/.test(main.replace(/width: \d+, height: \d+/g, "")), "no literal overlay height");
-  assert.ok(!/setTitleBarOverlay\((?!c\))/.test(main), "setTitleBarOverlay only with the resolved chrome");
-  // startup: the persisted chrome and the OS-mode source are set before any window is created
-  const start = main.slice(main.indexOf("async function start()"));
-  const ready = start.indexOf("await app.whenReady()");
-  const load = start.indexOf("chrome = loadChrome()");
-  const source = start.indexOf("nativeTheme.themeSource = chrome.modePref");
-  const firstWindow = Math.min(...["openWindow(", "ensureUi("].map((s) => start.indexOf(s)).filter((i) => i >= 0));
-  assert.ok(Number.isFinite(firstWindow), "start() creates a window");
-  assert.ok(ready >= 0 && load > ready && source > load && firstWindow > source, "chrome loaded before the first window");
-});
-
 test("web: consumers use the appearance store, no hard-coded palette colours, no legacy theme API", () => {
   const src = path.join(here, "../web/src");
   for (const f of filesUnder(src, [".ts", ".tsx"])) {
