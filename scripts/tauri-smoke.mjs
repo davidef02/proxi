@@ -593,7 +593,9 @@ try {
   if (!popup) fail("could not locate popup page over CDP");
   const lockedUrl = popup.url();
   await popup.evaluate(() => {
-    location.href = "https://example.com/";
+    setTimeout(() => {
+      location.href = "https://example.com/";
+    }, 0);
   });
   await sleep(1000);
   if (popup.url() !== lockedUrl) fail(`popup navigated away from ${lockedUrl} to ${popup.url()}`);
