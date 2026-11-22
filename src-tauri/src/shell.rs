@@ -351,8 +351,14 @@ pub fn clear_pending(root: &Path) {
     let _ = std::fs::remove_file(pending_marker_path(root));
 }
 
-/// Runs the NSIS installer silently (`/S`) and waits for completion.
-pub fn run_installer(path: &Path) -> std::io::Result<std::process::ExitStatus> {
+pub const DEFAULT_INSTALLER_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Runs the NSIS installer silently (`/S`) and waits for completion up to `timeout`.
+/// If the installer does not exit before the timeout, kills its process tree.
+pub fn run_installer_with_timeout(
+    path: &Path,
+    timeout: Duration,
+) -> std::io::Result<std::process::ExitStatus> {
     let mut cmd = Command::new(path);
     cmd.args(NSIS_SILENT);
     #[cfg(windows)]
@@ -361,7 +367,31 @@ pub fn run_installer(path: &Path) -> std::io::Result<std::process::ExitStatus> {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
-    cmd.status()
+    let mut child = cmd.spawn()?;
+    let pid = child.id();
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait()? {
+            Some(status) => return Ok(status),
+            None => {
+                if start.elapsed() >= timeout {
+                    kill_tree(pid);
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        format!("installer timed out after {timeout:?}"),
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+    }
+}
+
+/// Runs the NSIS installer silently (`/S`) and waits for completion (bounded by DEFAULT_INSTALLER_TIMEOUT).
+pub fn run_installer(path: &Path) -> std::io::Result<std::process::ExitStatus> {
+    run_installer_with_timeout(path, DEFAULT_INSTALLER_TIMEOUT)
 }
 
 /// Best-effort kill of a whole process tree; run these args on exit (backend.mjs killTreeSync).
@@ -373,6 +403,19 @@ pub fn kill_tree_args(pid: u32) -> Vec<String> {
         "/T".to_string(),
         "/F".to_string(),
     ]
+}
+
+pub fn kill_tree(pid: u32) {
+    let args = kill_tree_args(pid);
+    let mut cmd = Command::new(&args[0]);
+    cmd.args(&args[1..]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let _ = cmd.status();
 }
 
 #[cfg(test)]
@@ -705,6 +748,29 @@ mod tests {
         });
         std::fs::write(pending_marker_path(&tmp), marker_content.to_string()).unwrap();
         assert_eq!(read_pending_installer(&tmp), None);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn run_installer_with_timeout_kills_hung_process() {
+        let tmp = std::env::temp_dir().join(format!("proxi-test-hang-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        #[cfg(windows)]
+        let script = tmp.join("hang.cmd");
+        #[cfg(windows)]
+        std::fs::write(&script, "@echo off\r\nping 127.0.0.1 -n 10 >nul\r\n").unwrap();
+
+        #[cfg(not(windows))]
+        let script = tmp.join("hang.sh");
+        #[cfg(not(windows))]
+        std::fs::write(&script, "#!/bin/sh\nsleep 10\n").unwrap();
+
+        let res = run_installer_with_timeout(&script, Duration::from_millis(100));
+        assert!(res.is_err());
+        assert_eq!(res.unwrap_err().kind(), std::io::ErrorKind::TimedOut);
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

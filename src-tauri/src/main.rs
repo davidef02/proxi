@@ -8,7 +8,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
@@ -540,14 +539,5 @@ fn kill_backend_tree(app: &AppHandle) {
     let Some(pid) = *state.pid.lock().expect("pid mutex") else {
         return;
     };
-    let args = shell::kill_tree_args(pid);
-    let mut cmd = Command::new(&args[0]);
-    cmd.args(&args[1..]);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-    let _ = cmd.status(); // the backend may already be gone
+    shell::kill_tree(pid);
 }

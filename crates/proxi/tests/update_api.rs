@@ -26,19 +26,29 @@ use proxi::server::{start, RunningServer, ServerOptions};
 use proxi::update;
 
 const TEST_PUBKEY: &str =
-    "untrusted comment: minisign public key E7620F1842B4E81F\nRWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3\n";
+    "untrusted comment: minisign public key: E7620F1842B4E81F\n\
+RWTnYg8YQrToH4qI4910CfGV/VLbLTy6XXLKZwm/HZQSG/N0iAG0D29c\n";
 
-const VALID_PREHASHED_SIG: &str = "untrusted comment: signature from minisign secret key\n\
-RUQf6LRCGA9i559r3g7V1qNyJDApGip8MfqcadIgT9CuhV3EMhHoN1mGTkUidF/z7SrlQgXdy8ofjb7bNJJylDOocrCo8KLzZwo=\n\
-trusted comment: timestamp:1556193335\tfile:test\n\
-y/rUw2y8/hOUYjZU71eHp/Wo1KZ40fGy2VJEDl34XMJM+TX48Ss/17u3IvIfbVR1FkZZSNCisQbuQY+bHwhEBg==\n";
+const VALID_PREHASHED_SIG: &str = "untrusted comment: signature from test key\n\
+RUTnYg8YQrToH2LzS+bFTfbIDD6txLKaxrgn2mAIaVDOQq1BoVE70sX5JCM35s0vY2o3eyth/YQkukF0k1JJ8sHrYOjC5YyqawQ=\n\
+trusted comment: timestamp:1556193335\tfile:proxi-setup.exe\tversion:9.9.9\n\
+hbAUuY3cSPxMMMUjEFw83lY0CZpEG9VJQWnuWpv7OgR14+JGy8rcnowXFM4eamZ3jQDjTGS5CT03JaUu17NYDA==\n";
+
+const MISMATCHED_VERSION_SIG: &str = "untrusted comment: signature from test key\n\
+RUTnYg8YQrToH2LzS+bFTfbIDD6txLKaxrgn2mAIaVDOQq1BoVE70sX5JCM35s0vY2o3eyth/YQkukF0k1JJ8sHrYOjC5YyqawQ=\n\
+trusted comment: timestamp:1556193335\tfile:proxi-setup.exe\tversion:9.9.8\n\
+xEimMOKoa7fGN6hwUL0kUsuMRZ6GZao7YBGQR18qL7BagPvV9vZVvE2P3ecAJXQI/BgaGwoZ5xlBqeyEEVG5Cw==\n";
 
 fn valid_sig_b64() -> String {
     STANDARD.encode(VALID_PREHASHED_SIG.as_bytes())
 }
 
+fn mismatched_version_sig_b64() -> String {
+    STANDARD.encode(MISMATCHED_VERSION_SIG.as_bytes())
+}
+
 fn flipped_sig_b64() -> String {
-    let target = "RUQf6LRCGA9i559r3g7V1qNyJDApGip8MfqcadIgT9CuhV3EMhHoN1mGTkUidF/z7SrlQgXdy8ofjb7bNJJylDOocrCo8KLzZwo=";
+    let target = "RUTnYg8YQrToH2LzS+bFTfbIDD6txLKaxrgn2mAIaVDOQq1BoVE70sX5JCM35s0vY2o3eyth/YQkukF0k1JJ8sHrYOjC5YyqawQ=";
     let mut flipped = target.to_string();
     flipped.replace_range(10..11, "A");
     let flipped_sig_str = VALID_PREHASHED_SIG.replace(target, &flipped);
@@ -716,4 +726,72 @@ async fn apply_works_in_a_plain_non_git_dir() {
 
     let pending = update::read_pending(&plain).expect("pending marker exists");
     assert_eq!(pending.version, "9.9.9");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn apply_refuses_same_or_older_version() {
+    let sig_b64 = valid_sig_b64();
+    let fake = FakeReleases::start(
+        Some(release_json(
+            "0.1.0",
+            "Older release",
+            "proxi-setup.exe",
+            &sig_b64,
+        )),
+        b"test".to_vec(),
+    )
+    .await;
+
+    let root = common::temp_dir("update-api-downgrade");
+    let mut options = options(&root.0);
+    options.endpoints.releases = Some(format!("{}/latest.json", fake.url));
+    options.update_pubkey = Some(TEST_PUBKEY.to_string());
+    let server = start(options).await.expect("start server");
+    let client = Client::new();
+
+    let response = post(&client, &server, "/api/update/apply", "{}").await;
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = body_json(response).await;
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("non è più recente della versione corrente"),
+        "{body}"
+    );
+    assert_eq!(update::read_pending(&root.0), None);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn apply_refuses_a_mismatched_version_signature() {
+    let sig_b64 = mismatched_version_sig_b64();
+    let fake = FakeReleases::start(
+        Some(release_json(
+            "9.9.9",
+            "Mismatched signature version",
+            "proxi-setup.exe",
+            &sig_b64,
+        )),
+        b"test".to_vec(),
+    )
+    .await;
+
+    let root = common::temp_dir("update-api-mismatched-sig-version");
+    let mut options = options(&root.0);
+    options.endpoints.releases = Some(format!("{}/latest.json", fake.url));
+    options.update_pubkey = Some(TEST_PUBKEY.to_string());
+    let server = start(options).await.expect("start server");
+    let client = Client::new();
+
+    let response = post(&client, &server, "/api/update/apply", "{}").await;
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = body_json(response).await;
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("Firma dell'installer non valida"),
+        "{body}"
+    );
+    assert_eq!(update::read_pending(&root.0), None);
 }

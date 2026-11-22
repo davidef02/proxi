@@ -28,6 +28,7 @@ const APPLY_FETCH_TIMEOUT: Duration = Duration::from_secs(15);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(120);
 const RELAUNCH_DELAY: Duration = Duration::from_millis(500);
 const MAX_INSTALLER_BYTES: usize = 64 * 1024 * 1024;
+pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug)]
 pub struct UpdateError {
@@ -162,6 +163,7 @@ pub fn resolve_installer_url(releases_url: &str, installer: &str) -> String {
 
 pub fn verify_installer_signature(
     pubkey_str: &str,
+    version: &str,
     data: &[u8],
     sig_b64: &str,
 ) -> Result<(), &'static str> {
@@ -181,6 +183,10 @@ pub fn verify_installer_signature(
         .or_else(|_| minisign_verify::PublicKey::from_base64(pubkey_str))
         .map_err(|_| "decode_pubkey")?;
     pubkey.verify(data, &sig, false).map_err(|_| "verify")?;
+    let version_tag = format!("version:{version}");
+    if !sig.trusted_comment().contains(&version_tag) {
+        return Err("version_mismatch");
+    }
     Ok(())
 }
 
@@ -392,6 +398,18 @@ impl UpdateManager {
             }
         };
 
+        if !is_newer(&version, CURRENT_VERSION) {
+            let text = format!(
+                "Nessun aggiornamento disponibile: la versione {version} non è più recente della versione corrente {CURRENT_VERSION}."
+            );
+            self.fail(&text);
+            return Err(UpdateError {
+                status: 500,
+                message: text,
+                code: None,
+            });
+        }
+
         let platform = json
             .get("platforms")
             .and_then(Value::as_object)
@@ -429,7 +447,7 @@ impl UpdateManager {
 
         let installer_url = resolve_installer_url(&self.cfg.releases_url, installer_url_raw);
 
-        let download_resp = match self
+        let mut download_resp = match self
             .cfg
             .http
             .get(&installer_url)
@@ -470,8 +488,9 @@ impl UpdateManager {
             }
         }
 
-        let bytes = match download_resp.bytes().await {
-            Ok(b) => b,
+        let mut bytes = Vec::new();
+        while let Some(chunk) = match download_resp.chunk().await {
+            Ok(c) => c,
             Err(e) => {
                 let text = format!("Errore lettura installer: {e}");
                 self.fail(&text);
@@ -481,19 +500,21 @@ impl UpdateManager {
                     code: None,
                 });
             }
-        };
-
-        if bytes.len() > MAX_INSTALLER_BYTES {
-            let text = "Dimensione installer superiore al limite consentito.".to_string();
-            self.fail(&text);
-            return Err(UpdateError {
-                status: 500,
-                message: text,
-                code: None,
-            });
+        } {
+            if bytes.len() + chunk.len() > MAX_INSTALLER_BYTES {
+                let text = "Dimensione installer superiore al limite consentito.".to_string();
+                self.fail(&text);
+                return Err(UpdateError {
+                    status: 500,
+                    message: text,
+                    code: None,
+                });
+            }
+            bytes.extend_from_slice(&chunk);
         }
 
-        if let Err(_) = verify_installer_signature(&self.cfg.pubkey, &bytes, signature_b64) {
+        if verify_installer_signature(&self.cfg.pubkey, &version, &bytes, signature_b64).is_err()
+        {
             let text = "Firma dell'installer non valida: aggiornamento annullato.";
             self.fail(text);
             return Err(UpdateError {
@@ -581,6 +602,15 @@ mod tests {
 RUQf6LRCGA9i559r3g7V1qNyJDApGip8MfqcadIgT9CuhV3EMhHoN1mGTkUidF/z7SrlQgXdy8ofjb7bNJJylDOocrCo8KLzZwo=\n\
 trusted comment: timestamp:1556193335\tfile:test\n\
 y/rUw2y8/hOUYjZU71eHp/Wo1KZ40fGy2VJEDl34XMJM+TX48Ss/17u3IvIfbVR1FkZZSNCisQbuQY+bHwhEBg==\n";
+
+    const VERSIONED_TEST_PUBKEY: &str =
+        "untrusted comment: minisign public key: E7620F1842B4E81F\n\
+RWTnYg8YQrToH4qI4910CfGV/VLbLTy6XXLKZwm/HZQSG/N0iAG0D29c\n";
+
+    const VERSIONED_TEST_SIG: &str = "untrusted comment: signature from test key\n\
+RUTnYg8YQrToH2LzS+bFTfbIDD6txLKaxrgn2mAIaVDOQq1BoVE70sX5JCM35s0vY2o3eyth/YQkukF0k1JJ8sHrYOjC5YyqawQ=\n\
+trusted comment: timestamp:1556193335\tfile:proxi-setup.exe\tversion:9.9.9\n\
+hbAUuY3cSPxMMMUjEFw83lY0CZpEG9VJQWnuWpv7OgR14+JGy8rcnowXFM4eamZ3jQDjTGS5CT03JaUu17NYDA==\n";
 
     const LEGACY_SIG: &str = "untrusted comment: signature from minisign secret key\n\
 RWQf6LRCGA9i59SLOFxz6NxvASXDJeRtuZykwQepbDEGt87ig1BNpWaVWuNrm73YiIiJbq71Wi+dP9eKL8OC351vwIasSSbXxwA=\n\
@@ -686,10 +716,13 @@ QtKMXWyYcwdpZAlPF7tE2ENJkRd1ujvKjlj1m9RtHTBnZPa5WKU5uWRs5GoP5M/VqE81QFuMKI5k/SfN
         let bad_sig = minisign_verify::Signature::decode(&flipped_sig_str).unwrap();
         assert!(pubkey.verify(b"test", &bad_sig, false).is_err());
 
-        // Test verify_installer_signature helper with base64 of signature
-        let sig_b64 = STANDARD.encode(VALID_PREHASHED_SIG.as_bytes());
-        assert!(verify_installer_signature(TEST_PUBKEY, b"test", &sig_b64).is_ok());
-        assert!(verify_installer_signature(TEST_PUBKEY, b"Test", &sig_b64).is_err());
+        // Test verify_installer_signature helper with version binding and base64 of signature
+        let versioned_b64 = STANDARD.encode(VERSIONED_TEST_SIG.as_bytes());
+        assert!(verify_installer_signature(VERSIONED_TEST_PUBKEY, "9.9.9", b"test", &versioned_b64).is_ok());
+        assert!(verify_installer_signature(VERSIONED_TEST_PUBKEY, "9.9.9", b"Test", &versioned_b64).is_err());
+        // Mismatched version fails (F1)
+        assert!(verify_installer_signature(VERSIONED_TEST_PUBKEY, "9.9.8", b"test", &versioned_b64).is_err());
+        assert!(verify_installer_signature(VERSIONED_TEST_PUBKEY, "10.0.0", b"test", &versioned_b64).is_err());
     }
 
     #[test]

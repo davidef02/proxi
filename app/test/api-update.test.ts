@@ -14,15 +14,23 @@ const SESSIONS_RUNNING =
   "C'è una sessione in corso. Chiudila o conferma per interromperla prima di aggiornare.";
 
 const TEST_PUBKEY =
-  "untrusted comment: minisign public key E7620F1842B4E81F\nRWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3\n";
+  "untrusted comment: minisign public key: E7620F1842B4E81F\n" +
+  "RWTnYg8YQrToH4qI4910CfGV/VLbLTy6XXLKZwm/HZQSG/N0iAG0D29c\n";
 
 const VALID_PREHASHED_SIG =
-  "untrusted comment: signature from minisign secret key\n" +
-  "RUQf6LRCGA9i559r3g7V1qNyJDApGip8MfqcadIgT9CuhV3EMhHoN1mGTkUidF/z7SrlQgXdy8ofjb7bNJJylDOocrCo8KLzZwo=\n" +
-  "trusted comment: timestamp:1556193335\tfile:test\n" +
-  "y/rUw2y8/hOUYjZU71eHp/Wo1KZ40fGy2VJEDl34XMJM+TX48Ss/17u3IvIfbVR1FkZZSNCisQbuQY+bHwhEBg==\n";
+  "untrusted comment: signature from test key\n" +
+  "RUTnYg8YQrToH2LzS+bFTfbIDD6txLKaxrgn2mAIaVDOQq1BoVE70sX5JCM35s0vY2o3eyth/YQkukF0k1JJ8sHrYOjC5YyqawQ=\n" +
+  "trusted comment: timestamp:1556193335\tfile:proxi-setup.exe\tversion:9.9.9\n" +
+  "hbAUuY3cSPxMMMUjEFw83lY0CZpEG9VJQWnuWpv7OgR14+JGy8rcnowXFM4eamZ3jQDjTGS5CT03JaUu17NYDA==\n";
+
+const MISMATCHED_VERSION_SIG =
+  "untrusted comment: signature from test key\n" +
+  "RUTnYg8YQrToH2LzS+bFTfbIDD6txLKaxrgn2mAIaVDOQq1BoVE70sX5JCM35s0vY2o3eyth/YQkukF0k1JJ8sHrYOjC5YyqawQ=\n" +
+  "trusted comment: timestamp:1556193335\tfile:proxi-setup.exe\tversion:9.9.8\n" +
+  "xEimMOKoa7fGN6hwUL0kUsuMRZ6GZao7YBGQR18qL7BagPvV9vZVvE2P3ecAJXQI/BgaGwoZ5xlBqeyEEVG5Cw==\n";
 
 const VALID_SIG_B64 = Buffer.from(VALID_PREHASHED_SIG, "utf8").toString("base64");
+const MISMATCHED_SIG_B64 = Buffer.from(MISMATCHED_VERSION_SIG, "utf8").toString("base64");
 
 function makeLatestJson(baseUrl: string, version = "9.9.9", notes = "Note di release", sigB64 = VALID_SIG_B64) {
   return {
@@ -271,6 +279,52 @@ describe("/api/update", () => {
         const statusBody = (await statusRes.json()) as Record<string, unknown>;
         assert.equal(statusBody.state, "error");
         assert.match(statusBody.error as string, /Firma dell'installer non valida/);
+      },
+    );
+  });
+
+  it("apply: refuses same or older version", async () => {
+    await withServer(
+      (fake) => {
+        fake.on("GET", "/latest.json", {
+          body: makeLatestJson(fake.url, "0.1.0", "Release 0.1.0"),
+        });
+        fake.on("GET", "/proxi-setup.exe", {
+          headers: { "content-type": "application/octet-stream" },
+          body: "test",
+        });
+      },
+      async ({ server, repo }) => {
+        const res = await post(server, "/api/update/apply", {});
+        assert.equal(res.status, 500);
+        const body = (await res.json()) as { error: string };
+        assert.match(body.error, /non è più recente della versione corrente/);
+
+        const markerPath = path.join(repo, "target", "release", "proxi.update-pending");
+        assert.ok(!fs.existsSync(markerPath));
+      },
+    );
+  });
+
+  it("apply: refuses a signature with mismatched version", async () => {
+    await withServer(
+      (fake) => {
+        fake.on("GET", "/latest.json", {
+          body: makeLatestJson(fake.url, "9.9.9", "Release notes", MISMATCHED_SIG_B64),
+        });
+        fake.on("GET", "/proxi-setup.exe", {
+          headers: { "content-type": "application/octet-stream" },
+          body: "test",
+        });
+      },
+      async ({ server, repo }) => {
+        const res = await post(server, "/api/update/apply", {});
+        assert.equal(res.status, 500);
+        const body = (await res.json()) as { error: string };
+        assert.match(body.error, /Firma dell'installer non valida/);
+
+        const markerPath = path.join(repo, "target", "release", "proxi.update-pending");
+        assert.ok(!fs.existsSync(markerPath));
       },
     );
   });
