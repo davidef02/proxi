@@ -62,7 +62,7 @@ jobs:
             ForEach-Object { Get-ItemProperty $_.PSPath } |
             Where-Object { $_.DisplayName -eq 'Proxi' } | Select-Object -First 1
           if (-not $entry) { throw 'no HKCU uninstall entry for Proxi' }
-          # NSIS writes InstallLocation wrapped in double quotes ("C:\Users\...\Proxi"): strip them before comparing.
+          # NSIS writes InstallLocation wrapped in double quotes: strip them before comparing.
           $loc = "$($entry.InstallLocation)".Trim('"')
           if (-not $loc -or -not $loc.StartsWith($env:LOCALAPPDATA, [System.StringComparison]::OrdinalIgnoreCase)) {
             throw "install location is not per-user under LOCALAPPDATA: $loc"
