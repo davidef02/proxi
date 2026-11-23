@@ -36,8 +36,13 @@ export function rustTestEnv(base = process.env) {
   return { ...base, PROXI_TEST_SERVER: "binary" };
 }
 
+// A hung test (a server or child that never goes away) fails after 2 min instead of stalling the
+// gate until the CI job timeout; --test-force-exit ends a file whose tests are done even if a handle
+// lingers. Keep in step with the test:app script in package.json.
+export const TEST_GUARDS = ["--test-timeout=120000", "--test-force-exit"];
+
 export function rustTestArgs(files = RUST_PORTED) {
-  return ["--import", "tsx", "--test", ...files];
+  return ["--import", "tsx", "--test", ...TEST_GUARDS, ...files];
 }
 
 export function missingFiles(root, files = RUST_PORTED) {

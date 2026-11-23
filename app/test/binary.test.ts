@@ -13,6 +13,15 @@ function tempDir(prefix: string): string {
   return dir;
 }
 
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 after(() => {
   for (const dir of dirs) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
 });
@@ -45,5 +54,31 @@ describe("spawnProxi", () => {
       () => spawnProxi(["-e", "process.stderr.write('boom'); process.exit(3)"], process.execPath),
       /exited with code 3: boom/,
     );
+  });
+
+  // Regression (CI windows-latest hung test:rust until the job timeout): a descendant that inherited
+  // the server's stdout/stderr and outlives it must not keep close() waiting, and on Windows the
+  // whole tree goes down with the server. `detached` keeps the descendant out of the parent's
+  // kill-on-close job, like an engine proxi was still spawning (created suspended, not yet in its job).
+  it("close() returns even when a descendant holding the pipes outlives the server", async () => {
+    const pidFile = path.join(tempDir("binary-tree-"), "grandchild.pid");
+    const parent = [
+      "const { spawn } = require('node:child_process');",
+      "const fs = require('node:fs');",
+      "const c = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'inherit', detached: true });",
+      `fs.writeFileSync(${JSON.stringify(pidFile)}, String(c.pid));`,
+      "console.log('Proxi: http://127.0.0.1:4322');",
+      "setInterval(() => {}, 1000);",
+    ].join("\n");
+    const p = await spawnProxi(["-e", parent], process.execPath);
+    const pid = Number(fs.readFileSync(pidFile, "utf8"));
+    try {
+      const closed = p.close().then(() => "closed");
+      const timedOut = new Promise((resolve) => setTimeout(() => resolve("timeout"), 15_000).unref());
+      assert.equal(await Promise.race([closed, timedOut]), "closed");
+      if (process.platform === "win32") assert.equal(alive(pid), false, "the descendant dies with the server");
+    } finally {
+      if (alive(pid)) process.kill(pid);
+    }
   });
 });

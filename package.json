@@ -9,7 +9,7 @@
     "postinstall": "node scripts/fetch-embedding-model.mjs",
     "app:web": "vite --config app/web/vite.config.ts",
     "app:build": "vite build --config app/web/vite.config.ts",
-    "test:app": "node --import tsx --test app/test/*.test.ts",
+    "test:app": "node --import tsx --test --test-timeout=120000 --test-force-exit app/test/*.test.ts",
     "test:rust": "node scripts/test-rust.mjs",
     "typecheck:app": "tsc -p app/tsconfig.json --noEmit",
     "e2e": "playwright test -c app/e2e/playwright.config.ts",
