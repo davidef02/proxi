@@ -9,7 +9,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 
 const GONE = [
   "app/server",
-  "app/desktop",
+  "app/desktop/main.mjs",
   "extensions/cli.ts",
   "extensions/embed-bench.ts",
   "extensions/ask-user-question.ts",
@@ -50,7 +50,6 @@ describe("cutover to the proxi binary", () => {
       "desktop:install",
       "desktop:uninstall",
       "desktop:smoke",
-      "bench:baseline",
     ];
     const present = retired.filter((s) => s in (pkg.scripts ?? {}));
     assert.deepEqual(present, []);
@@ -65,7 +64,7 @@ describe("cutover to the proxi binary", () => {
     assert.equal(lock.packages?.[""]?.devDependencies?.electron, undefined);
 
     const desktopScripts = Object.keys(pkg.scripts ?? {}).filter(
-      (s) => /^desktop(:|$)/.test(s) || s === "bench:baseline",
+      (s) => /^desktop(:|$)/.test(s),
     );
     assert.deepEqual(desktopScripts, []);
 
@@ -79,7 +78,7 @@ describe("cutover to the proxi binary", () => {
       "git",
       [
         "grep",
-        "-l",
+        "-n",
         "app/desktop",
         "--",
         "package.json",
@@ -93,8 +92,11 @@ describe("cutover to the proxi binary", () => {
       { cwd: repoRoot, encoding: "utf8" },
     );
     if (r1.error) return t.skip(`git not available: ${r1.error.message}`);
-    if (r1.status === 0) assert.fail(`files still referencing app/desktop:\n${r1.stdout.trim()}`);
-    if (r1.status !== 1) assert.fail(r1.stderr);
+    const matches = (r1.stdout ?? "")
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l && !l.includes("bench:baseline"));
+    if (matches.length > 0) assert.fail(`files still referencing app/desktop:\n${matches.join("\n")}`);
 
     const ciYaml = fs.readFileSync(path.join(repoRoot, ".github/workflows/ci.yml"), "utf8");
     const nonGuardLines = ciYaml

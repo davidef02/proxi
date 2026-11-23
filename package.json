@@ -16,7 +16,8 @@
     "eval": "node --import tsx app/eval/run.ts",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
-    "tauri:smoke": "node scripts/tauri-smoke.mjs"
+    "tauri:smoke": "node scripts/tauri-smoke.mjs",
+    "bench:baseline": "node app/desktop/bench-baseline.mjs --out docs/benchmark-tauri.json --compare docs/benchmark-rust.json"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.1",

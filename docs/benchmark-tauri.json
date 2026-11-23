@@ -1,0 +1,60 @@
+{
+  "schema": 1,
+  "app": "tauri+rust",
+  "date": "2026-11-22T18:06:02.823Z",
+  "commit": "02e293b96f50248bf70b503c5d3bf423952df7d7",
+  "base_commit": "aed397bf91a6d52cc42c039ebd10f5d92fcc19b3",
+  "dirty": true,
+  "machine": {
+    "cpu": "AMD Ryzen 7 5700X 8-Core Processor",
+    "cores": 16,
+    "ram_gb": 32
+  },
+  "os": {
+    "platform": "win32",
+    "release": "10.0.26100",
+    "version": "Windows 11 IoT Enterprise LTSC 2024",
+    "arch": "x64"
+  },
+  "runtime": {
+    "tauri": "0.1.0"
+  },
+  "method": {
+    "fixture": "demo",
+    "open_hash": "#/c/demo",
+    "settle_ms": 10000,
+    "warmup_runs": 1,
+    "ram_metric": "Win32 WorkingSetPrivate summed over the Tauri process tree (MB = 2^20 bytes)",
+    "interactive": "[data-testid=next-action] visible and enabled on #/c/demo",
+    "cold_start": "launch to interactive, prebuilt UI"
+  },
+  "runs": [
+    {
+      "ram_idle_mb": 186.9,
+      "cold_start_ms": 1604,
+      "processes": 9
+    },
+    {
+      "ram_idle_mb": 186.3,
+      "cold_start_ms": 1676,
+      "processes": 9
+    },
+    {
+      "ram_idle_mb": 177.2,
+      "cold_start_ms": 1564,
+      "processes": 9
+    },
+    {
+      "ram_idle_mb": 190.9,
+      "cold_start_ms": 1567,
+      "processes": 9
+    },
+    {
+      "ram_idle_mb": 177.7,
+      "cold_start_ms": 1569,
+      "processes": 9
+    }
+  ],
+  "ram_idle_mb": 186.3,
+  "cold_start_ms": 1569
+}

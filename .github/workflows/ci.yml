@@ -36,10 +36,10 @@ jobs:
           if git grep -qiE '"electron"' -- package.json package-lock.json; then
             echo "::error::electron is back in package.json/package-lock.json"; exit 1
           fi
-          if git grep -qE '"desktop(:[a-z]+)?"\s*:|"bench:baseline"' -- package.json; then
+          if git grep -qE '"desktop(:[a-z]+)?"\s*:' -- package.json; then
             echo "::error::a desktop* script is back in package.json"; exit 1
           fi
-          if git ls-files -- app/desktop | grep -q .; then
+          if git ls-files -- app/desktop | grep -vE 'bench-' | grep -q .; then
             echo "::error::app/desktop is back"; exit 1
           fi
       # All checks live in scripts/gate.sh — the same script the AGENTS.md Gate: line runs,

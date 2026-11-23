@@ -133,7 +133,7 @@ test("the npm scripts exist and the CLI twin is a devDependency", () => {
   assert.match(String(pkg.devDependencies?.["@tauri-apps/cli"]), /\^2\./);
   assert.equal(pkg.devDependencies?.electron, undefined);
   assert.deepEqual(
-    Object.keys(pkg.scripts).filter((s) => s.startsWith("desktop") || s === "bench:baseline"),
+    Object.keys(pkg.scripts).filter((s) => s.startsWith("desktop")),
     [],
   );
 });
