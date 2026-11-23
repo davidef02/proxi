@@ -9,9 +9,25 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { performance } from "node:perf_hooks";
-import { uiIsStale } from "./startup.mjs";
-import { proxiBinaryPath } from "./backend.mjs";
 import { proxiBinary } from "../shared/proxi-bin.mjs";
+
+function newestMtime(dir) {
+  let t = 0;
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name);
+    t = Math.max(t, e.isDirectory() ? newestMtime(p) : fs.statSync(p).mtimeMs);
+  }
+  return t;
+}
+
+function uiIsStale(appRoot) {
+  const index = path.join(appRoot, "web", "dist", "index.html");
+  if (!fs.existsSync(index)) return true;
+  const built = fs.statSync(index).mtimeMs;
+  return [path.join(appRoot, "web", "src"), path.join(appRoot, "shared"), path.join(appRoot, "web", "index.html")].some(
+    (p) => fs.existsSync(p) && (fs.statSync(p).isDirectory() ? newestMtime(p) : fs.statSync(p).mtimeMs) > built,
+  );
+}
 import {
   INTERACTIVE_SELECTOR,
   OPEN_HASH,
@@ -67,7 +83,7 @@ try {
   if (!fs.existsSync(tauriExe)) throw new Error(`Tauri app missing at ${tauriExe}: run \`npm run tauri:build\` first.`);
 
   // Fails fast with the `cargo build --release --locked` message instead of a mid-run error.
-  proxiBinaryPath(root);
+  proxiBinary(root);
 
   const appRoot = path.join(root, "app");
   const distIndex = path.join(appRoot, "web", "dist", "index.html");

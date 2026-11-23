@@ -259,7 +259,7 @@ test("template contrast: lesson template pairs reach AA in both modes", () => {
 });
 
 test("chrome constants: NEUTRAL_CHROME mirrors the Neutro tokens and the overlay is 36 px", async () => {
-  const chrome = await import(pathToFileURL(path.join(here, "../desktop/chrome.mjs")).href);
+  const chrome = await import(pathToFileURL(path.join(here, "../shared/chrome.mjs")).href);
   assert.equal(chrome.OVERLAY_HEIGHT, 36);
   for (const mode of MODES) {
     const { v } = appBlock("neutral", mode);
@@ -271,7 +271,7 @@ test("chrome constants: NEUTRAL_CHROME mirrors the Neutro tokens and the overlay
 });
 
 test("parseChrome and resolveChrome validate the payload and pick the mode", async () => {
-  const { parseChrome, resolveChrome, DEFAULT_CHROME } = await import(pathToFileURL(path.join(here, "../desktop/chrome.mjs")).href);
+  const { parseChrome, resolveChrome, DEFAULT_CHROME } = await import(pathToFileURL(path.join(here, "../shared/chrome.mjs")).href);
   const valid = {
     modePref: "dark",
     dark: { color: "#0F1620", symbolColor: "#8FA1B5" },

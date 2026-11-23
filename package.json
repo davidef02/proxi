@@ -14,13 +14,9 @@
     "typecheck:app": "tsc -p app/tsconfig.json --noEmit",
     "e2e": "playwright test -c app/e2e/playwright.config.ts",
     "eval": "node --import tsx app/eval/run.ts",
-    "desktop": "electron app/desktop/main.mjs",
-    "desktop:install": "node app/desktop/install-shortcuts.mjs",
-    "desktop:uninstall": "node app/desktop/install-shortcuts.mjs --uninstall",
-    "desktop:smoke": "node app/desktop/smoke.mjs",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
-    "tauri:smoke": "node app/desktop/tauri-smoke.mjs",
+    "tauri:smoke": "node scripts/tauri-smoke.mjs",
     "bench:baseline": "node app/desktop/bench-baseline.mjs --out docs/benchmark-tauri.json --compare docs/benchmark-rust.json"
   },
   "devDependencies": {
@@ -35,7 +31,6 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
-    "electron": "^45.0.0",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",

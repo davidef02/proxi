@@ -15,7 +15,7 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
-    "icon": ["../app/desktop/icon.ico"],
+    "icon": ["icons/icon.ico"],
     "createUpdaterArtifacts": true,
     "resources": {
       "../target/release/proxi.exe": "target/release/proxi.exe",

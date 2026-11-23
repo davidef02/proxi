@@ -14,3 +14,4 @@
 - When a second ported module needs a helper the crate already has: make the existing one `pub(crate)` and call it there, never paste a copy into the module (byte-identical copies drift and cost a fix round).
 - When a test removes a temp folder on Windows after killing a server: use a bounded retry helper instead of rmSync (the killed engine child holds the folder past its ~475 ms budget and teardown failed with EPERM).
 - When code waits on an external process (installer, child stdio, CDP browser): bound every wait yourself with a timeout and treat a dead or hung peer as immediate failure (an unbounded wait hangs the caller indefinitely when the external process blocks or crashes).
+- When a change removes, renames or adds a command, script, convention or path: update the agent docs that state it, prose file lists included (`AGENTS.md` and `docs/agents/*.md` name modules and scripts; a stale list survived two review rounds and misleads the next agent).
