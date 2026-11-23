@@ -503,9 +503,10 @@ mod tests {
         });
 
         // Wait until run_demo has opened a page (it is now running CLEAN).
-        // Polling timeout allows sufficient time for cold browser launch in CI.
+        // Polling budget is generous (60s): a cold browser launch on a busy
+        // windows-latest runner has exceeded 15s in CI (#74).
         let mut saw_open = false;
-        for _ in 0..300 {
+        for _ in 0..1200 {
             if renderer.open_pages() > 0 {
                 saw_open = true;
                 break;
