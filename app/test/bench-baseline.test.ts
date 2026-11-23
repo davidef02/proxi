@@ -453,3 +453,13 @@ test("committed baseline file matches the schema", async () => {
   assert.equal(obj.runs.length, 5);
   assert.ok(!/[A-Za-z]:\\\\|\/Users\/|\/home\//.test(raw), "baseline leaks an absolute path");
 });
+
+test("committed tauri baseline file matches the schema", async () => {
+  const { validateBaseline } = await bench();
+  const raw = fs.readFileSync(path.join(here, "../../docs/benchmark-tauri.json"), "utf8");
+  const obj = JSON.parse(raw);
+  assert.deepEqual(validateBaseline(obj), []);
+  assert.equal(obj.runs.length, 5);
+  assert.ok(!/[A-Za-z]:\\\\|\/Users\/|\/home\//.test(raw), "tauri baseline leaks an absolute path");
+});
+
