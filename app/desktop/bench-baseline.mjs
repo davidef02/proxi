@@ -108,11 +108,16 @@ try {
     let child, browser, pid;
     try {
       const t0 = performance.now();
+      let spawnError;
       child = spawn(tauriExe, [], { env, stdio: "ignore" });
+      child.once("error", (e) => {
+        spawnError = e;
+      });
       pid = child.pid;
 
       const deadlineCdp = Date.now() + 60_000;
       while (true) {
+        if (spawnError) throw spawnError;
         let ok = false;
         try {
           const res = await fetch(`http://127.0.0.1:${cdpPort}/json/version`);
@@ -129,6 +134,7 @@ try {
       let page;
       const deadlinePage = Date.now() + 90_000;
       while (true) {
+        if (spawnError) throw spawnError;
         page = (browser.contexts() ?? []).flatMap((c) => c.pages()).find((p) => /^http:\/\/127\.0\.0\.1:\d+/.test(p.url()));
         if (page) break;
         if (Date.now() > deadlinePage) throw new Error(`${label}: app page not found within 90 s`);

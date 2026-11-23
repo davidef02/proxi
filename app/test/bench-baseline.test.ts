@@ -19,7 +19,7 @@ const BASE_SHA = "b".repeat(40);
 /** A document that passes validateBaseline; individual tests break one field at a time. */
 const validBaseline = () => ({
   schema: 1,
-  app: "electron+rust",
+  app: "tauri+rust",
   date: "2026-11-12T10:00:00.000Z",
   commit: SHA,
   base_commit: BASE_SHA,
@@ -70,8 +70,8 @@ test("parseProcessSample: an array of rows sums private bytes", async () => {
   const { parseProcessSample } = await bench();
   const out = parseProcessSample(
     JSON.stringify([
-      { pid: 10, name: "electron.exe", wsPrivate: 1048576 },
-      { pid: 11, name: "electron.exe", wsPrivate: 2 * 1048576 },
+      { pid: 10, name: "proxi-app.exe", wsPrivate: 1048576 },
+      { pid: 11, name: "proxi-app.exe", wsPrivate: 2 * 1048576 },
     ]),
   );
   assert.deepEqual(out, { pids: [10, 11], bytes: 3145728, processes: 2 });
@@ -79,7 +79,7 @@ test("parseProcessSample: an array of rows sums private bytes", async () => {
 
 test("parseProcessSample: a single row is wrapped in an array", async () => {
   const { parseProcessSample } = await bench();
-  const out = parseProcessSample(JSON.stringify({ pid: 10, name: "electron.exe", wsPrivate: 100 }));
+  const out = parseProcessSample(JSON.stringify({ pid: 10, name: "proxi-app.exe", wsPrivate: 100 }));
   assert.deepEqual(out, { pids: [10], bytes: 100, processes: 1 });
 });
 
@@ -91,9 +91,9 @@ test("parseProcessSample: an empty sample or garbage throws with the stdout exce
 
 test("parseProcessSample: a row without a valid pid or byte count throws", async () => {
   const { parseProcessSample } = await bench();
-  assert.throws(() => parseProcessSample(JSON.stringify([{ pid: 10, name: "electron.exe" }])), /no processes sampled/);
-  assert.throws(() => parseProcessSample(JSON.stringify([{ pid: 0, name: "electron.exe", wsPrivate: 1 }])), /no processes sampled/);
-  assert.throws(() => parseProcessSample(JSON.stringify([{ pid: 10, name: "electron.exe", wsPrivate: -1 }])), /no processes sampled/);
+  assert.throws(() => parseProcessSample(JSON.stringify([{ pid: 10, name: "proxi-app.exe" }])), /no processes sampled/);
+  assert.throws(() => parseProcessSample(JSON.stringify([{ pid: 0, name: "proxi-app.exe", wsPrivate: 1 }])), /no processes sampled/);
+  assert.throws(() => parseProcessSample(JSON.stringify([{ pid: 10, name: "proxi-app.exe", wsPrivate: -1 }])), /no processes sampled/);
 });
 
 test("processSampleScript: walks the process tree and reads WorkingSetPrivate", async () => {
@@ -111,7 +111,7 @@ test("buildBaseline: medians of the runs, key order, and a valid document", asyn
   const { buildBaseline, validateBaseline } = await bench();
   const runs = validBaseline().runs;
   const baseline = buildBaseline({
-    app: "electron+rust",
+    app: "tauri+rust",
     runs,
     date: "2026-11-12T10:00:00.000Z",
     commit: SHA,
@@ -122,7 +122,7 @@ test("buildBaseline: medians of the runs, key order, and a valid document", asyn
     tauri: "2.0.0",
     warmupRuns: 1,
   });
-  assert.equal(baseline.app, "electron+rust");
+  assert.equal(baseline.app, "tauri+rust");
   assert.equal(baseline.ram_idle_mb, 305.2);
   assert.equal(baseline.cold_start_ms, 2100);
   assert.deepEqual(Object.keys(baseline), [
@@ -349,19 +349,19 @@ test("drift: with targets performs one-sided upper bound assert", async () => {
   const targets = { ram_idle_mb: 144.6, cold_start_ms: 740 };
   const prev = { ram_idle_mb: 170.1, cold_start_ms: 740 };
 
-  // -15% improvement, symmetric drift 15% is ok: true
+  // -15% improvement
   const improved = drift(prev, { ram_idle_mb: 144.6, cold_start_ms: 700 }, 0.1, targets);
   assert.equal(improved.ok, true);
 
-  // 1.7% drift, above the ram target is ok: false
+  // regression above the ram target
   const regressedRam = drift(prev, { ram_idle_mb: 145.0, cold_start_ms: 740 }, 0.1, targets);
   assert.equal(regressedRam.ok, false);
 
-  // 0.14% drift, above the cold target is ok: false
+  // regression above the cold target
   const regressedCold = drift(prev, { ram_idle_mb: 144.6, cold_start_ms: 741 }, 0.1, targets);
   assert.equal(regressedCold.ok, false);
 
-  // the boundary is ok: true
+  // boundary
   const boundary = drift(prev, { ram_idle_mb: 144.6, cold_start_ms: 740 }, 0.1, targets);
   assert.equal(boundary.ok, true);
 });
@@ -370,7 +370,7 @@ test("validateCompareFile: accepts a baseline with any run count", async () => {
   const { buildBaseline, validateCompareFile } = await bench();
   assert.deepEqual(validateCompareFile(validBaseline()), []);
   const one = buildBaseline({
-    app: "electron+rust",
+    app: "tauri+rust",
     runs: [validBaseline().runs[0]],
     date: "2026-11-12T10:00:00.000Z",
     commit: SHA,
@@ -398,12 +398,6 @@ test(
   "bench:baseline rejects a malformed --compare file before launching",
   { skip: process.platform !== "win32" ? "bench:baseline runs on Windows only" : false },
   () => {
-    const electronExe = path.join(here, "../../node_modules/electron/dist/electron.exe");
-    if (!fs.existsSync(electronExe)) {
-      try {
-        require("electron");
-      } catch {}
-    }
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "bench-compare-"));
     try {
       const bad = path.join(tmp, "bad.json");

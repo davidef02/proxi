@@ -42,7 +42,7 @@ export function parseProcessSample(stdout) {
   };
 }
 
-// Walks the descendants of the Electron main pid through Win32_Process, then reads the Private Working Set of
+// Walks the descendants of the root pid (the Tauri app) through Win32_Process, then reads the Private Working Set of
 // every pid in that tree. One PowerShell call per sample.
 export function processSampleScript(rootPid) {
   if (!Number.isInteger(rootPid) || rootPid <= 0) throw new Error("rootPid must be a positive integer");
