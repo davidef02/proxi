@@ -1,5 +1,5 @@
 // Locate and spawn the built `proxi` binary; no server import, so `app/eval` can use it.
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -34,7 +34,9 @@ export async function spawnProxi(args, bin = proxiBinary()) {
   let stdout = "";
   let stderr = "";
   let exited = false;
-  const exitedOnce = new Promise((resolve) => child.once("close", () => { exited = true; resolve(); }));
+  // `exit`, not `close`: on Windows every child proxi spawns inherits proxi's stdout/stderr (the
+  // pipes to us), so a descendant that outlives proxi keeps them open and `close` would never fire.
+  const exitedOnce = new Promise((resolve) => child.once("exit", () => { exited = true; resolve(); }));
   const kill = () => {
     try {
       child.kill();
@@ -99,9 +101,30 @@ export async function spawnProxi(args, bin = proxiBinary()) {
     close: () =>
       (closing ??= (async () => {
         process.removeListener("exit", kill);
-        if (exited) return;
-        kill();
-        await exitedOnce;
+        if (!exited) {
+          await killTree(child);
+          kill();
+          await exitedOnce;
+        }
+        // A descendant that survived proxi may still hold the pipes: stop reading them so it cannot
+        // keep this process (a test file, the eval run) alive.
+        child.stdout.destroy();
+        child.stderr.destroy();
       })()),
   };
+}
+
+/**
+ * Windows: kill proxi together with its descendants. An engine proxi was spawning when it died is
+ * left created-suspended and outside its kill-on-close job object (process-wrap assigns the job
+ * after CreateProcess), so it would outlive a plain TerminateProcess forever; `taskkill /T` walks
+ * the live tree and takes it down too. Unix: the caller's `child.kill()` is enough.
+ * @param {import("node:child_process").ChildProcess} child
+ * @returns {Promise<void>}
+ */
+function killTree(child) {
+  if (process.platform !== "win32" || child.pid === undefined) return Promise.resolve();
+  return new Promise((resolve) => {
+    execFile("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, timeout: 10_000 }, () => resolve());
+  });
 }

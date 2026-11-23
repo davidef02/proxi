@@ -18,7 +18,7 @@ git switch -c <type>/<issue>-<slug>        # e.g. feat/31-study-friction-hero; n
 # ...commit...
 git push -u origin HEAD                    # pushing a feature branch needs no approval
 gh pr create --base main --title "<type>(<scope>): <summary>" --body "Closes #<issue>"
-gh pr merge --auto --squash                # GitHub merges once the `checks` job is green
+gh pr merge --auto --squash                # GitHub merges once the required checks are green
 ```
 
 - The gate is `scripts/gate.sh`, recorded in AGENTS.md as the `Gate:` command
@@ -47,5 +47,7 @@ Sincronizzazione). `viz/` is repo content and goes the code path.
 
 ## Repo settings (GitHub)
 
-- Ruleset `main`: no deletion, no force push, status check `checks` required.
+- Ruleset `main`: no deletion, no force push; required status checks `checks (windows-latest)`,
+  `checks (ubuntu-latest)`, `checks (macos-latest)` and `gitleaks` (the names CI reports on a PR:
+  rename a job or a matrix leg and the ruleset must follow, or every PR stays blocked).
 - Merge: squash only, auto-merge on, head branches deleted on merge.

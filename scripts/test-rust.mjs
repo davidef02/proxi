@@ -36,8 +36,13 @@ export function rustTestEnv(base = process.env) {
   return { ...base, PROXI_TEST_SERVER: "binary" };
 }
 
+// A hung test or hook (a server or child that never goes away) fails after 2 min instead of stalling
+// the gate until the CI job timeout. No --test-force-exit: on Windows it can abort node with a libuv
+// assertion (async.c, UV_HANDLE_CLOSING). Keep in step with the test:app script in package.json.
+export const TEST_GUARDS = ["--test-timeout=120000"];
+
 export function rustTestArgs(files = RUST_PORTED) {
-  return ["--import", "tsx", "--test", ...files];
+  return ["--import", "tsx", "--test", ...TEST_GUARDS, ...files];
 }
 
 export function missingFiles(root, files = RUST_PORTED) {
