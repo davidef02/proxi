@@ -1,6 +1,5 @@
 # Agent lessons
 
-- L55 [1×, last 2026-11-17, #25] When a long-lived parent buffers a child's stdout/stderr: stop appending once the startup condition settles (the child keeps logging for the process lifetime, so the buffers and the per-chunk regex work grow unboundedly).
 - L59 [1×, last 2026-11-17, #25] When a golden fixture embeds output derived from prose or generated files (parity goldens such as `context_parity system_prompt_replays_the_node_golden`): regenerate it in the same commit as the change that affects that output (a fixture green locally can still differ in CI; run the capture script and commit the refreshed fixture, don't hand-tune the diff).
 - L56 [1×, last 2026-11-17, #25] When a script launches the desktop app that spawns the backend: set `PROXI_BIN` in the child env as `app/desktop/smoke.mjs` does (the app resolves the binary from its own environment, so without it the launch dies on "proxi binary not found").
 - L57 [1×, last 2026-11-17, #25] When a check gates on drift from a stored baseline: give the limit an explicit override flag (a legitimate re-measurement after an intended change otherwise exits 1 even though the document is written and valid).
@@ -15,3 +14,4 @@
 - L68 [1×, last 2026-11-21, #59] When validating Tauri updater latest.json manifests: accept empty notes strings and api.github.com asset URLs (tauri-action emits empty release notes and API asset download endpoints in production releases).
 - L69 [1×, last 2026-11-22, #62] When verifying a downloaded release installer with minisign: check that the signature's trusted comment binds the claimed version and that the version is newer than current (cryptographic signature verification alone does not prevent replaying older valid releases or version downgrades).
 - L70 [1×, last 2026-11-22, #62] When enforcing an upper size cap on an HTTP download: stream the response chunks and abort once accumulated bytes exceed the limit (chunked HTTP responses omit Content-Length, so checking only the header allows bytes().await to buffer unbounded data into memory).
+- L71 [1×, last 2026-11-23, #63] When spawning a child process to poll or monitor in a Node script: attach an error listener to capture spawn failure (an unhandled error event bypasses try/finally teardown and crashes the process).
