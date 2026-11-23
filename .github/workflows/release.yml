@@ -62,13 +62,15 @@ jobs:
             ForEach-Object { Get-ItemProperty $_.PSPath } |
             Where-Object { $_.DisplayName -eq 'Proxi' } | Select-Object -First 1
           if (-not $entry) { throw 'no HKCU uninstall entry for Proxi' }
-          if (-not $entry.InstallLocation -or -not $entry.InstallLocation.StartsWith($env:LOCALAPPDATA, [System.StringComparison]::OrdinalIgnoreCase)) {
-            throw "install location is not per-user under LOCALAPPDATA: $($entry.InstallLocation)"
+          # NSIS writes InstallLocation wrapped in double quotes: strip them before comparing.
+          $loc = "$($entry.InstallLocation)".Trim('"')
+          if (-not $loc -or -not $loc.StartsWith($env:LOCALAPPDATA, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "install location is not per-user under LOCALAPPDATA: $loc"
           }
-          Write-Host "installed per-user at $($entry.InstallLocation)"
-          $exe = Get-ChildItem -File $entry.InstallLocation -Filter *.exe |
+          Write-Host "installed per-user at $loc"
+          $exe = Get-ChildItem -File $loc -Filter *.exe |
             Where-Object { $_.Name -notmatch '^uninstall' -and $_.Name -ne 'proxi.exe' } | Select-Object -First 1
-          if (-not $exe) { throw "no app exe in $($entry.InstallLocation)" }
+          if (-not $exe) { throw "no app exe in $loc" }
           $env:PROXI_SKIP_MODEL = '1'
           $proc = Start-Process -FilePath $exe.FullName -PassThru
           try {
