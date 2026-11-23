@@ -23,7 +23,7 @@ proxi home chapters         # every course, its lessons, done vs to do; writes n
 proxi data where            # the data folder: courses/, graph/, decks/, curriculum.json
 ```
 
-`proxi` is on PATH after `npm run desktop:install` (it builds the binary); in a shell opened before that, close and reopen it.
+`proxi` is on PATH after installing the app with the NSIS installer (it adds the install directory to your user PATH); in a shell opened before that, close and reopen it.
 
 Then read the target course's `<dataRoot>/courses/<course>/MISSION.md` (`<dataRoot>` from `proxi data where`):
 destination, constraints, out of scope.

@@ -30,6 +30,18 @@ jobs:
           node-version: 24
           cache: npm
       - run: rustup toolchain install stable --profile minimal && rustup default stable
+      - name: Electron must not reappear (issue 61 guard)
+        shell: bash
+        run: |
+          if git grep -qiE '"electron"' -- package.json package-lock.json; then
+            echo "::error::electron is back in package.json/package-lock.json"; exit 1
+          fi
+          if git grep -qE '"desktop(:[a-z]+)?"\s*:|"bench:baseline"' -- package.json; then
+            echo "::error::a desktop* script is back in package.json"; exit 1
+          fi
+          if git ls-files -- app/desktop | grep -q .; then
+            echo "::error::app/desktop is back"; exit 1
+          fi
       # All checks live in scripts/gate.sh — the same script the AGENTS.md Gate: line runs,
       # so CI and the local gate can never drift apart.
       # MACOSX_DEPLOYMENT_TARGET: rustc's default aarch64-apple-darwin target (11.0) cannot link

@@ -51,7 +51,7 @@ workspace CI compiles and needs WebView2):
 ```bash
 npm run tauri:dev   # Tauri shell (src-tauri/) in dev mode
 npm run tauri:build # Tauri shell release build
-npm run tauri:smoke # Tauri shell smoke (app/desktop/tauri-smoke.mjs)
+npm run tauri:smoke # Tauri shell smoke (scripts/tauri-smoke.mjs)
 ```
 
 `npm run eval -- [scenario] [--engine claude|agy|opencode] [--settings <file>] [--timeout <min>]` drives
@@ -72,9 +72,9 @@ locates and spawns the binary with no server import; the eval uses it too.
 
 `cargo build --release --locked` builds `target/release/proxi` (`proxi.exe` on Windows); `cargo test --locked`
 runs its tests, and `npm run test:rust` runs the ported HTTP/SSE tests against that build.
-`npm run desktop:install` runs the same build and adds `target/release` to the user PATH (Windows, no admin
-rights; `npm run desktop:uninstall` removes it), so agents run `proxi lesson|anki|home|data` from any new
-shell; check with `proxi --version`. The binary finds the repo from its own location: keep it in
+The NSIS installer adds the install directory to the user PATH (Windows, no admin
+rights), so agents run `proxi lesson|anki|home|data` from any new shell; check with
+`proxi --version`. The binary finds the repo from its own location: keep it in
 `target/release`, never copy it elsewhere.
 
 ## Where the logic lives

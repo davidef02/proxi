@@ -13,10 +13,7 @@ logged in (once interactively), optionally Anki with AnkiConnect for card sync, 
 root. The exercises' dependencies in `courses/<course>/exercises` are installed by the app itself on the first
 test run (it says so while it works).
 
-**Desktop app (normal use):** `npm run desktop:install` once builds the `proxi` binary, puts it on your user
-PATH and creates the "Proxi" shortcuts (Start menu and Desktop). The window rebuilds the UI by itself when the
-sources changed, so after a `git pull` you just reopen it. Closing the window stops every engine process it
-started. Details: `docs/desktop.md` (a Tauri v2 shell lives in `src-tauri/`, see the "Tauri shell (M06)" section).
+**Desktop app (normal use):** install the NSIS installer from the GitHub Release (Windows); it adds the install directory to your user PATH, so `proxi` works from any new shell. Closing the window stops every engine process it started. Details: `docs/desktop.md` (the Tauri v2 shell lives in `src-tauri/`).
 
 ## Use
 
