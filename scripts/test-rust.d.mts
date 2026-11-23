@@ -1,5 +1,7 @@
 export const RUST_PORTED: string[];
 
+export const TEST_GUARDS: string[];
+
 export function rustTestEnv(base?: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
 
 export function rustTestArgs(files?: string[]): string[];
